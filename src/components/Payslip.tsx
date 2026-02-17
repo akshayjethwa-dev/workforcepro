@@ -1,5 +1,5 @@
 import React from 'react';
-import { MonthlyPayroll } from '../types';
+import { MonthlyPayroll } from '..';
 import { X, Printer } from 'lucide-react';
 
 interface Props {

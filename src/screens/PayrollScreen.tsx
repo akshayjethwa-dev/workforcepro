@@ -1,20 +1,57 @@
-import React, { useState, useMemo } from 'react';
-import { IndianRupee, FileText, CheckCircle, Download, AlertTriangle } from 'lucide-react';
-import { storageService } from '../services/storage';
+import React, { useState, useMemo, useEffect } from 'react';
+import { IndianRupee, FileText, Download } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { MonthlyPayroll } from '../types';
+import { MonthlyPayroll, Worker, DailyWageRecord, Advance } from '../types/index';
 import { Payslip } from '../components/Payslip';
 
 export const PayrollScreen: React.FC = () => {
+  const { profile } = useAuth();
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
-  const workers = storageService.getWorkers();
-  const dailyWages = storageService.getDailyWages();
-  const advances = storageService.getAdvances();
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
+  const [advances, setAdvances] = useState<Advance[]>([]); // New State
+  const [loading, setLoading] = useState(true);
   
   const currentMonthStr = new Date().toISOString().slice(0, 7); // 2023-10
 
-  // Generate Payroll Data on fly (in real app, this would be fetched from DB)
+  useEffect(() => {
+    const loadData = async () => {
+      if (profile?.tenantId) {
+        try {
+          // Fetch Workers, Attendance, AND Advances
+          const [fetchedWorkers, fetchedAttendance, fetchedAdvances] = await Promise.all([
+            dbService.getWorkers(profile.tenantId),
+            dbService.getAttendanceHistory(profile.tenantId),
+            dbService.getAdvances(profile.tenantId)
+          ]);
+          
+          setWorkers(fetchedWorkers);
+          setAdvances(fetchedAdvances);
+          
+          // Calculate daily wages from attendance history
+          const wages: DailyWageRecord[] = [];
+          fetchedAttendance.forEach(record => {
+             const worker = fetchedWorkers.find(w => w.id === record.workerId);
+             if (worker) wages.push(wageService.calculateDailyWage(worker, record));
+          });
+          setDailyWages(wages);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+    loadData();
+  }, [profile]);
+
+  // Generate Payroll Data
   const payrolls = useMemo(() => {
+    if (workers.length === 0) return [];
+    
+    // Pass the fetched advances here (Arg #4)
     return workers.map(worker => 
         wageService.generateMonthlyPayroll(worker, currentMonthStr, dailyWages, advances)
     );
@@ -22,7 +59,12 @@ export const PayrollScreen: React.FC = () => {
 
   const totalPayout = payrolls.reduce((acc, p) => acc + p.netPayable, 0);
   const totalDeductions = payrolls.reduce((acc, p) => acc + p.deductions.total, 0);
-  const totalEmployees = payrolls.length;
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+    </div>
+  );
 
   return (
     <div className="p-4 bg-gray-50 min-h-full pb-24">
@@ -43,28 +85,18 @@ export const PayrollScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Action Bar */}
-      <div className="flex gap-2 mb-4">
-        <button className="flex-1 bg-gray-800 text-white py-3 rounded-lg text-sm font-bold flex items-center justify-center shadow-lg">
-             <CheckCircle size={16} className="mr-2" /> Approve & Lock
-        </button>
-        <button className="flex-1 bg-white text-gray-700 border border-gray-200 py-3 rounded-lg text-sm font-bold flex items-center justify-center">
-             <Download size={16} className="mr-2" /> Bank File
-        </button>
-      </div>
-
       {/* Payroll List */}
       <div className="space-y-3">
         {payrolls.map(payroll => (
             <div key={payroll.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <div 
                     onClick={() => setSelectedPayroll(payroll)}
-                    className="p-4 active:bg-gray-50 cursor-pointer"
+                    className="p-4 active:bg-gray-50 cursor-pointer transition-colors"
                 >
                     <div className="flex justify-between items-start mb-2">
                         <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-full overflow-hidden">
-                                <img src={`https://ui-avatars.com/api/?name=${payroll.workerName}&background=random`} alt="" className="w-full h-full object-cover" />
+                            <div className="w-10 h-10 bg-gray-100 rounded-full overflow-hidden flex items-center justify-center font-bold text-gray-500">
+                                {payroll.workerName.charAt(0)}
                             </div>
                             <div>
                                 <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
@@ -81,19 +113,11 @@ export const PayrollScreen: React.FC = () => {
                         </div>
                     </div>
                     
-                    {/* Mini table */}
-                    <div className="mt-3 bg-gray-50 rounded-lg p-2 flex text-xs justify-between text-gray-600">
-                         <div>
-                            <span className="block text-gray-400 text-[10px]">Gross</span>
-                            <span className="font-semibold">₹{payroll.earnings.gross}</span>
-                         </div>
-                         <div className="text-center">
-                            <span className="block text-gray-400 text-[10px]">Deductions</span>
-                            <span className="font-semibold text-red-500">-₹{payroll.deductions.total}</span>
-                         </div>
-                         <div className="text-right flex items-center text-blue-600 font-bold">
-                             View Slip <FileText size={12} className="ml-1" />
-                         </div>
+                    {/* Mini Details */}
+                    <div className="mt-3 flex justify-between text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
+                        <span>Basic: ₹{payroll.earnings.basic}</span>
+                        <span>OT: ₹{payroll.earnings.overtime}</span>
+                        <span className="text-red-500 font-bold">Ded: -₹{payroll.deductions.total}</span>
                     </div>
                 </div>
             </div>

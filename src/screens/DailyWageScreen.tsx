@@ -1,13 +1,49 @@
-import React, { useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Clock, IndianRupee } from 'lucide-react';
-import { storageService } from '../services/storage';
-import { DailyWageRecord, Worker } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Calendar, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { dbService } from '../services/db';
+import { wageService } from '../services/wageService';
+import { DailyWageRecord, Worker, AttendanceRecord } from '../types/index';
 
 export const DailyWageScreen: React.FC = () => {
+  const { profile } = useAuth();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
-  const workers = storageService.getWorkers();
-  const dailyWages = storageService.getDailyWages();
-  const currentMonthStr = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadData = async () => {
+      if (profile?.tenantId) {
+        try {
+          const [fetchedWorkers, fetchedAttendance] = await Promise.all([
+            dbService.getWorkers(profile.tenantId),
+            dbService.getAttendanceHistory(profile.tenantId)
+          ]);
+          
+          setWorkers(fetchedWorkers);
+
+          // Calculate Wages on the fly based on Attendance
+          const calculatedWages: DailyWageRecord[] = [];
+          fetchedAttendance.forEach(record => {
+             const worker = fetchedWorkers.find(w => w.id === record.workerId);
+             if (worker) {
+                 calculatedWages.push(wageService.calculateDailyWage(worker, record));
+             }
+          });
+          
+          setDailyWages(calculatedWages);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+    loadData();
+  }, [profile]);
+
+  if (loading) return <div className="p-8 text-center">Loading Wages...</div>;
 
   // If a worker is selected, show their daily logs
   if (selectedWorkerId) {
@@ -25,7 +61,7 @@ export const DailyWageScreen: React.FC = () => {
           </button>
           <div className="ml-2">
             <h2 className="font-bold text-lg text-gray-800">{worker?.name}</h2>
-            <p className="text-xs text-gray-500">{worker?.designation} • {worker?.category}</p>
+            <p className="text-xs text-gray-500">{worker?.designation}</p>
           </div>
         </div>
 
@@ -85,12 +121,6 @@ export const DailyWageScreen: React.FC = () => {
                      <p className="text-gray-700 font-medium">₹{record.breakdown.allowances}</p>
                   </div>
                </div>
-               
-               {record.meta.isOvertimeLimitExceeded && (
-                   <div className="mt-2 text-[10px] text-red-500 font-bold flex items-center">
-                       ⚠️ OT Limit Exceeded
-                   </div>
-               )}
              </div>
            ))}
         </div>
@@ -125,7 +155,7 @@ export const DailyWageScreen: React.FC = () => {
                   <p className="text-xs text-gray-500">{worker.designation}</p>
                 </div>
                 <div className="text-right">
-                   <p className="text-xs text-gray-400">Month Total</p>
+                   <p className="text-xs text-gray-400">Total Paid</p>
                    <p className="text-sm font-bold text-green-600">₹{workerTotal.toLocaleString()}</p>
                 </div>
                 <ChevronRight size={16} className="text-gray-300" />

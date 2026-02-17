@@ -1,11 +1,14 @@
-import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, ComplianceReport } from '../types';
+import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance} from '../types/index';
 
 export const wageService = {
   /**
-   * Calculate earnings for a single day based on attendance and worker config
+   * Calculate earnings for a single day
    */
   calculateDailyWage: (worker: Worker, record: AttendanceRecord): DailyWageRecord => {
-    const hours = record.calculatedHours || { netWorkingHours: 0, overtimeHours: 0 };
+    const hours = record.calculatedHours || { 
+        netWorkingHours: 0, overtimeHours: 0, grossHours: 0, 
+        breakDeduction: 0, regularHours: 0, isLate: false, lateByMinutes: 0 
+    };
     const config = worker.wageConfig;
     
     // 1. Determine Daily Rate
@@ -28,19 +31,16 @@ export const wageService = {
     if (config.overtimeEligible && hours.overtimeHours > 0) {
       otHours = hours.overtimeHours;
       const hourlyRate = dailyRate / 8;
-      const otRate = hourlyRate * 2; // Double rate for OT
+      const otRate = hourlyRate * 2; // Double rate
       overtimeWage = otHours * otRate;
     }
 
     // 4. Calculate Allowances
-    // Logic: If present (even half day), give travel/food. 
-    // Night shift is conditional (mocked logic: if outTime > 22:00)
     let totalAllowances = 0;
     if (record.status === 'PRESENT' || record.status === 'HALF_DAY') {
       totalAllowances += config.allowances.travel || 0;
       totalAllowances += config.allowances.food || 0;
       
-      // Simple check for night shift allowance
       if (record.outTime) {
         const outHour = new Date(record.outTime.timestamp).getHours();
         if (outHour >= 22 || outHour < 5) {
@@ -53,6 +53,7 @@ export const wageService = {
 
     return {
       id: `wage_${record.id}`,
+      tenantId: worker.tenantId,
       workerId: worker.id,
       date: record.date,
       attendanceId: record.id,
@@ -66,51 +67,24 @@ export const wageService = {
         rateUsed: parseFloat(dailyRate.toFixed(2)),
         hoursWorked: hours.netWorkingHours || 0,
         overtimeHours: otHours,
-        isOvertimeLimitExceeded: otHours > 2 // Flag if > 2 hours/day
+        isOvertimeLimitExceeded: otHours > 4
       }
     };
   },
 
-  /**
-   * Validate Overtime Compliance
-   */
-  checkCompliance: (dailyWages: DailyWageRecord[]): ComplianceReport => {
-    const violations: string[] = [];
-    let totalWeeklyOT = 0; // Mock: assumes input is a week's worth
-
-    dailyWages.forEach(w => {
-      if (w.meta.overtimeHours > 2) {
-        violations.push(`Daily OT limit exceeded on ${w.date} (${w.meta.overtimeHours} hrs)`);
-      }
-      totalWeeklyOT += w.meta.overtimeHours;
-    });
-
-    if (totalWeeklyOT > 60) {
-      violations.push(`Weekly work hours limit exceeded (Total: ${totalWeeklyOT})`);
-    }
-
-    return {
-      compliant: violations.length === 0,
-      violations,
-      recommendation: violations.length > 0 ? "Reduce OT hours or hire additional shift workers." : undefined
-    };
-  },
-
-  /**
-   * Generate Monthly Payroll Object
-   */
+  // FIXED: Explicitly accepts 4 arguments
   generateMonthlyPayroll: (
     worker: Worker, 
-    month: string, // YYYY-MM
+    month: string, 
     dailyWages: DailyWageRecord[],
     advances: Advance[]
   ): MonthlyPayroll => {
+    
     // Filter records for this month
     const monthWages = dailyWages.filter(w => w.date.startsWith(month));
     
-    // Initialize Summary
     let presentDays = 0;
-    let halfDays = 0;
+    let halfDays = 0; 
     let totalRegularHours = 0;
     let totalOvertimeHours = 0;
     
@@ -119,9 +93,7 @@ export const wageService = {
     let totalAllowances = 0;
 
     monthWages.forEach(dw => {
-      // Re-derive status logic roughly or pass attendance in. 
-      // For simplicity, we trust the wage record totals.
-      if (dw.breakdown.baseWage > 0) presentDays++; // Simplified count
+      if (dw.breakdown.baseWage > 0) presentDays++;
       
       totalBasic += dw.breakdown.baseWage;
       totalOTPay += dw.breakdown.overtimeWage;
@@ -143,17 +115,11 @@ export const wageService = {
         deductionDetails.push({ description: `Advance (${adv.date})`, amount: adv.amount });
     });
 
-    // Mock Canteen/Processing fees
-    const canteen = 550; // Flat mock
-    const processing = advanceTotal > 0 ? 20 : 0;
-    
-    if (canteen > 0) deductionDetails.push({ description: 'Canteen Charges', amount: canteen });
-    if (processing > 0) deductionDetails.push({ description: 'Processing Fee', amount: processing });
-
-    const totalDeductions = advanceTotal + canteen + processing;
+    const totalDeductions = advanceTotal;
 
     return {
       id: `payroll_${worker.id}_${month}`,
+      tenantId: worker.tenantId,
       workerId: worker.id,
       workerName: worker.name,
       workerDesignation: worker.designation,
@@ -162,7 +128,7 @@ export const wageService = {
       attendanceSummary: {
         totalDays: worker.wageConfig.workingDaysPerMonth || 26,
         presentDays,
-        absentDays: (worker.wageConfig.workingDaysPerMonth || 26) - presentDays, // simplified
+        absentDays: (worker.wageConfig.workingDaysPerMonth || 26) - presentDays,
         halfDays,
         totalRegularHours: parseFloat(totalRegularHours.toFixed(1)),
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))
@@ -171,7 +137,7 @@ export const wageService = {
         basic: parseFloat(totalBasic.toFixed(2)),
         overtime: parseFloat(totalOTPay.toFixed(2)),
         allowances: {
-            travel: 0, // already summed in totalAllowances
+            travel: 0,
             food: 0,
             other: parseFloat(totalAllowances.toFixed(2))
         },
@@ -179,8 +145,8 @@ export const wageService = {
       },
       deductions: {
         advances: advanceTotal,
-        processingFee: processing,
-        canteen,
+        processingFee: 0,
+        canteen: 0,
         total: totalDeductions,
         details: deductionDetails
       },
