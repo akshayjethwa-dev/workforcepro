@@ -31,6 +31,11 @@ export interface ShiftConfig {
   minHalfDayHours: number; // 4 (if worked less than this, mark absent/half day)
 }
 
+export interface OrgSettings {
+  shifts: ShiftConfig[];
+  enableBreakTracking: boolean; // Toggle for "Advanced Logic"
+}
+
 export interface Punch {
   timestamp: string; // ISO String
   type: 'IN' | 'OUT';

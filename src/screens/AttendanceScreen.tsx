@@ -7,7 +7,6 @@ import { Worker, AttendanceRecord } from '../types/index';
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
-  // Store today's attendance in a "Map" for instant lookup by worker ID
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
   const [loading, setLoading] = useState(true);
 
@@ -23,7 +22,6 @@ export const AttendanceScreen: React.FC = () => {
           
           setWorkers(fetchedWorkers);
 
-          // Convert array to map: { "worker_123": Record, "worker_456": Record }
           const map: Record<string, AttendanceRecord> = {};
           fetchedAttendance.forEach(r => {
              map[r.workerId] = r;
@@ -42,40 +40,55 @@ export const AttendanceScreen: React.FC = () => {
   const markStatus = async (worker: Worker, status: 'PRESENT' | 'HALF_DAY' | 'ON_LEAVE') => {
     if (!profile?.tenantId) return;
     
-    // Optional: Confirm action
-    const confirmMsg = status === 'PRESENT' ? "Mark Present?" : status === 'HALF_DAY' ? "Mark Half Day?" : "Mark On Leave?";
-    if (!window.confirm(`${confirmMsg} for ${worker.name}`)) return;
-
     const now = new Date();
     const todayDate = now.toISOString().split('T')[0];
-    
-    const record: AttendanceRecord = {
-        id: `${profile.tenantId}_${worker.id}_${todayDate}`,
-        tenantId: profile.tenantId,
-        workerId: worker.id,
-        workerName: worker.name,
-        date: todayDate,
-        shiftId: worker.shiftId,
-        timeline: [],
-        lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
-        hours: { gross: 9, net: 9, overtime: 0 },
-        inTime: { 
-            timestamp: now.toISOString(), 
-            geoLocation: {lat:0,lng:0}, 
-            deviceInfo:'Manual Admin', 
-            markedBy:'supervisor'
-        },
-        status: status
-    };
+    const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
 
-    // Optimistic Update (Show change immediately before DB finishes)
-    setAttendanceMap(prev => ({ ...prev, [worker.id]: record }));
+    // Check if record already exists to preserve timeline/punches
+    const existingRecord = attendanceMap[worker.id];
+    
+    let finalRecord: AttendanceRecord;
+
+    if (existingRecord) {
+        // UPDATE EXISTING: Keep timeline, just change status
+        finalRecord = {
+            ...existingRecord,
+            status: status,
+            // Update metadata to show manual override
+            inTime: {
+                ...existingRecord.inTime!,
+                markedBy: 'supervisor', // Flag that admin touched it
+            }
+        };
+    } else {
+        // CREATE NEW: Full manual entry
+        finalRecord = {
+            id: recordId,
+            tenantId: profile.tenantId,
+            workerId: worker.id,
+            workerName: worker.name,
+            date: todayDate,
+            shiftId: worker.shiftId,
+            timeline: [], // No punches yet
+            lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
+            hours: { gross: 9, net: 9, overtime: 0 }, // Default standard day
+            inTime: { 
+                timestamp: now.toISOString(), 
+                geoLocation: {lat:0,lng:0}, 
+                deviceInfo:'Manual Admin', 
+                markedBy:'supervisor'
+            },
+            status: status
+        };
+    }
+
+    // Optimistic Update
+    setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
 
     try {
-      await dbService.markAttendance(record);
+      await dbService.markAttendance(finalRecord);
     } catch (e) {
       alert("Failed to save attendance");
-      // Revert on failure (optional, but good practice)
     }
   };
 
@@ -104,6 +117,21 @@ export const AttendanceScreen: React.FC = () => {
             const isHalfDay = record?.status === 'HALF_DAY';
             const isOnLeave = record?.status === 'ON_LEAVE';
             
+            // Safely calculate display time
+            let displayTime = '--:--';
+            let displaySource = '';
+
+            if (record) {
+                if (record.timeline && record.timeline.length > 0) {
+                    const lastPunch = record.timeline[record.timeline.length - 1];
+                    displayTime = new Date(lastPunch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                    displaySource = lastPunch.device === 'Kiosk' ? 'Worker (Kiosk)' : 'Supervisor';
+                } else if (record.inTime) {
+                    displayTime = new Date(record.inTime.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                    displaySource = record.inTime.markedBy === 'self' ? 'Worker (Kiosk)' : 'Supervisor';
+                }
+            }
+
             return (
                 <div key={worker.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col transition-all">
                     {/* Worker Header */}
@@ -118,7 +146,7 @@ export const AttendanceScreen: React.FC = () => {
                             </div>
                         </div>
                         
-                        {/* Status Badge (Visible if already marked) */}
+                        {/* Status Badge */}
                         {record && (
                             <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center ${
                                 isPresent ? 'bg-green-100 text-green-700' : 
@@ -133,35 +161,50 @@ export const AttendanceScreen: React.FC = () => {
                         )}
                     </div>
 
-                    {/* Action Buttons (Only show if NOT marked yet) */}
-                    {!record ? (
-                        <div className="grid grid-cols-3 gap-2 mt-1">
-                            <button 
-                                onClick={() => markStatus(worker, 'PRESENT')}
-                                className="flex items-center justify-center py-2 bg-green-50 text-green-700 rounded-lg text-xs font-bold border border-green-100 hover:bg-green-100 active:scale-95"
-                            >
-                                Present
-                            </button>
-                            <button 
-                                onClick={() => markStatus(worker, 'HALF_DAY')}
-                                className="flex items-center justify-center py-2 bg-orange-50 text-orange-700 rounded-lg text-xs font-bold border border-orange-100 hover:bg-orange-100 active:scale-95"
-                            >
-                                Half Day
-                            </button>
-                            <button 
-                                onClick={() => markStatus(worker, 'ON_LEAVE')}
-                                className="flex items-center justify-center py-2 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold border border-blue-100 hover:bg-blue-100 active:scale-95"
-                            >
-                                On Leave
-                            </button>
-                        </div>
-                    ) : (
-                        // If marked, show time details
-                        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg text-xs text-gray-500">
-                           <span>Marked By: {record.inTime.markedBy === 'self' ? 'Worker (Kiosk)' : 'Supervisor'}</span>
-                           <span>Time: {new Date(record.inTime.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    {/* Info Bar (If Record Exists) */}
+                    {record && (
+                        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg text-xs text-gray-500 mb-3">
+                           <span>Marked By: <span className="font-medium text-gray-700">{displaySource}</span></span>
+                           <span>Last Active: <span className="font-medium text-gray-700">{displayTime}</span></span>
                         </div>
                     )}
+
+                    {/* Action Buttons (ALWAYS VISIBLE - Allows Manual Override) */}
+                    <div className="grid grid-cols-3 gap-2">
+                        <button 
+                            onClick={() => markStatus(worker, 'PRESENT')}
+                            disabled={isPresent}
+                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
+                                isPresent 
+                                ? 'bg-green-600 text-white border-green-600 opacity-50 cursor-not-allowed' 
+                                : 'bg-white text-green-700 border-green-200 hover:bg-green-50'
+                            }`}
+                        >
+                            Present
+                        </button>
+                        <button 
+                            onClick={() => markStatus(worker, 'HALF_DAY')}
+                            disabled={isHalfDay}
+                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
+                                isHalfDay 
+                                ? 'bg-orange-500 text-white border-orange-500 opacity-50 cursor-not-allowed' 
+                                : 'bg-white text-orange-700 border-orange-200 hover:bg-orange-50'
+                            }`}
+                        >
+                            Half Day
+                        </button>
+                        <button 
+                            onClick={() => markStatus(worker, 'ON_LEAVE')}
+                            disabled={isOnLeave}
+                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
+                                isOnLeave 
+                                ? 'bg-blue-500 text-white border-blue-500 opacity-50 cursor-not-allowed' 
+                                : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'
+                            }`}
+                        >
+                            On Leave
+                        </button>
+                    </div>
                 </div>
             );
         })}

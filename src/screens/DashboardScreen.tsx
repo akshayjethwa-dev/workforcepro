@@ -20,25 +20,39 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
     if (!profile?.tenantId) return;
     setLoading(true);
     try {
-      const [workers, attendance] = await Promise.all([
+      const [workers, attendance, settings] = await Promise.all([
         dbService.getWorkers(profile.tenantId),
-        dbService.getTodayAttendance(profile.tenantId)
+        dbService.getTodayAttendance(profile.tenantId),
+        dbService.getOrgSettings(profile.tenantId)
       ]);
 
       const total = workers.filter(w => w.status === 'ACTIVE').length;
-      const present = attendance.filter(r => r.status === 'PRESENT' || r.status === 'HALF_DAY').length;
-      const late = attendance.filter(r => r.calculatedHours?.isLate).length;
+      
+      // Calculate Status based on the NEW Logic (stored in DB record.status)
+      const present = attendance.filter(r => r.status === 'PRESENT').length;
+      const halfDay = attendance.filter(r => r.status === 'HALF_DAY').length;
+      const late = attendance.filter(r => r.lateStatus?.isLate).length;
       const onLeave = attendance.filter(r => r.status === 'ON_LEAVE').length;
-      const absent = Math.max(0, total - present - onLeave);
+      
+      // Absent = Total - (Present + HalfDay + OnLeave)
+      const absent = Math.max(0, total - (present + halfDay + onLeave));
 
-      setStats({ total, present, absent, late, onLeave });
+      // Note: We group Present + HalfDay as "Present" in the UI card usually, 
+      // but here we can separate if needed. Let's group for simplicity or show Present.
+      setStats({ total, present: present + halfDay, absent, late, onLeave });
 
       const sorted = [...attendance].sort((a, b) => {
-        const timeA = a.outTime ? a.outTime.timestamp : a.inTime.timestamp;
-        const timeB = b.outTime ? b.outTime.timestamp : b.inTime.timestamp;
-        return new Date(timeB).getTime() - new Date(timeA).getTime();
+        const getTime = (r: AttendanceRecord) => {
+           if (r.timeline && r.timeline.length > 0) {
+              return new Date(r.timeline[r.timeline.length - 1].timestamp).getTime();
+           }
+           if (r.inTime) return new Date(r.inTime.timestamp).getTime();
+           return new Date(r.date).getTime();
+        };
+        return getTime(b) - getTime(a);
       });
-      setRecentActivity(sorted.slice(0, 5)); // Show top 5
+      
+      setRecentActivity(sorted.slice(0, 5));
     } catch (e) {
       console.error(e);
     } finally {
@@ -91,16 +105,35 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-4 border-b border-gray-50"><h3 className="font-bold text-gray-800 text-sm">Live Feed</h3></div>
             <div className="divide-y divide-gray-50">
-                {recentActivity.map(record => (
-                    <div key={record.id} className="p-3 flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center font-bold text-xs text-gray-500">{record.workerName.charAt(0)}</div>
-                        <div className="flex-1">
-                            <p className="text-sm font-bold text-gray-800">{record.workerName}</p>
-                            <p className="text-xs text-gray-400">{new Date(record.inTime.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                {recentActivity.map(record => {
+                    const lastPunch = record.timeline && record.timeline.length > 0 
+                        ? record.timeline[record.timeline.length - 1] 
+                        : null;
+                        
+                    const timeStr = lastPunch 
+                        ? lastPunch.timestamp 
+                        : (record.inTime?.timestamp || new Date().toISOString());
+
+                    const typeStr = lastPunch ? lastPunch.type : 'IN';
+                    const isOut = typeStr === 'OUT';
+
+                    return (
+                        <div key={record.id} className="p-3 flex items-center space-x-3">
+                            <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center font-bold text-xs text-gray-500">{record.workerName.charAt(0)}</div>
+                            <div className="flex-1">
+                                <p className="text-sm font-bold text-gray-800">{record.workerName}</p>
+                                <p className="text-xs text-gray-400">
+                                    {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                                </p>
+                            </div>
+                            <span className={`text-[10px] font-bold px-2 py-1 rounded ${
+                                isOut ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
+                            }`}>
+                                {typeStr}
+                            </span>
                         </div>
-                        <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded">IN</span>
-                    </div>
-                ))}
+                    );
+                })}
                 {recentActivity.length === 0 && <p className="p-4 text-center text-gray-400 text-xs">No activity yet.</p>}
             </div>
         </div>

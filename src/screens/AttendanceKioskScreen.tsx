@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { Worker, ShiftConfig, AttendanceRecord } from '../types/index';
+import { Worker, ShiftConfig, AttendanceRecord, OrgSettings } from '../types/index';
 
 interface Props { onExit: () => void; }
 
@@ -12,11 +12,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
   const { profile } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   
-  // Refs for State (Crucial for setInterval loops)
+  // Refs for State (Crucial for setInterval loops to avoid stale closures)
   const processingRef = useRef(false); 
   const workersRef = useRef<Worker[]>([]);
+  // We store the full settings object in a Ref
+  const settingsRef = useRef<OrgSettings>({ shifts: [], enableBreakTracking: false });
   
-  const [shifts, setShifts] = useState<ShiftConfig[]>([]);
   const [feedback, setFeedback] = useState("Initializing System...");
   const [modelsLoaded, setModelsLoaded] = useState(false);
   
@@ -35,16 +36,17 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
 
         if (profile?.tenantId) {
             setFeedback("Fetching Workers...");
-            const [w, s] = await Promise.all([
+            // Fetch Workers AND Org Settings (Logic Rules)
+            const [w, settings] = await Promise.all([
                dbService.getWorkers(profile.tenantId),
-               dbService.getShifts(profile.tenantId)
+               dbService.getOrgSettings(profile.tenantId)
             ]);
             
             const validWorkers = w.filter(worker => worker.faceDescriptor && worker.faceDescriptor.length > 0);
             
-            // Update Ref immediately so the loop sees it
+            // Update Refs immediately so the loop sees it
             workersRef.current = validWorkers;
-            setShifts(s);
+            settingsRef.current = settings; // Store settings (shifts + break tracking)
             
             if (validWorkers.length === 0) {
                 setFeedback("No workers found with Face Data.");
@@ -81,9 +83,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
 
     const scanInterval = setInterval(async () => {
        // CHECKS:
-       // 1. Is camera ready?
-       // 2. Are we already processing a face?
-       // 3. Do we have workers to match against?
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
            return;
        }
@@ -153,7 +152,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
         }];
 
         // E. Logic
+        // Use settingsRef to get the correct Shift and Break Mode
+        const { shifts, enableBreakTracking } = settingsRef.current;
         const shift = shifts.find(s => s.id === worker.shiftId) || shifts[0];
+        
+        if (!shift) throw new Error("No Shift Configuration Found");
+
         const lateCount = await dbService.getMonthlyLateCount(profile!.tenantId, worker.id);
 
         const baseRecord: AttendanceRecord = {
@@ -164,12 +168,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             date: today,
             shiftId: worker.shiftId || 'default',
             timeline: newTimeline,
-            status: 'PRESENT', 
+            status: 'ABSENT', // Default, logic will update
             lateStatus: existingRecord?.lateStatus || { isLate: false, lateByMins: 0, penaltyApplied: false },
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount);
+        // Pass enableBreakTracking to the calculation engine
+        const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking);
 
         // F. Save
         await dbService.markAttendance(finalRecord);
@@ -178,16 +183,15 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
         setDetectedWorker({ worker, action: punchType });
         setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
 
-        // UNLOCK after 3 seconds
+        // Close Kiosk and Go to Dashboard after 2 seconds
         setTimeout(() => {
             setDetectedWorker(null);
-            setFeedback("Look at Camera");
-            processingRef.current = false;
-        }, 3000);
+            onExit(); // <--- This closes the kiosk
+        }, 2000);
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("Handle Punch Error", e);
-        setFeedback("System Error");
+        setFeedback("System Error: " + (e.message || "Unknown"));
         // Force unlock
         processingRef.current = false;
         setTimeout(() => setFeedback("Look at Camera"), 2000);

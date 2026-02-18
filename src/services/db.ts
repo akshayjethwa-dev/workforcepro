@@ -2,7 +2,7 @@ import {
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { Worker, AttendanceRecord, Advance, ShiftConfig } from "../types/index";
+import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings } from "../types/index";
 
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
@@ -64,16 +64,15 @@ export const dbService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Advance));
   },
 
-  // --- SHIFT MANAGEMENT ---
+  // --- SETTINGS & CONFIGURATION (NEW) ---
   
-  getShifts: async (tenantId: string): Promise<ShiftConfig[]> => {
+  // Fetch full Organization Settings (Shifts + Break Logic)
+  getOrgSettings: async (tenantId: string): Promise<OrgSettings> => {
     const docRef = doc(db, "settings", tenantId);
     const snap = await getDoc(docRef);
-    if (snap.exists() && snap.data().shifts) {
-      return snap.data().shifts;
-    }
-    // Return Default Shift if none configured
-    return [{
+    
+    // Defaults
+    const defaultShifts: ShiftConfig[] = [{
       id: 'default',
       name: 'General Shift',
       startTime: '09:00',
@@ -83,9 +82,32 @@ export const dbService = {
       breakDurationMins: 60,
       minHalfDayHours: 4
     }];
+
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        shifts: data.shifts || defaultShifts,
+        enableBreakTracking: data.enableBreakTracking ?? false // Default OFF (Standard Logic)
+      };
+    }
+    
+    // If no settings exist yet
+    return { shifts: defaultShifts, enableBreakTracking: false };
+  },
+
+  saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
+    await setDoc(doc(db, "settings", tenantId), settings, { merge: true });
+  },
+
+  // --- LEGACY SHIFT MANAGEMENT (Wrappers) ---
+  
+  getShifts: async (tenantId: string): Promise<ShiftConfig[]> => {
+    const settings = await dbService.getOrgSettings(tenantId);
+    return settings.shifts;
   },
 
   saveShifts: async (tenantId: string, shifts: ShiftConfig[]) => {
+    // Merges shifts into the existing settings document
     await setDoc(doc(db, "settings", tenantId), { shifts }, { merge: true });
   },
 
@@ -99,7 +121,6 @@ export const dbService = {
       collection(db, "attendance"), 
       where("tenantId", "==", tenantId),
       where("workerId", "==", workerId),
-      
     );
     
     const snapshot = await getDocs(q);
@@ -142,7 +163,7 @@ export const dbService = {
     await updateDoc(docRef, { tenantId: null, role: null });
   },
 
-  // --- TENANT MANAGEMENT (NEW) ---
+  // --- TENANT MANAGEMENT ---
   updateTenant: async (tenantId: string, data: { name: string }) => {
     const tenantRef = doc(db, "tenants", tenantId);
     await updateDoc(tenantRef, data);

@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Clock, AlertTriangle, Building, Loader2 } from 'lucide-react';
+import { Save, Clock, AlertTriangle, Building, Loader2, ToggleLeft, ToggleRight, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
-import { ShiftConfig } from '../types/index';
+import { ShiftConfig, OrgSettings } from '../types/index';
 
 export const SettingsScreen: React.FC = () => {
   const { profile } = useAuth();
-  const [shifts, setShifts] = useState<ShiftConfig[]>([]);
+  const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
   const [companyName, setCompanyName] = useState(profile?.companyName || '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
      if(profile?.tenantId) {
-         dbService.getShifts(profile.tenantId).then(data => {
-             setShifts(data);
+         dbService.getOrgSettings(profile.tenantId).then(data => {
+             setSettings(data);
              setLoading(false);
          });
      }
@@ -24,14 +24,13 @@ export const SettingsScreen: React.FC = () => {
       if(!profile?.tenantId) return;
       setSaving(true);
       try {
-        // 1. Save Shifts
-        await dbService.saveShifts(profile.tenantId, shifts);
+        // 1. Save Settings
+        await dbService.saveOrgSettings(profile.tenantId, settings);
         
         // 2. Save Company Name if changed
         if (companyName !== profile.companyName) {
             await dbService.updateTenant(profile.tenantId, { name: companyName });
-            // Force reload or alert user to re-login to see name change everywhere
-            alert("Settings Saved! (You may need to re-login to see the new Company Name in the header)");
+            alert("Settings Saved! (Re-login to see Company Name change)");
         } else {
             alert("Configuration Saved Successfully!");
         }
@@ -43,9 +42,13 @@ export const SettingsScreen: React.FC = () => {
   };
 
   const updateShift = (index: number, field: keyof ShiftConfig, value: any) => {
-      const newShifts = [...shifts];
+      const newShifts = [...settings.shifts];
       newShifts[index] = { ...newShifts[index], [field]: value };
-      setShifts(newShifts);
+      setSettings(prev => ({ ...prev, shifts: newShifts }));
+  };
+
+  const toggleBreakTracking = () => {
+      setSettings(prev => ({ ...prev, enableBreakTracking: !prev.enableBreakTracking }));
   };
 
   if (loading) return <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-blue-600"/></div>;
@@ -67,12 +70,47 @@ export const SettingsScreen: React.FC = () => {
                   value={companyName} 
                   onChange={e => setCompanyName(e.target.value)} 
                />
-               <p className="text-[10px] text-gray-400 mt-1">This name appears on payslips and reports.</p>
            </div>
       </div>
 
-      {/* SECTION 2: SHIFT RULES */}
-      {shifts.map((shift, idx) => (
+      {/* SECTION 2: ATTENDANCE LOGIC */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+           <div className="flex items-center mb-4 text-purple-600">
+               <CheckCircle2 className="mr-2" size={20}/> 
+               <h3 className="font-bold">Logic Configuration</h3>
+           </div>
+           
+           <div className="flex items-center justify-between">
+              <div>
+                  <h4 className="font-bold text-gray-800">Enable Break Tracking</h4>
+                  {/* [FIXED]: Replaced max-w-[200px] with max-w-50 per linter suggestion */}
+                  <p className="text-xs text-gray-500 mt-1 max-w-50">
+                      {settings.enableBreakTracking 
+                        ? "ON: Work Time = Sum of all check-in/out segments. Breaks are excluded."
+                        : "OFF: Work Time = First Check-In to Last Check-Out. Breaks are included."
+                      }
+                  </p>
+              </div>
+              <button onClick={toggleBreakTracking} className="transition-all">
+                  {settings.enableBreakTracking 
+                    ? <ToggleRight size={48} className="text-purple-600" />
+                    : <ToggleLeft size={48} className="text-gray-300" />
+                  }
+              </button>
+           </div>
+           
+           <div className="mt-4 bg-purple-50 p-3 rounded-lg text-xs text-purple-800">
+               <strong>Current Logic Rules:</strong>
+               <ul className="list-disc pl-4 mt-1 space-y-1">
+                   <li>&lt; 4 Hours: <b>Absent</b></li>
+                   <li>4 - 6 Hours: <b>Half Day</b></li>
+                   <li>&gt; 6 Hours: <b>Full Day (Present)</b></li>
+               </ul>
+           </div>
+      </div>
+
+      {/* SECTION 3: SHIFT RULES */}
+      {settings.shifts.map((shift, idx) => (
         <div key={idx} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
            <div className="flex items-center mb-4 text-blue-600">
                <Clock className="mr-2" size={20}/> 
