@@ -29,17 +29,21 @@ export interface ShiftConfig {
   maxGraceAllowed: number; // 3 (times per month)
   breakDurationMins: number; // 60 (deducted if they don't punch out, optional)
   minHalfDayHours: number; // 4 (if worked less than this, mark absent/half day)
+  minOvertimeMins: number;
 }
 
 export interface OrgSettings {
   shifts: ShiftConfig[];
   enableBreakTracking: boolean; // Toggle for "Advanced Logic"
+  baseLocation?: { lat: number; lng: number; radius: number; address?: string };
 }
 
 export interface Punch {
   timestamp: string; // ISO String
   type: 'IN' | 'OUT';
   device: string;
+  location?: { lat: number; lng: number };
+  isOutOfGeofence?: boolean;
 }
 
 // --- WORKER & WAGE CONFIG ---
@@ -47,6 +51,7 @@ export interface WageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
   overtimeEligible: boolean;
+  overtimeRatePerHour?: number;
   workingDaysPerMonth?: number;
   allowances: {
     travel: number;
@@ -192,4 +197,4 @@ export interface Advance {
 }
 
 // --- NAVIGATION ---
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' ;
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' ;

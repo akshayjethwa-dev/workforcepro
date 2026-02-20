@@ -3,6 +3,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings } from "../types/index";
+import { syncService } from './syncService';
 
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
@@ -93,10 +94,26 @@ export const dbService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
   },
 
-  markAttendance: async (record: AttendanceRecord) => {
+  markAttendanceOnline: async (record: AttendanceRecord) => {
     const recordId = `${record.tenantId}_${record.workerId}_${record.date}`;
     const finalRecord = { ...record, id: recordId };
     await setDoc(doc(db, "attendance", recordId), finalRecord, { merge: true });
+  },
+
+  markAttendance: async (record: AttendanceRecord) => {
+    // If clearly offline, drop it directly into the queue
+    if (!navigator.onLine) {
+       syncService.enqueue(record);
+       return;
+    }
+    
+    // If we think we're online, try sending. If it fails, catch and queue it.
+    try {
+       await dbService.markAttendanceOnline(record);
+    } catch (e) {
+       console.warn("Network write failed, queueing offline");
+       syncService.enqueue(record);
+    }
   },
 
   getAdvances: async (tenantId: string): Promise<Advance[]> => {
@@ -118,6 +135,7 @@ export const dbService = {
       gracePeriodMins: 15,
       maxGraceAllowed: 3,
       breakDurationMins: 60,
+      minOvertimeMins:60,
       minHalfDayHours: 4
     }];
 
@@ -125,7 +143,8 @@ export const dbService = {
       const data = snap.data();
       return {
         shifts: data.shifts || defaultShifts,
-        enableBreakTracking: data.enableBreakTracking ?? false 
+        enableBreakTracking: data.enableBreakTracking ?? false,
+        baseLocation: data.baseLocation
       };
     }
     return { shifts: defaultShifts, enableBreakTracking: false };

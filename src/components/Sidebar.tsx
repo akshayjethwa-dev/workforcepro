@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ScreenName } from '../types/index';
+import { PieChart } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -79,6 +80,7 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                <MenuItem icon={Users} label="Workers Directory" screen="WORKERS" />
                <MenuItem icon={History} label="Worker History" screen="WORKER_HISTORY" />
                <MenuItem icon={FileText} label="Payroll Reports" screen="PAYROLL" />
+               <MenuItem icon={PieChart} label="Factory Reports" screen="REPORTS" />
 
                <div className="px-4 py-2 bg-gray-50 text-xs font-bold text-gray-400 uppercase tracking-wider mt-2">
                  App

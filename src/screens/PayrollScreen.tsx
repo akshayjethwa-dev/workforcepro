@@ -11,24 +11,30 @@ export const PayrollScreen: React.FC = () => {
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
-  const [advances, setAdvances] = useState<Advance[]>([]); // New State
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  
+  // NEW STATE: Store the factory address to pass to the Payslip
+  const [siteAddress, setSiteAddress] = useState<string>(''); 
+  
   const [loading, setLoading] = useState(true);
   
-  const currentMonthStr = new Date().toISOString().slice(0, 7); // 2023-10
+  const currentMonthStr = new Date().toISOString().slice(0, 7); // e.g. "2026-02"
 
   useEffect(() => {
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
-          // Fetch Workers, Attendance, AND Advances
-          const [fetchedWorkers, fetchedAttendance, fetchedAdvances] = await Promise.all([
+          // Fetch Workers, Attendance, Advances, AND OrgSettings in parallel
+          const [fetchedWorkers, fetchedAttendance, fetchedAdvances, fetchedSettings] = await Promise.all([
             dbService.getWorkers(profile.tenantId),
             dbService.getAttendanceHistory(profile.tenantId),
-            dbService.getAdvances(profile.tenantId)
+            dbService.getAdvances(profile.tenantId),
+            dbService.getOrgSettings(profile.tenantId)
           ]);
           
           setWorkers(fetchedWorkers);
           setAdvances(fetchedAdvances);
+          setSiteAddress(fetchedSettings.baseLocation?.address || '');
           
           // Calculate daily wages from attendance history
           const wages: DailyWageRecord[] = [];
@@ -51,7 +57,6 @@ export const PayrollScreen: React.FC = () => {
   const payrolls = useMemo(() => {
     if (workers.length === 0) return [];
     
-    // Pass the fetched advances here (Arg #4)
     return workers.map(worker => 
         wageService.generateMonthlyPayroll(worker, currentMonthStr, dailyWages, advances)
     );
@@ -126,7 +131,12 @@ export const PayrollScreen: React.FC = () => {
 
       {/* Payslip Modal */}
       {selectedPayroll && (
-        <Payslip data={selectedPayroll} onClose={() => setSelectedPayroll(null)} />
+        <Payslip 
+            data={selectedPayroll} 
+            companyName={profile?.companyName || 'Factory Admin'}
+            siteAddress={siteAddress}
+            onClose={() => setSelectedPayroll(null)} 
+        />
       )}
     </div>
   );

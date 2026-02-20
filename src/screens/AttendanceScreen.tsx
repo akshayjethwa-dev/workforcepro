@@ -1,10 +1,10 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
+import { geoUtils } from '../utils/geo'; // Ensures distance calculation works
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -43,35 +43,57 @@ export const AttendanceScreen: React.FC = () => {
     loadData();
   }, [profile]);
 
-  // Handle Time-Based Punches (IN/OUT)
+  // Handle Time-Based Punches (IN/OUT) with Geofencing
   const handlePunch = async (worker: Worker, type: 'IN' | 'OUT') => {
     if (!profile?.tenantId) return;
     setActionLoading(worker.id);
 
     try {
+        // --- 1. CAPTURE LOCATION & CHECK GEOFENCE ---
+        let currentLocation: { lat: number; lng: number } | undefined;
+        let isOutOfGeofence = false;
+
+        if (navigator.geolocation) {
+            try {
+                const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+                });
+                currentLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                
+                // If the owner has set a base location, calculate distance
+                if (settings.baseLocation) {
+                    const dist = geoUtils.getDistanceInMeters(
+                        currentLocation.lat, currentLocation.lng,
+                        settings.baseLocation.lat, settings.baseLocation.lng
+                    );
+                    isOutOfGeofence = dist > settings.baseLocation.radius;
+                }
+            } catch (err) {
+                console.warn("Could not get location", err);
+            }
+        }
+
         const todayDate = new Date().toISOString().split('T')[0];
-        // FIXED: Changed 'constPc' to 'const'
         const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
         const now = new Date();
 
-        // 1. Get or Init Record
+        // --- 2. GET OR INIT RECORD ---
         const existingRecord = attendanceMap[worker.id];
         let currentTimeline = existingRecord?.timeline || [];
         
-        // 2. Create New Punch
+        // --- 3. CREATE NEW PUNCH ---
         const newPunch = {
             timestamp: now.toISOString(),
             type: type,
-            device: 'Supervisor Manual'
+            device: 'Mobile App',
+            location: currentLocation,
+            isOutOfGeofence
         };
 
-        // FIXED: Changed 'constPc' to 'const'
         const newTimeline = [...currentTimeline, newPunch];
 
-        // 3. Apply Logic (Calculate Status, Late, etc.)
+        // --- 4. APPLY LOGIC ---
         const shift = settings.shifts.find(s => s.id === worker.shiftId) || settings.shifts[0];
-        
-        // We fetch late count only when needed to keep initial load fast
         const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, worker.id);
 
         const baseRecord: AttendanceRecord = existingRecord || {
@@ -87,10 +109,8 @@ export const AttendanceScreen: React.FC = () => {
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        // Inject new timeline
         baseRecord.timeline = newTimeline;
 
-        // Run the Engine
         const finalRecord = attendanceLogic.processDailyStatus(
             baseRecord, 
             shift, 
@@ -98,9 +118,14 @@ export const AttendanceScreen: React.FC = () => {
             settings.enableBreakTracking
         );
 
-        // 4. Save & Update UI
+        // --- 5. SAVE & UPDATE UI ---
         await dbService.markAttendance(finalRecord);
         setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
+
+        // Alert user if out of bounds
+        if (isOutOfGeofence) {
+            alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
+        }
 
     } catch (e) {
         console.error("Punch Error", e);
@@ -124,7 +149,7 @@ export const AttendanceScreen: React.FC = () => {
           workerName: worker.name,
           date: todayDate,
           shiftId: worker.shiftId,
-          timeline: [], // No work done
+          timeline: [], 
           status: 'ON_LEAVE',
           lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
           hours: { gross: 0, net: 0, overtime: 0 }

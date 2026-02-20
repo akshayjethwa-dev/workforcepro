@@ -104,9 +104,21 @@ export const attendanceLogic = {
         penaltyApplied = true;
     }
 
-    // 5. Calculate Overtime
-    const shiftDuration = parseInt(shift.endTime) - parseInt(shift.startTime);
-    const overtime = Math.max(0, netHours - shiftDuration);
+    // 5. Calculate Exact Shift Duration safely
+    const [endH, endM] = shift.endTime.split(':').map(Number);
+    let shiftDurationMins = (endH * 60 + endM) - (shiftHour * 60 + shiftMin);
+    if (shiftDurationMins < 0) shiftDurationMins += 24 * 60; // Handle overnight shifts safely
+    const shiftDurationHours = shiftDurationMins / 60;
+
+    // --- NEW: CALCULATE OVERTIME WITH THRESHOLD ---
+    const extraHours = Math.max(0, netHours - shiftDurationHours);
+    const minOtThresholdHours = (shift.minOvertimeMins || 0) / 60;
+    
+    let overtime = 0;
+    // Only grant OT if they cross the minimum extra minutes setting
+    if (extraHours >= minOtThresholdHours) {
+        overtime = extraHours; 
+    }
 
     return {
       ...record,
@@ -123,4 +135,4 @@ export const attendanceLogic = {
       }
     };
   }
-};
+}

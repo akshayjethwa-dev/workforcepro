@@ -341,6 +341,42 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value)}})} />
               </div>
             </div>
+
+            {/* --- NEW: OVERTIME CONFIGURATION --- */}
+            <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                <div className="flex items-center justify-between mb-3">
+                    <div>
+                        <h3 className="text-sm font-bold text-blue-900">Overtime (OT) Rules</h3>
+                        <p className="text-[10px] text-blue-600 font-medium">Is this worker eligible for OT pay?</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only peer" 
+                          checked={formData.wageConfig?.overtimeEligible || false} 
+                          onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, overtimeEligible: e.target.checked}})} 
+                        />
+                        <div className="w-11 h-6 bg-blue-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+
+                {formData.wageConfig?.overtimeEligible && (
+                    <div className="animate-in fade-in slide-in-from-top-2">
+                        <label className="text-[10px] font-bold text-blue-800 uppercase">OT Pay Rate (Per Hour)</label>
+                        <div className="relative mt-1">
+                            <IndianRupee className="absolute left-3 top-2.5 text-blue-500" size={16}/>
+                            <input 
+                              type="number" 
+                              className="w-full pl-9 p-2 border border-blue-200 rounded-lg text-sm bg-white font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 outline-none" 
+                              placeholder="e.g. 100" 
+                              value={formData.wageConfig?.overtimeRatePerHour || ''} 
+                              onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, overtimeRatePerHour: parseFloat(e.target.value)}})} 
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-2">
               <h3 className="text-sm font-bold text-gray-700 mb-3">Daily Allowances (Optional)</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -360,6 +396,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             </div>
           </div>
         )}
+
 
         {/* STEP 4: FACE SCAN */}
         {currentStep === 3 && (

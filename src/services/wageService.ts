@@ -5,19 +5,23 @@ export const wageService = {
    * Calculate earnings for a single day
    */
   calculateDailyWage: (worker: Worker, record: AttendanceRecord): DailyWageRecord => {
-    const hours = record.calculatedHours || { 
-        netWorkingHours: 0, overtimeHours: 0, grossHours: 0, 
-        breakDeduction: 0, regularHours: 0, isLate: false, lateByMinutes: 0 
-    };
+    // 1. Support both the NEW timeline 'hours' and OLD 'calculatedHours' for legacy records
+    const netHours = record.hours?.net || record.calculatedHours?.netWorkingHours || 0;
+    const otHours = record.hours?.overtime || record.calculatedHours?.overtimeHours || 0;
+
     const config = worker.wageConfig;
     
-    // 1. Determine Daily Rate
+    // 2. Determine Daily Rate Dynamically based on the specific month
     let dailyRate = config.amount;
     if (config.type === 'MONTHLY') {
-      dailyRate = config.amount / (config.workingDaysPerMonth || 26);
+      const [yearStr, monthStr] = record.date.split('-');
+      // new Date(year, month, 0) gives the exact number of days in that month!
+      const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
+      // Use explicit workingDaysPerMonth if set, otherwise fallback to exact calendar days (e.g., 28, 30, 31)
+      dailyRate = config.amount / (config.workingDaysPerMonth || daysInMonth);
     }
 
-    // 2. Calculate Base Wage
+    // 3. Calculate Base Wage
     let baseWage = 0;
     if (record.status === 'PRESENT') {
       baseWage = dailyRate;
@@ -25,26 +29,28 @@ export const wageService = {
       baseWage = dailyRate * 0.5;
     }
 
-    // 3. Calculate Overtime
+    // 4. Calculate Overtime (Using the new Custom Rate we added)
     let overtimeWage = 0;
-    let otHours = 0;
-    if (config.overtimeEligible && hours.overtimeHours > 0) {
-      otHours = hours.overtimeHours;
-      const hourlyRate = dailyRate / 8;
-      const otRate = hourlyRate * 2; // Double rate
-      overtimeWage = otHours * otRate;
+    if (config.overtimeEligible && otHours > 0) {
+      // Use their custom OT Rate if you set one, otherwise fallback to standard double rate (Rate/8 * 2)
+      const otRatePerHour = config.overtimeRatePerHour || ((dailyRate / 8) * 2);
+      overtimeWage = otHours * otRatePerHour;
     }
 
-    // 4. Calculate Allowances
+    // 5. Calculate Allowances safely
     let totalAllowances = 0;
     if (record.status === 'PRESENT' || record.status === 'HALF_DAY') {
-      totalAllowances += config.allowances.travel || 0;
-      totalAllowances += config.allowances.food || 0;
+      totalAllowances += config.allowances?.travel || 0;
+      totalAllowances += config.allowances?.food || 0;
       
-      if (record.outTime) {
-        const outHour = new Date(record.outTime.timestamp).getHours();
-        if (outHour >= 22 || outHour < 5) {
-          totalAllowances += config.allowances.nightShift || 0;
+      // Check if night shift applies using the new timeline array
+      if (record.timeline && record.timeline.length > 0) {
+        const lastPunch = record.timeline[record.timeline.length - 1];
+        if (lastPunch.type === 'OUT') {
+           const outHour = new Date(lastPunch.timestamp).getHours();
+           if (outHour >= 22 || outHour < 5) {
+             totalAllowances += config.allowances?.nightShift || 0;
+           }
         }
       }
     }
@@ -65,14 +71,16 @@ export const wageService = {
       },
       meta: {
         rateUsed: parseFloat(dailyRate.toFixed(2)),
-        hoursWorked: hours.netWorkingHours || 0,
+        hoursWorked: netHours,
         overtimeHours: otHours,
         isOvertimeLimitExceeded: otHours > 4
       }
     };
   },
 
-  // FIXED: Explicitly accepts 4 arguments
+  /**
+   * Generate exact monthly payroll data
+   */
   generateMonthlyPayroll: (
     worker: Worker, 
     month: string, 
@@ -80,7 +88,7 @@ export const wageService = {
     advances: Advance[]
   ): MonthlyPayroll => {
     
-    // Filter records for this month
+    // Filter records for this exact month
     const monthWages = dailyWages.filter(w => w.date.startsWith(month));
     
     let presentDays = 0;
@@ -117,6 +125,11 @@ export const wageService = {
 
     const totalDeductions = advanceTotal;
 
+    // Dynamically calculate exact days for the selected month
+    const [yearStr, monthStr] = month.split('-');
+    const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
+    const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
+
     return {
       id: `payroll_${worker.id}_${month}`,
       tenantId: worker.tenantId,
@@ -126,9 +139,9 @@ export const wageService = {
       workerDepartment: worker.department,
       month,
       attendanceSummary: {
-        totalDays: worker.wageConfig.workingDaysPerMonth || 26,
+        totalDays: totalWorkingDays,
         presentDays,
-        absentDays: (worker.wageConfig.workingDaysPerMonth || 26) - presentDays,
+        absentDays: Math.max(0, totalWorkingDays - presentDays), // Ensures it never drops below 0
         halfDays,
         totalRegularHours: parseFloat(totalRegularHours.toFixed(1)),
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))
