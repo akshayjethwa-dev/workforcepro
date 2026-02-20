@@ -1,5 +1,3 @@
-// src/screens/AddWorkerScreen.tsx
-
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, 
@@ -9,6 +7,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { Worker, ShiftConfig } from '../types/index';
+// NEW: Firebase Storage Imports
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { storage } from '../lib/firebase';
 
 interface Props {
   onBack: () => void;
@@ -35,7 +36,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   const { profile } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); // NEW: State for shifts
+  const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); 
   const isEditing = !!initialData;
   
   // Camera State
@@ -45,12 +46,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   const [cameraError, setCameraError] = useState<string>('');
 
   const [formData, setFormData] = useState<Partial<Worker>>({
-    name: '', phone: '', aadhar: '', dob: '', gender: 'Male',
+    name: '', phone: '', aadhar: '', dob: '', gender: '' as any, // Default to empty to force selection
     category: 'Daily Wage', department: 'Production', designation: '', 
     joinedDate: new Date().toISOString().split('T')[0],
-    shiftId: 'default', // Aligned with DB default ID
+    shiftId: 'default',
     wageConfig: {
-      type: 'DAILY', amount: 0, overtimeEligible: true,
+      type: 'DAILY', amount: 0, overtimeEligible: false, // Default to false
       allowances: { travel: 0, food: 0, nightShift: 0 }
     },
     status: 'ACTIVE'
@@ -62,7 +63,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       dbService.getOrgSettings(profile.tenantId).then(settings => {
         setAvailableShifts(settings.shifts);
         
-        // If creating a new worker, default to the first available shift
         if (!isEditing && settings.shifts.length > 0) {
           setFormData(prev => ({ ...prev, shiftId: settings.shifts[0].id }));
         }
@@ -125,13 +125,23 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       setCapturedImages([]); 
   };
 
+  // --- STRICT VALIDATION RULES ---
   const validateStep = (step: number): boolean => {
     if (step === 0) {
-      if (!formData.name?.trim()) { alert("Name is required"); return false; }
-      if (!formData.phone?.trim() || formData.phone.length < 10) { alert("Valid Phone is required"); return false; }
+      if (!formData.name?.trim()) { alert("Full Name is required."); return false; }
+      if (!formData.phone?.trim() || !/^\d{10}$/.test(formData.phone)) { alert("Mobile Number must be exactly 10 digits."); return false; }
+      if (!formData.gender) { alert("Gender is required."); return false; }
+      if (!formData.dob) { alert("Date of Birth is required."); return false; }
+      if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) { alert("Aadhar Number must be exactly 12 digits."); return false; }
+    }
+    if (step === 1) {
+      if (!formData.designation?.trim()) { alert("Designation is required."); return false; }
     }
     if (step === 2) {
-      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { alert("Wage Amount is required"); return false; }
+      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { alert("Wage Amount is required."); return false; }
+      if (formData.wageConfig?.overtimeEligible && (!formData.wageConfig.overtimeRatePerHour || formData.wageConfig.overtimeRatePerHour <= 0)) {
+         alert("Overtime Rate per hour is required because Overtime is enabled."); return false; 
+      }
     }
     return true;
   };
@@ -140,32 +150,57 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     if (validateStep(currentStep)) setCurrentStep(prev => prev + 1);
   };
 
+  // --- UPDATED SAVE LOGIC WITH FIREBASE STORAGE & VALIDATION ---
   const handleSave = async () => {
+    // Check if 5 images are captured
+    if (capturedImages[0] !== "EXISTING_DATA" && capturedImages.length < 5) {
+      alert("All 5 face scans are required to complete registration.");
+      return;
+    }
+
     if (!profile?.tenantId) return alert("System Error: Tenant ID missing");
     setSaving(true);
+    
     try {
       let descriptor = initialData?.faceDescriptor || [];
-      let mainPhoto = initialData?.photoUrl || undefined;
+      let mainPhotoUrl = initialData?.photoUrl || undefined;
 
       if (capturedImages.length > 0 && capturedImages[0] !== "EXISTING_DATA") {
-          mainPhoto = capturedImages[0];
+          const base64Image = capturedImages[0];
+          
           try {
+            // 1. Process Face Descriptor
             const img = document.createElement('img');
-            img.src = mainPhoto;
+            img.src = base64Image;
             await new Promise((resolve) => { img.onload = resolve; });
+            
             const rawDescriptor = await faceService.getFaceDescriptor(img);
             if (rawDescriptor) {
               descriptor = rawDescriptor;
             } else if (!confirm("Warning: Face not clearly detected. Continue?")) {
-              setSaving(false); return;
+              setSaving(false); 
+              return;
             }
-          } catch (err) { console.error("Face processing error", err); }
+
+            // 2. Upload Image to Firebase Storage
+            const imageRef = ref(storage, `workers/${profile.tenantId}/${Date.now()}_profile.jpg`);
+            await uploadString(imageRef, base64Image, 'data_url');
+            
+            // 3. Get the public download URL
+            mainPhotoUrl = await getDownloadURL(imageRef);
+
+          } catch (err) { 
+            console.error("Image processing or upload error", err);
+            alert("Failed to process face or upload image to storage.");
+            setSaving(false);
+            return;
+          }
       }
 
       const workerData: any = {
         ...formData,
         tenantId: profile.tenantId,
-        photoUrl: mainPhoto, 
+        photoUrl: mainPhotoUrl, // ✅ Safe URL instead of 1MB base64 string
         faceDescriptor: descriptor, 
         status: 'ACTIVE'
       };
@@ -174,6 +209,16 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           await dbService.updateWorker(initialData.id, workerData);
       } else {
           await dbService.addWorker(workerData);
+          
+          // Trigger Notification
+          await dbService.addNotification({
+              tenantId: profile.tenantId,
+              title: 'New Worker Registered',
+              message: `${formData.name} was successfully added to the system.`,
+              type: 'INFO',
+              createdAt: new Date().toISOString(),
+              read: false
+          });
       }
       onSuccess();
     } catch (e: any) {
@@ -232,18 +277,21 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Mobile Number *</label>
                 <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                  type="tel" maxLength={10} value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} placeholder="10-digit number" />
+                  type="tel" maxLength={10} value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value.replace(/\D/g, '')})} placeholder="10-digit number" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                  <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase">Gender</label>
+                    <label className="text-xs font-bold text-gray-500 uppercase">Gender *</label>
                     <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
                        value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value as any})}>
-                       <option>Male</option><option>Female</option><option>Other</option>
+                       <option value="">Select Gender</option>
+                       <option value="Male">Male</option>
+                       <option value="Female">Female</option>
+                       <option value="Other">Other</option>
                     </select>
                  </div>
                  <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase">DOB</label>
+                    <label className="text-xs font-bold text-gray-500 uppercase">DOB *</label>
                     <input type="date" className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
                        value={formData.dob} onChange={e => setFormData({...formData, dob: e.target.value})} />
                  </div>
@@ -251,7 +299,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Aadhar Number (Optional)</label>
                 <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                  maxLength={12} value={formData.aadhar} onChange={e => setFormData({...formData, aadhar: e.target.value})} placeholder="12-digit UID" />
+                  maxLength={12} value={formData.aadhar} onChange={e => setFormData({...formData, aadhar: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UID" />
               </div>
             </div>
           </div>
@@ -263,28 +311,27 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             <h2 className="text-lg font-bold text-gray-800 mb-2">Employment Details</h2>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Worker Category</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Worker Category *</label>
                 <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
                   value={formData.category} onChange={e => setFormData({...formData, category: e.target.value as any})}>
                   <option>Daily Wage</option><option>Monthly</option><option>Contract</option><option>Permanent</option>
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Department</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Department *</label>
                 <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
                   value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})}>
                   <option>Production</option><option>Packaging</option><option>Maintenance</option><option>Loading</option><option>Quality</option>
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Designation</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Designation *</label>
                 <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none"
                   value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} placeholder="e.g. Helper, Operator" />
               </div>
               
-              {/* UPDATED: Dynamic Shift Timing Dropdown */}
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Shift Timing</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Shift Timing *</label>
                 <select 
                   className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
                   value={formData.shiftId} 
@@ -342,7 +389,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               </div>
             </div>
 
-            {/* --- NEW: OVERTIME CONFIGURATION --- */}
             <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
                 <div className="flex items-center justify-between mb-3">
                     <div>
@@ -362,7 +408,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
                 {formData.wageConfig?.overtimeEligible && (
                     <div className="animate-in fade-in slide-in-from-top-2">
-                        <label className="text-[10px] font-bold text-blue-800 uppercase">OT Pay Rate (Per Hour)</label>
+                        <label className="text-[10px] font-bold text-blue-800 uppercase">OT Pay Rate (Per Hour) *</label>
                         <div className="relative mt-1">
                             <IndianRupee className="absolute left-3 top-2.5 text-blue-500" size={16}/>
                             <input 
@@ -401,7 +447,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {/* STEP 4: FACE SCAN */}
         {currentStep === 3 && (
           <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <h2 className="text-lg font-bold text-gray-800 mb-4">Face Registration</h2>
+             <h2 className="text-lg font-bold text-gray-800 mb-4">Face Registration *</h2>
              {capturedImages[0] === "EXISTING_DATA" ? (
                 <div className="text-center py-10 w-full">
                     <div className="w-24 h-24 bg-gray-200 rounded-full mx-auto mb-4 overflow-hidden border-4 border-white shadow-lg">

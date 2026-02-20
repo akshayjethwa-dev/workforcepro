@@ -196,5 +196,15 @@ export interface Advance {
   status: 'APPROVED' | 'PENDING' | 'REPAID';
 }
 
+export interface AppNotification {
+  id: string;
+  tenantId: string;
+  title: string;
+  message: string;
+  type: 'INFO' | 'WARNING' | 'ALERT';
+  createdAt: string;
+  read: boolean;
+}
+
 // --- NAVIGATION ---
 export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' ;

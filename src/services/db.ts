@@ -2,11 +2,12 @@ import {
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings } from "../types/index";
+import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification } from "../types/index";
 import { syncService } from './syncService';
 
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
+const getNotificationsRef = () => collection(db, "notifications");
 
 export const dbService = {
   
@@ -72,6 +73,25 @@ export const dbService = {
 
   deleteWorker: async (workerId: string) => {
     await deleteDoc(doc(db, "workers", workerId));
+  },
+
+  // --- NEW: NOTIFICATIONS ---
+  addNotification: async (notification: Omit<AppNotification, 'id'>) => {
+    await addDoc(getNotificationsRef(), notification);
+  },
+
+  getNotifications: async (tenantId: string): Promise<AppNotification[]> => {
+    if (!tenantId) return [];
+    const q = query(getNotificationsRef(), where("tenantId", "==", tenantId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() } as AppNotification))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
+  markNotificationRead: async (notificationId: string) => {
+    const docRef = doc(db, "notifications", notificationId);
+    await updateDoc(docRef, { read: true });
   },
 
   // --- ATTENDANCE ---

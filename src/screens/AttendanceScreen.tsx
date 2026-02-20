@@ -122,9 +122,29 @@ export const AttendanceScreen: React.FC = () => {
         await dbService.markAttendance(finalRecord);
         setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
 
-        // Alert user if out of bounds
+        // ** NEW: TRIGGER NOTIFICATIONS **
         if (isOutOfGeofence) {
+            await dbService.addNotification({
+                tenantId: profile.tenantId,
+                title: 'Geofence Violation Alert',
+                message: `${worker.name} punched ${type} outside the allowed factory radius.`,
+                type: 'WARNING',
+                createdAt: new Date().toISOString(),
+                read: false
+            });
             alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
+        }
+
+        // Check Late Notification
+        if (finalRecord.lateStatus.isLate && !existingRecord?.lateStatus?.isLate) {
+             await dbService.addNotification({
+                tenantId: profile.tenantId,
+                title: 'Late Arrival',
+                message: `${worker.name} checked in late today.`,
+                type: 'INFO',
+                createdAt: new Date().toISOString(),
+                read: false
+            });
         }
 
     } catch (e) {

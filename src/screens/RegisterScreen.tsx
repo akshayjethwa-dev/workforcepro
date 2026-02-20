@@ -4,7 +4,7 @@ import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
-import { Factory, Mail, Lock, User, Loader2, ArrowRight } from 'lucide-react';
+import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight } from 'lucide-react';
 
 interface Props {
   onNavigateToLogin: () => void;
@@ -14,39 +14,50 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   const [formData, setFormData] = useState({
     companyName: '',
     name: '',
+    phone: '',
     email: '',
     password: ''
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Password Rules: Minimum 8 characters, at least 1 uppercase, 1 lowercase, 1 number, and 1 special character
+  const validatePassword = (password: string) => {
+    const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+    return regex.test(password);
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
 
-    try {
-      // 1. Check for Pending Invite
-      const invite = await dbService.checkInvite(formData.email.toLowerCase());
+    // --- FORM VALIDATIONS ---
+    if (!formData.companyName.trim()) return setError("Company Name is required.");
+    if (!formData.name.trim()) return setError("Your Name is required.");
+    if (!formData.phone.trim() || !/^\d{10}$/.test(formData.phone)) return setError("Valid 10-digit Phone Number is required.");
+    if (!formData.email.trim()) return setError("Email Address is required.");
+    if (!validatePassword(formData.password)) {
+      return setError("Password must be at least 8 characters long, contain one uppercase letter, one lowercase letter, one number, and one special character.");
+    }
 
-      // 2. Create Auth User
+    setLoading(true);
+
+    try {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
+
+      const invite = await dbService.checkInvite(formData.email.toLowerCase());
 
       let finalTenantId = '';
       let finalRole = 'FACTORY_OWNER';
       let finalCompanyName = formData.companyName;
 
       if (invite) {
-        // --- JOINING EXISTING FACTORY ---
         finalTenantId = invite.tenantId;
-        finalRole = invite.role; // 'SUPERVISOR'
-        finalCompanyName = "Joined via Invite"; // Placeholder
-        
-        // Remove invite after use
+        finalRole = invite.role; 
+        finalCompanyName = "Joined via Invite"; 
         await dbService.deleteInvite(formData.email.toLowerCase());
       } else {
-        // --- CREATING NEW FACTORY ---
         const tenantRef = await addDoc(collection(db, 'tenants'), {
             name: formData.companyName,
             ownerId: user.uid,
@@ -56,20 +67,18 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         finalTenantId = tenantRef.id;
       }
 
-      // 3. Create User Profile
       await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         email: formData.email,
         name: formData.name,
+        phone: formData.phone, // Saved phone to DB
         role: finalRole,       
         tenantId: finalTenantId, 
         companyName: finalCompanyName
       });
 
-      // 4. Update Auth Display Name
       await updateProfile(user, { displayName: formData.name });
 
-      // AuthContext will automatically detect the login and redirect
     } catch (err: any) {
       console.error(err);
       setError(err.message.replace('Firebase: ', ''));
@@ -87,33 +96,30 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-6 text-center">
+          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-xs mb-6 text-center font-medium">
             {error}
           </div>
         )}
 
         <form onSubmit={handleRegister} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Company Name</label>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Company Name *</label>
             <div className="relative">
               <Factory className="absolute left-3 top-3 text-gray-400" size={18} />
               <input 
-                required
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="Ex: Jethwa Industries"
                 value={formData.companyName}
                 onChange={e => setFormData({...formData, companyName: e.target.value})}
               />
             </div>
-            <p className="text-[10px] text-gray-400 mt-1">If you were invited, this name will be ignored.</p>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Your Name</label>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Your Name *</label>
             <div className="relative">
               <User className="absolute left-3 top-3 text-gray-400" size={18} />
               <input 
-                required
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="Full Name"
                 value={formData.name}
@@ -123,11 +129,25 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Email Address</label>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Phone Number *</label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-3 text-gray-400" size={18} />
+              <input 
+                type="tel"
+                maxLength={10}
+                className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="10-digit mobile number"
+                value={formData.phone}
+                onChange={e => setFormData({...formData, phone: e.target.value.replace(/\D/g, '')})}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Email Address *</label>
             <div className="relative">
               <Mail className="absolute left-3 top-3 text-gray-400" size={18} />
               <input 
-                required
                 type="email"
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="admin@company.com"
@@ -138,19 +158,18 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Password</label>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Password *</label>
             <div className="relative">
               <Lock className="absolute left-3 top-3 text-gray-400" size={18} />
               <input 
-                required
                 type="password"
                 className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="••••••••"
-                minLength={6}
                 value={formData.password}
                 onChange={e => setFormData({...formData, password: e.target.value})}
               />
             </div>
+            <p className="text-[10px] text-gray-400 mt-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char.</p>
           </div>
 
           <button 
