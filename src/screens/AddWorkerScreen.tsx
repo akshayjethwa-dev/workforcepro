@@ -1,14 +1,19 @@
+// src/screens/AddWorkerScreen.tsx
+
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, Camera, CheckCircle, Loader2, Clock, Calendar } from 'lucide-react';
+import { 
+  ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, 
+  Camera, CheckCircle, Loader2, Clock, Calendar 
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
-import { Worker } from '../types/index';
+import { Worker, ShiftConfig } from '../types/index';
 
 interface Props {
   onBack: () => void;
   onSuccess: () => void;
-  initialData?: Worker; // Added for Edit Mode
+  initialData?: Worker; 
 }
 
 const STEPS = [
@@ -30,6 +35,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   const { profile } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); // NEW: State for shifts
   const isEditing = !!initialData;
   
   // Camera State
@@ -42,7 +48,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     name: '', phone: '', aadhar: '', dob: '', gender: 'Male',
     category: 'Daily Wage', department: 'Production', designation: '', 
     joinedDate: new Date().toISOString().split('T')[0],
-    shiftId: 'shift_general', 
+    shiftId: 'default', // Aligned with DB default ID
     wageConfig: {
       type: 'DAILY', amount: 0, overtimeEligible: true,
       allowances: { travel: 0, food: 0, nightShift: 0 }
@@ -50,11 +56,24 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     status: 'ACTIVE'
   });
 
+  // --- FETCH SHIFTS FROM SETTINGS ---
+  useEffect(() => {
+    if (profile?.tenantId) {
+      dbService.getOrgSettings(profile.tenantId).then(settings => {
+        setAvailableShifts(settings.shifts);
+        
+        // If creating a new worker, default to the first available shift
+        if (!isEditing && settings.shifts.length > 0) {
+          setFormData(prev => ({ ...prev, shiftId: settings.shifts[0].id }));
+        }
+      });
+    }
+  }, [profile, isEditing]);
+
   // --- INIT FOR EDIT MODE ---
   useEffect(() => {
     if (initialData) {
         setFormData(initialData);
-        // If editing and face data exists, set a placeholder so we don't force re-scan
         if (initialData.faceDescriptor && initialData.faceDescriptor.length > 0) {
              setCapturedImages(["EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA"]);
         }
@@ -64,8 +83,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   // --- CAMERA LOGIC ---
   useEffect(() => {
     faceService.loadModels();
-
-    // Only start camera if on Step 3 AND we don't have existing data placeholder
     if (currentStep === 3 && capturedImages[0] !== "EXISTING_DATA") {
       startCamera();
     } else {
@@ -96,21 +113,18 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   const capturePhoto = () => {
     if (!videoRef.current) return;
-    
     const canvas = document.createElement('canvas');
     canvas.width = videoRef.current.videoWidth;
     canvas.height = videoRef.current.videoHeight;
     canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
-    
     const photoData = canvas.toDataURL('image/jpeg', 0.8);
     setCapturedImages(prev => [...prev, photoData]);
   };
 
   const resetPhotos = () => {
-      setCapturedImages([]); // Clears "EXISTING_DATA" and triggers camera start
+      setCapturedImages([]); 
   };
 
-  // --- VALIDATION & SAVE ---
   const validateStep = (step: number): boolean => {
     if (step === 0) {
       if (!formData.name?.trim()) { alert("Name is required"); return false; }
@@ -128,34 +142,24 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   const handleSave = async () => {
     if (!profile?.tenantId) return alert("System Error: Tenant ID missing");
-    
     setSaving(true);
     try {
       let descriptor = initialData?.faceDescriptor || [];
       let mainPhoto = initialData?.photoUrl || undefined;
 
-      // Only process face if NEW photos were taken (Not using existing placeholder)
       if (capturedImages.length > 0 && capturedImages[0] !== "EXISTING_DATA") {
           mainPhoto = capturedImages[0];
-          
           try {
             const img = document.createElement('img');
             img.src = mainPhoto;
             await new Promise((resolve) => { img.onload = resolve; });
-            
             const rawDescriptor = await faceService.getFaceDescriptor(img);
-            
             if (rawDescriptor) {
               descriptor = rawDescriptor;
-            } else {
-              if (!confirm("Warning: Face not clearly detected in photo. Attendance might fail. Continue?")) {
-                setSaving(false);
-                return;
-              }
+            } else if (!confirm("Warning: Face not clearly detected. Continue?")) {
+              setSaving(false); return;
             }
-          } catch (err) {
-            console.error("Face processing error", err);
-          }
+          } catch (err) { console.error("Face processing error", err); }
       }
 
       const workerData: any = {
@@ -214,14 +218,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         })}
       </div>
 
-      {/* Content Area */}
       <div className="flex-1 p-4 overflow-y-auto pb-24">
-        
         {/* STEP 1: PERSONAL */}
         {currentStep === 0 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-lg font-bold text-gray-800 mb-2">Personal Information</h2>
-            
             <div className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Full Name *</label>
@@ -260,7 +261,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {currentStep === 1 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-lg font-bold text-gray-800 mb-2">Employment Details</h2>
-            
             <div className="space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Worker Category</label>
@@ -281,12 +281,24 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none"
                   value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} placeholder="e.g. Helper, Operator" />
               </div>
+              
+              {/* UPDATED: Dynamic Shift Timing Dropdown */}
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Shift Timing</label>
-                <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
-                   value={formData.shiftId} onChange={e => setFormData({...formData, shiftId: e.target.value})}>
-                   <option value="shift_general">General Shift (09:00 - 18:00)</option>
-                   <option value="shift_night">Night Shift (20:00 - 05:00)</option>
+                <select 
+                  className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                  value={formData.shiftId} 
+                  onChange={e => setFormData({...formData, shiftId: e.target.value})}
+                >
+                  {availableShifts.length > 0 ? (
+                    availableShifts.map(shift => (
+                      <option key={shift.id} value={shift.id}>
+                        {shift.name} ({shift.startTime} - {shift.endTime})
+                      </option>
+                    ))
+                  ) : (
+                    <option value="default">General Shift (Loading...)</option>
+                  )}
                 </select>
               </div>
             </div>
@@ -297,8 +309,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {currentStep === 2 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-lg font-bold text-gray-800 mb-2">Wage Configuration</h2>
-
-            {/* Wage Type Selection Cards */}
             <div className="grid grid-cols-2 gap-4">
                <div 
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'DAILY'}}))}
@@ -309,7 +319,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <Clock size={24} />
                   <span className="font-bold text-sm">Daily Wages</span>
                </div>
-
                <div 
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'MONTHLY'}}))}
                  className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col items-center justify-center space-y-2 ${
@@ -320,7 +329,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <span className="font-bold text-sm">Monthly Salary</span>
                </div>
             </div>
-
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase">
                 {formData.wageConfig?.type === 'DAILY' ? 'Daily Rate Amount' : 'Monthly Salary Amount'} *
@@ -333,22 +341,21 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value)}})} />
               </div>
             </div>
-
             <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-2">
               <h3 className="text-sm font-bold text-gray-700 mb-3">Daily Allowances (Optional)</h3>
               <div className="grid grid-cols-2 gap-4">
-                 <div>
+                  <div>
                     <label className="text-[10px] font-bold text-gray-500 uppercase">Travel</label>
                     <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
                       value={formData.wageConfig?.allowances?.travel || ''}
                       onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, travel: parseFloat(e.target.value)}}})} />
-                 </div>
-                 <div>
+                  </div>
+                  <div>
                     <label className="text-[10px] font-bold text-gray-500 uppercase">Food</label>
                     <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
                       value={formData.wageConfig?.allowances?.food || ''}
                       onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, food: parseFloat(e.target.value)}}})} />
-                 </div>
+                  </div>
               </div>
             </div>
           </div>
@@ -358,9 +365,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {currentStep === 3 && (
           <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
              <h2 className="text-lg font-bold text-gray-800 mb-4">Face Registration</h2>
-             
              {capturedImages[0] === "EXISTING_DATA" ? (
-                // --- EXISTING DATA VIEW ---
                 <div className="text-center py-10 w-full">
                     <div className="w-24 h-24 bg-gray-200 rounded-full mx-auto mb-4 overflow-hidden border-4 border-white shadow-lg">
                         {formData.photoUrl ? (
@@ -371,11 +376,9 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </div>
                     <p className="font-bold text-gray-800 text-lg">Face Data Configured</p>
                     <p className="text-gray-500 text-sm mb-6">This worker is ready for attendance.</p>
-                    
                     <button onClick={resetPhotos} className="text-blue-600 font-bold bg-blue-50 px-4 py-2 rounded-lg hover:bg-blue-100 transition-colors">
                         Re-scan Face (Update)
                     </button>
-                    
                     <div className="mt-12">
                         <button onClick={handleSave} className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold flex items-center justify-center shadow-lg active:scale-95 transition-all">
                             {saving ? <Loader2 className="animate-spin mr-2"/> : <Save className="mr-2"/>} Update Worker
@@ -383,7 +386,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </div>
                 </div>
              ) : (
-                // --- CAMERA VIEW ---
                 <>
                    <div className="relative w-64 h-64 bg-black rounded-full overflow-hidden border-4 border-blue-100 shadow-2xl mb-6">
                       {cameraError ? (
@@ -394,13 +396,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                       <div className="absolute inset-0 border-2 border-dashed border-white/50 rounded-full scale-90 pointer-events-none"></div>
                    </div>
 
-                   {/* Instruction */}
                    {capturedImages.length < 5 ? (
                      <>
                        <div className="bg-blue-600 text-white px-6 py-2 rounded-full font-bold mb-8 animate-pulse text-center">
                           {FACE_ANGLES[capturedImages.length]}
                        </div>
-                       
                        <button onClick={capturePhoto} className="w-20 h-20 bg-white border-4 border-gray-200 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-all">
                           <div className="w-16 h-16 bg-red-500 rounded-full border-2 border-white"></div>
                        </button>
@@ -413,7 +413,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                        </div>
                        <h3 className="font-bold text-gray-800 text-lg">Scan Complete!</h3>
                        <p className="text-gray-500 text-sm mb-8">All 5 angles captured successfully.</p>
-                       
                        <button onClick={handleSave} disabled={saving} 
                           className="w-full bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-xl font-bold shadow-lg flex items-center justify-center transition-all">
                           {saving ? (
@@ -428,8 +427,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                        </button>
                      </div>
                    )}
-                   
-                   {/* Thumbnails */}
                    {capturedImages.length > 0 && capturedImages.length < 5 && (
                       <div className="flex gap-2 mt-6">
                         {capturedImages.map((img, i) => (

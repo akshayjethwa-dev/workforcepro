@@ -9,6 +9,48 @@ const getAttendanceRef = () => collection(db, "attendance");
 
 export const dbService = {
   
+  // --- SUPER ADMIN METHODS ---
+  
+  getAllTenants: async () => {
+    try {
+      const q = query(collection(db, 'users'), where('role', '==', 'FACTORY_OWNER'));
+      const snapshot = await getDocs(q);
+      
+      const tenants = await Promise.all(snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        const workersQ = query(collection(db, "workers"), where("tenantId", "==", data.tenantId));
+        const workersSnap = await getDocs(workersQ);
+        
+        return {
+          id: docSnap.id,
+          ...data,
+          workerCount: workersSnap.size,
+          // Default to true if not set
+          isActive: data.isActive !== false, 
+          joinedAt: data.createdAt || new Date().toISOString()
+        };
+      }));
+      
+      return tenants;
+    } catch (error) {
+      console.error("Error fetching tenants:", error);
+      return [];
+    }
+  },
+
+  toggleTenantStatus: async (userId: string, currentStatus: boolean) => {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, {
+      isActive: !currentStatus
+    });
+  },
+
+  makeSuperAdmin: async (userId: string) => {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, { role: 'SUPER_ADMIN' });
+    return true;
+  },
+
   // --- WORKER MANAGEMENT ---
   getWorkers: async (tenantId: string): Promise<Worker[]> => {
     if (!tenantId) return [];
@@ -64,14 +106,10 @@ export const dbService = {
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Advance));
   },
 
-  // --- SETTINGS & CONFIGURATION (NEW) ---
-  
-  // Fetch full Organization Settings (Shifts + Break Logic)
+  // --- SETTINGS ---
   getOrgSettings: async (tenantId: string): Promise<OrgSettings> => {
     const docRef = doc(db, "settings", tenantId);
     const snap = await getDoc(docRef);
-    
-    // Defaults
     const defaultShifts: ShiftConfig[] = [{
       id: 'default',
       name: 'General Shift',
@@ -87,11 +125,9 @@ export const dbService = {
       const data = snap.data();
       return {
         shifts: data.shifts || defaultShifts,
-        enableBreakTracking: data.enableBreakTracking ?? false // Default OFF (Standard Logic)
+        enableBreakTracking: data.enableBreakTracking ?? false 
       };
     }
-    
-    // If no settings exist yet
     return { shifts: defaultShifts, enableBreakTracking: false };
   },
 
@@ -99,39 +135,29 @@ export const dbService = {
     await setDoc(doc(db, "settings", tenantId), settings, { merge: true });
   },
 
-  // --- LEGACY SHIFT MANAGEMENT (Wrappers) ---
-  
   getShifts: async (tenantId: string): Promise<ShiftConfig[]> => {
     const settings = await dbService.getOrgSettings(tenantId);
     return settings.shifts;
   },
 
   saveShifts: async (tenantId: string, shifts: ShiftConfig[]) => {
-    // Merges shifts into the existing settings document
     await setDoc(doc(db, "settings", tenantId), { shifts }, { merge: true });
   },
 
-  // --- LOGIC HELPERS ---
-
-  // Count how many times this worker was late THIS MONTH
   getMonthlyLateCount: async (tenantId: string, workerId: string): Promise<number> => {
-    const startOfMonth = new Date().toISOString().slice(0, 7); // "2023-10"
-    
+    const startOfMonth = new Date().toISOString().slice(0, 7); 
     const q = query(
       collection(db, "attendance"), 
       where("tenantId", "==", tenantId),
       where("workerId", "==", workerId),
     );
-    
     const snapshot = await getDocs(q);
-    // Count records where lateStatus.isLate == true
     return snapshot.docs.filter(d => {
         const data = d.data();
         return data.date >= `${startOfMonth}-01` && data.lateStatus?.isLate === true;
     }).length;
   },
 
-  // --- TEAM MANAGEMENT ---
   getTeam: async (tenantId: string) => {
     const q = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "==", "SUPERVISOR"));
     const snapshot = await getDocs(q);
@@ -163,7 +189,6 @@ export const dbService = {
     await updateDoc(docRef, { tenantId: null, role: null });
   },
 
-  // --- TENANT MANAGEMENT ---
   updateTenant: async (tenantId: string, data: { name: string }) => {
     const tenantRef = doc(db, "tenants", tenantId);
     await updateDoc(tenantRef, data);

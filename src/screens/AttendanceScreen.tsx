@@ -1,26 +1,32 @@
+
 import React, { useState, useEffect } from 'react';
-import { User, CheckCircle, Clock, Calendar, AlertCircle } from 'lucide-react';
+import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
-import { Worker, AttendanceRecord } from '../types/index';
+import { attendanceLogic } from '../services/attendanceLogic';
+import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
+  const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Load Workers AND Today's Attendance
+  // Load Workers, Attendance, AND Settings
   useEffect(() => {
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
-          const [fetchedWorkers, fetchedAttendance] = await Promise.all([
+          const [fetchedWorkers, fetchedAttendance, fetchedSettings] = await Promise.all([
             dbService.getWorkers(profile.tenantId),
-            dbService.getTodayAttendance(profile.tenantId)
+            dbService.getTodayAttendance(profile.tenantId),
+            dbService.getOrgSettings(profile.tenantId)
           ]);
           
           setWorkers(fetchedWorkers);
+          setSettings(fetchedSettings);
 
           const map: Record<string, AttendanceRecord> = {};
           fetchedAttendance.forEach(r => {
@@ -37,59 +43,95 @@ export const AttendanceScreen: React.FC = () => {
     loadData();
   }, [profile]);
 
-  const markStatus = async (worker: Worker, status: 'PRESENT' | 'HALF_DAY' | 'ON_LEAVE') => {
+  // Handle Time-Based Punches (IN/OUT)
+  const handlePunch = async (worker: Worker, type: 'IN' | 'OUT') => {
     if (!profile?.tenantId) return;
-    
-    const now = new Date();
-    const todayDate = now.toISOString().split('T')[0];
-    const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
+    setActionLoading(worker.id);
 
-    // Check if record already exists to preserve timeline/punches
-    const existingRecord = attendanceMap[worker.id];
-    
-    let finalRecord: AttendanceRecord;
+    try {
+        const todayDate = new Date().toISOString().split('T')[0];
+        // FIXED: Changed 'constPc' to 'const'
+        const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
+        const now = new Date();
 
-    if (existingRecord) {
-        // UPDATE EXISTING: Keep timeline, just change status
-        finalRecord = {
-            ...existingRecord,
-            status: status,
-            // Update metadata to show manual override
-            inTime: {
-                ...existingRecord.inTime!,
-                markedBy: 'supervisor', // Flag that admin touched it
-            }
+        // 1. Get or Init Record
+        const existingRecord = attendanceMap[worker.id];
+        let currentTimeline = existingRecord?.timeline || [];
+        
+        // 2. Create New Punch
+        const newPunch = {
+            timestamp: now.toISOString(),
+            type: type,
+            device: 'Supervisor Manual'
         };
-    } else {
-        // CREATE NEW: Full manual entry
-        finalRecord = {
+
+        // FIXED: Changed 'constPc' to 'const'
+        const newTimeline = [...currentTimeline, newPunch];
+
+        // 3. Apply Logic (Calculate Status, Late, etc.)
+        const shift = settings.shifts.find(s => s.id === worker.shiftId) || settings.shifts[0];
+        
+        // We fetch late count only when needed to keep initial load fast
+        const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, worker.id);
+
+        const baseRecord: AttendanceRecord = existingRecord || {
             id: recordId,
             tenantId: profile.tenantId,
             workerId: worker.id,
             workerName: worker.name,
             date: todayDate,
-            shiftId: worker.shiftId,
-            timeline: [], // No punches yet
+            shiftId: worker.shiftId || 'default',
+            timeline: [],
+            status: 'ABSENT',
             lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
-            hours: { gross: 9, net: 9, overtime: 0 }, // Default standard day
-            inTime: { 
-                timestamp: now.toISOString(), 
-                geoLocation: {lat:0,lng:0}, 
-                deviceInfo:'Manual Admin', 
-                markedBy:'supervisor'
-            },
-            status: status
+            hours: { gross: 0, net: 0, overtime: 0 }
         };
-    }
 
-    // Optimistic Update
-    setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
+        // Inject new timeline
+        baseRecord.timeline = newTimeline;
 
-    try {
-      await dbService.markAttendance(finalRecord);
+        // Run the Engine
+        const finalRecord = attendanceLogic.processDailyStatus(
+            baseRecord, 
+            shift, 
+            lateCount, 
+            settings.enableBreakTracking
+        );
+
+        // 4. Save & Update UI
+        await dbService.markAttendance(finalRecord);
+        setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
+
     } catch (e) {
-      alert("Failed to save attendance");
+        console.error("Punch Error", e);
+        alert("Failed to update attendance");
+    } finally {
+        setActionLoading(null);
     }
+  };
+
+  const markOnLeave = async (worker: Worker) => {
+      if (!profile?.tenantId) return;
+      if (!window.confirm(`Mark ${worker.name} as ON LEAVE?`)) return;
+
+      const todayDate = new Date().toISOString().split('T')[0];
+      const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
+
+      const leaveRecord: AttendanceRecord = {
+          id: recordId,
+          tenantId: profile.tenantId,
+          workerId: worker.id,
+          workerName: worker.name,
+          date: todayDate,
+          shiftId: worker.shiftId,
+          timeline: [], // No work done
+          status: 'ON_LEAVE',
+          lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
+          hours: { gross: 0, net: 0, overtime: 0 }
+      };
+
+      await dbService.markAttendance(leaveRecord);
+      setAttendanceMap(prev => ({ ...prev, [worker.id]: leaveRecord }));
   };
 
   if (loading) return (
@@ -102,34 +144,39 @@ export const AttendanceScreen: React.FC = () => {
     <div className="p-4 bg-gray-50 min-h-screen pb-24">
       <div className="flex justify-between items-center mb-6">
           <div>
-            <h2 className="text-xl font-bold text-gray-800">Manual Attendance</h2>
+            <h2 className="text-xl font-bold text-gray-800">Manual Entry</h2>
             <p className="text-xs text-gray-500">{new Date().toLocaleDateString('en-IN', {weekday: 'long', day:'numeric', month:'long'})}</p>
           </div>
           <div className="text-xs font-bold bg-white px-3 py-1 rounded-full shadow-sm text-gray-600">
-             Total: {workers.length}
+             Staff: {workers.length}
           </div>
       </div>
 
       <div className="space-y-3">
         {workers.map(worker => {
             const record = attendanceMap[worker.id];
-            const isPresent = record?.status === 'PRESENT';
-            const isHalfDay = record?.status === 'HALF_DAY';
+            
+            // Determine Current State
+            const lastPunch = record?.timeline?.[record.timeline.length - 1];
+            const isInside = lastPunch?.type === 'IN';
             const isOnLeave = record?.status === 'ON_LEAVE';
             
-            // Safely calculate display time
-            let displayTime = '--:--';
-            let displaySource = '';
+            // Dynamic Status Label
+            let statusLabel = 'ABSENT';
+            let statusColor = 'bg-gray-100 text-gray-500';
 
-            if (record) {
-                if (record.timeline && record.timeline.length > 0) {
-                    const lastPunch = record.timeline[record.timeline.length - 1];
-                    displayTime = new Date(lastPunch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-                    displaySource = lastPunch.device === 'Kiosk' ? 'Worker (Kiosk)' : 'Supervisor';
-                } else if (record.inTime) {
-                    displayTime = new Date(record.inTime.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-                    displaySource = record.inTime.markedBy === 'self' ? 'Worker (Kiosk)' : 'Supervisor';
-                }
+            if (isOnLeave) {
+                statusLabel = 'ON LEAVE';
+                statusColor = 'bg-blue-100 text-blue-700';
+            } else if (isInside) {
+                statusLabel = 'IN PROGRESS';
+                statusColor = 'bg-blue-50 text-blue-600 animate-pulse';
+            } else if (record?.status === 'PRESENT') {
+                statusLabel = 'PRESENT';
+                statusColor = 'bg-green-100 text-green-700';
+            } else if (record?.status === 'HALF_DAY') {
+                statusLabel = 'HALF DAY';
+                statusColor = 'bg-orange-100 text-orange-700';
             }
 
             return (
@@ -137,7 +184,7 @@ export const AttendanceScreen: React.FC = () => {
                     {/* Worker Header */}
                     <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center space-x-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${isPresent ? 'bg-green-500' : isHalfDay ? 'bg-orange-500' : isOnLeave ? 'bg-blue-400' : 'bg-gray-300'}`}>
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${isInside ? 'bg-green-500' : 'bg-gray-300'}`}>
                                 {worker.name.charAt(0)}
                             </div>
                             <div>
@@ -146,63 +193,53 @@ export const AttendanceScreen: React.FC = () => {
                             </div>
                         </div>
                         
-                        {/* Status Badge */}
-                        {record && (
-                            <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center ${
-                                isPresent ? 'bg-green-100 text-green-700' : 
-                                isHalfDay ? 'bg-orange-100 text-orange-700' : 
-                                'bg-blue-100 text-blue-700'
-                            }`}>
-                                {isPresent && <CheckCircle size={12} className="mr-1"/>}
-                                {isHalfDay && <Clock size={12} className="mr-1"/>}
-                                {isOnLeave && <Calendar size={12} className="mr-1"/>}
-                                {record.status.replace('_', ' ')}
-                            </div>
-                        )}
+                        <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${statusColor}`}>
+                            {statusLabel}
+                        </div>
                     </div>
 
-                    {/* Info Bar (If Record Exists) */}
-                    {record && (
+                    {/* Timeline Info */}
+                    {record && !isOnLeave && (
                         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg text-xs text-gray-500 mb-3">
-                           <span>Marked By: <span className="font-medium text-gray-700">{displaySource}</span></span>
-                           <span>Last Active: <span className="font-medium text-gray-700">{displayTime}</span></span>
+                           <span>Hours: <span className="font-bold text-gray-800">{record.hours.net.toFixed(1)}</span></span>
+                           {lastPunch && (
+                               <span>Last: {new Date(lastPunch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ({lastPunch.type})</span>
+                           )}
                         </div>
                     )}
 
-                    {/* Action Buttons (ALWAYS VISIBLE - Allows Manual Override) */}
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* ACTION BUTTONS */}
+                    <div className="grid grid-cols-5 gap-2">
                         <button 
-                            onClick={() => markStatus(worker, 'PRESENT')}
-                            disabled={isPresent}
-                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
-                                isPresent 
-                                ? 'bg-green-600 text-white border-green-600 opacity-50 cursor-not-allowed' 
-                                : 'bg-white text-green-700 border-green-200 hover:bg-green-50'
+                            onClick={() => handlePunch(worker, 'IN')}
+                            disabled={isInside || isOnLeave || actionLoading === worker.id}
+                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
+                                isInside 
+                                ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
+                                : 'bg-green-600 text-white border-green-600 hover:bg-green-700 shadow-sm'
                             }`}
                         >
-                            Present
+                            {actionLoading === worker.id ? <Loader2 className="animate-spin" size={14}/> : <><LogIn size={14} className="mr-1.5"/> Check In</>}
                         </button>
+
                         <button 
-                            onClick={() => markStatus(worker, 'HALF_DAY')}
-                            disabled={isHalfDay}
-                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
-                                isHalfDay 
-                                ? 'bg-orange-500 text-white border-orange-500 opacity-50 cursor-not-allowed' 
-                                : 'bg-white text-orange-700 border-orange-200 hover:bg-orange-50'
+                            onClick={() => handlePunch(worker, 'OUT')}
+                            disabled={!isInside || isOnLeave || actionLoading === worker.id}
+                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
+                                !isInside
+                                ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
+                                : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
                             }`}
                         >
-                            Half Day
+                             <LogOut size={14} className="mr-1.5"/> Check Out
                         </button>
+                        
                         <button 
-                            onClick={() => markStatus(worker, 'ON_LEAVE')}
-                            disabled={isOnLeave}
-                            className={`flex items-center justify-center py-2 rounded-lg text-xs font-bold border transition-all ${
-                                isOnLeave 
-                                ? 'bg-blue-500 text-white border-blue-500 opacity-50 cursor-not-allowed' 
-                                : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'
-                            }`}
+                            onClick={() => markOnLeave(worker)}
+                            className="col-span-1 flex items-center justify-center py-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 border border-transparent"
+                            title="Mark On Leave"
                         >
-                            On Leave
+                            <Calendar size={16} />
                         </button>
                     </div>
                 </div>
@@ -212,7 +249,7 @@ export const AttendanceScreen: React.FC = () => {
         {workers.length === 0 && !loading && (
             <div className="text-center py-10 text-gray-400">
                 <AlertCircle className="mx-auto mb-2" />
-                <p>No workers found to mark attendance.</p>
+                <p>No workers found.</p>
             </div>
         )}
       </div>

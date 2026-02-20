@@ -14,6 +14,8 @@ import { DailyWageScreen } from './screens/DailyWageScreen';
 import { TeamScreen } from './screens/TeamScreen'; // Ensure imported
 import { ScreenName, Worker } from './types/index';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
+import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
 
 export const RootNavigator: React.FC = () => {
   const { user, loading } = useAuth();
@@ -78,6 +80,8 @@ export const RootNavigator: React.FC = () => {
       case 'DAILY_LOGS': return <DailyWageScreen />;
       case 'TEAM': return <TeamScreen />;
       case 'SETTINGS': return <SettingsScreen />;
+      case 'WORKER_HISTORY': return <WorkerHistoryScreen />;
+      case 'SUPER_ADMIN_DASHBOARD': return <SuperAdminDashboard />;
       default: return <DashboardScreen onOpenKiosk={() => setCurrentScreen('ATTENDANCE_KIOSK')} />;
     }
   };
