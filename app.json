@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "398af4ba-4c88-4430-a3f9-0194721f6aea"
+      }
+    },
+    "android": {
+      "package": "com.akshay2888.workforcepro"
+    }
+  }
+}
