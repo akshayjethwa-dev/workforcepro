@@ -10,7 +10,8 @@ interface Props {
 }
 
 export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) => {
-  const { profile } = useAuth();
+  // PULL LIMITS FROM AUTH CONTEXT
+  const { profile, limits } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
@@ -43,6 +44,15 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     }
   };
 
+  // --- NEW: CHECK LIMIT BEFORE ADDING ---
+  const handleAddWorkerClick = () => {
+    if (limits && workers.length >= limits.maxWorkers) {
+        alert(`Your current plan limits you to ${limits.maxWorkers} workers. Please upgrade your plan to add more.`);
+        return;
+    }
+    onAddWorker();
+  };
+
   const filteredWorkers = workers.filter(w => 
     w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     w.phone.includes(searchTerm)
@@ -62,7 +72,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
           />
         </div>
         <button 
-          onClick={onAddWorker}
+          onClick={handleAddWorkerClick}
           className="bg-blue-600 text-white p-2.5 rounded-lg shadow-md hover:bg-blue-700 transition-colors"
         >
           <Plus size={24} />

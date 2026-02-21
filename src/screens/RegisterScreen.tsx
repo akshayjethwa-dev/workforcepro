@@ -1,4 +1,3 @@
-// src/screens/RegisterScreen.tsx
 import React, { useState } from 'react';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
@@ -58,11 +57,16 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         finalCompanyName = "Joined via Invite"; 
         await dbService.deleteInvite(formData.email.toLowerCase());
       } else {
+        // --- NEW SAAS TRIAL LOGIC ---
+        const trialEndDate = new Date();
+        trialEndDate.setDate(trialEndDate.getDate() + 30); // Add 30 days trial
+
         const tenantRef = await addDoc(collection(db, 'tenants'), {
             name: formData.companyName,
             ownerId: user.uid,
             createdAt: new Date().toISOString(),
-            subscription: 'FREE_TIER'
+            plan: 'TRIAL', // Sets the default tier
+            trialEndsAt: trialEndDate.toISOString() // Sets expiration
         });
         finalTenantId = tenantRef.id;
       }
@@ -92,7 +96,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
       <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-gray-900">Setup Your Account</h1>
-          <p className="text-gray-500 text-sm mt-1">Start managing your workforce today</p>
+          <p className="text-gray-500 text-sm mt-1">Start your 30-day free trial today</p>
         </div>
 
         {error && (

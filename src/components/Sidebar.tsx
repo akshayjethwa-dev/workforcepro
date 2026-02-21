@@ -1,6 +1,6 @@
 import React from 'react';
 import { 
-  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText 
+  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard 
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ScreenName } from '../types/index';
@@ -71,6 +71,7 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                    <MenuItem icon={Building2} label="Organization Profile" screen="SETTINGS" />
                    <MenuItem icon={Clock} label="Shift & Rules" screen="SETTINGS" />
                    <MenuItem icon={Users} label="Manage Managers" screen="TEAM" />
+                   <MenuItem icon={CreditCard} label="Subscription & Billing" screen="BILLING" />
                  </>
                )}
                

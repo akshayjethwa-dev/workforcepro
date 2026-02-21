@@ -1,24 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Save, Plus, Trash2, Clock, AlertCircle, CheckCircle, 
-  Calendar, Coffee, Info, MapPin, Building, User 
+  Calendar, Coffee, Info, MapPin, Building, User, Lock
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { OrgSettings, ShiftConfig } from '../types/index';
 
-// --- NEW IMPORTS FOR PROFILE SAVING ---
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 export const SettingsScreen: React.FC = () => {
-  const { profile } = useAuth();
+  // PULL LIMITS FROM AUTH CONTEXT
+  const { profile, limits } = useAuth();
   
-  // Track current settings vs initial settings for DB
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [initialSettings, setInitialSettings] = useState<OrgSettings | null>(null);
 
-  // --- NEW: Track Organization Profile state ---
   const [orgProfile, setOrgProfile] = useState({ companyName: '', ownerName: '' });
   const [initialOrgProfile, setInitialOrgProfile] = useState({ companyName: '', ownerName: '' });
   
@@ -28,7 +26,6 @@ export const SettingsScreen: React.FC = () => {
 
   useEffect(() => {
     if (profile) {
-      // Load Profile Data
       const currentOrg = { 
         companyName: profile.companyName || '', 
         ownerName: profile.name || '' 
@@ -36,7 +33,6 @@ export const SettingsScreen: React.FC = () => {
       setOrgProfile(currentOrg);
       setInitialOrgProfile(currentOrg);
 
-      // Load Settings Data
       if (profile.tenantId) {
         dbService.getOrgSettings(profile.tenantId).then((data) => {
            setSettings(data);
@@ -48,13 +44,19 @@ export const SettingsScreen: React.FC = () => {
     }
   }, [profile]);
 
-  // Check if either the settings OR the profile has changed
   const hasChanges = 
     JSON.stringify(settings) !== JSON.stringify(initialSettings) ||
     JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile);
 
   const addShift = () => {
     if (!settings) return;
+    
+    // --- NEW: CHECK SHIFT LIMIT ---
+    if (limits && settings.shifts.length >= limits.maxShifts) {
+        alert(`Your current plan only allows ${limits.maxShifts} shift(s). Please upgrade to add more.`);
+        return;
+    }
+
     const newShift: ShiftConfig = {
       id: `shift_${Date.now()}`,
       name: 'New Shift',
@@ -88,16 +90,13 @@ export const SettingsScreen: React.FC = () => {
     if (!profile) return;
     setSaving(true);
     try {
-      // 1. Save Settings (if tenantId exists)
       if (profile.tenantId && settings) {
         await dbService.saveOrgSettings(profile.tenantId, settings);
         setInitialSettings(settings); 
       }
 
-      // 2. Save Organization Profile (Updates the user document)
       if (JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile)) {
-        // Fallback to uid if id is not explicitly mapped in your profile type
-        const userId = profile.id || profile.uid; 
+        const userId = profile.uid || profile.id; 
         if (userId) {
             await updateDoc(doc(db, "users", userId), {
                 companyName: orgProfile.companyName,
@@ -182,7 +181,7 @@ export const SettingsScreen: React.FC = () => {
         </div>
       )}
 
-      {/* --- NEW: ORGANIZATION PROFILE SECTION --- */}
+      {/* --- ORGANIZATION PROFILE SECTION --- */}
       <div className="px-1 mb-3">
           <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Organization Profile</h3>
       </div>
@@ -268,7 +267,6 @@ export const SettingsScreen: React.FC = () => {
                   </div>
                 </div>
 
-                {/* --- NEW: OT MINIMUM THRESHOLD --- */}
                 <div className="col-span-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
                   <label className="text-[10px] font-black text-blue-800 uppercase mb-1.5 block tracking-tighter">Min. Extra Mins to Trigger OT</label>
                   <div className="relative">
@@ -339,49 +337,65 @@ export const SettingsScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* --- GEOFENCING SETTINGS SECTION --- */}
+      {/* --- GEOFENCING SETTINGS SECTION (LOCKED BASED ON TIER) --- */}
       <div className="px-1 mb-3">
           <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Geofencing</h3>
       </div>
-      <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6">
-          <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-3">
-                  <div className="p-2 bg-green-50 rounded-xl">
-                      <MapPin className="text-green-500" size={20} />
+      
+      {limits?.geofencingEnabled !== false ? (
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6">
+              <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-green-50 rounded-xl">
+                          <MapPin className="text-green-500" size={20} />
+                      </div>
+                      <div>
+                          <p className="text-sm font-black text-slate-800 uppercase tracking-tight">Factory Location</p>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase">Used for mobile punch validation</p>
+                      </div>
                   </div>
-                  <div>
-                      <p className="text-sm font-black text-slate-800 uppercase tracking-tight">Factory Location</p>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">Used for mobile punch validation</p>
-                  </div>
+                  <button 
+                      onClick={handleSetLocation}
+                      className="text-xs font-bold bg-green-100 text-green-700 px-4 py-2 rounded-xl hover:bg-green-200 transition-colors"
+                  >
+                      {settings?.baseLocation ? "Update Location" : "Set Location"}
+                  </button>
               </div>
-              <button 
-                  onClick={handleSetLocation}
-                  className="text-xs font-bold bg-green-100 text-green-700 px-4 py-2 rounded-xl hover:bg-green-200 transition-colors"
-              >
-                  {settings?.baseLocation ? "Update Location" : "Set Location"}
-              </button>
+              
+              {settings?.baseLocation ? (
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col space-y-2">
+                      <div className="flex items-start text-sm text-slate-700">
+                         <MapPin size={16} className="text-green-500 mr-2 mt-0.5 shrink-0"/>
+                         <span className="font-medium leading-tight">{settings.baseLocation.address || "Address not found"}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono ml-6">
+                          Lat: {settings.baseLocation.lat.toFixed(6)}, Lng: {settings.baseLocation.lng.toFixed(6)}
+                      </div>
+                      <div className="text-xs font-bold text-indigo-600 ml-6 mt-1 bg-indigo-50 inline-block px-2 py-1 rounded w-max">
+                          Enforcement Radius: {settings.baseLocation.radius} meters
+                      </div>
+                  </div>
+              ) : (
+                  <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-center">
+                      <AlertCircle size={14} className="mr-2 shrink-0" />
+                      No base location set. All mobile punches will be marked valid.
+                  </p>
+              )}
           </div>
-          
-          {settings?.baseLocation ? (
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col space-y-2">
-                  <div className="flex items-start text-sm text-slate-700">
-                     <MapPin size={16} className="text-green-500 mr-2 mt-0.5 shrink-0"/>
-                     <span className="font-medium leading-tight">{settings.baseLocation.address || "Address not found"}</span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-mono ml-6">
-                      Lat: {settings.baseLocation.lat.toFixed(6)}, Lng: {settings.baseLocation.lng.toFixed(6)}
-                  </div>
-                  <div className="text-xs font-bold text-indigo-600 ml-6 mt-1 bg-indigo-50 inline-block px-2 py-1 rounded w-max">
-                      Enforcement Radius: {settings.baseLocation.radius} meters
-                  </div>
-              </div>
-          ) : (
-              <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-center">
-                  <AlertCircle size={14} className="mr-2 shrink-0" />
-                  No base location set. All mobile punches will be marked valid.
-              </p>
-          )}
-      </div>
+      ) : (
+          <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 opacity-70 relative overflow-hidden">
+             <div className="flex justify-between items-start mb-2 relative z-10">
+                <div className="flex items-center space-x-3">
+                   <div className="p-2 bg-gray-200 rounded-xl"><Lock className="text-gray-500" size={20} /></div>
+                   <h3 className="font-bold text-gray-800">Location Geofencing</h3>
+                </div>
+                <span className="bg-yellow-100 text-yellow-800 text-[10px] px-2 py-1 rounded font-black tracking-wide uppercase shadow-sm">Pro Feature</span>
+             </div>
+             <p className="text-xs text-gray-600 mt-2 relative z-10">
+                Ensure workers can only punch in when they are physically at the factory location. Upgrade to Pro to unlock GPS boundaries.
+             </p>
+          </div>
+      )}
 
       {/* --- FLOATING SAVE ACTION BAR --- */}
       {hasChanges && (

@@ -4,6 +4,7 @@ import { ScreenName, AppNotification } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
 import { Sidebar } from './Sidebar';
 import { dbService } from '../services/db';
+import { Zap } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -61,6 +62,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onNavigate={onNavigate}
         onLogout={onLogout}
       />
+
+      {/* --- NEW: TRIAL BANNER --- */}
+      {useAuth().tenantPlan === 'TRIAL' && useAuth().trialDaysLeft !== null && (
+        <div 
+            onClick={() => onNavigate('BILLING')}
+            className="bg-indigo-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20"
+        >
+            <div className="flex items-center">
+                <Zap size={14} className="mr-1.5 text-yellow-300 fill-current"/>
+                {useAuth().trialDaysLeft} Days left in Free Trial.
+            </div>
+            <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Upgrade</span>
+        </div>
+      )}
 
       {/* Header */}
       <header className="bg-blue-600 text-white p-4 shadow-md z-10 sticky top-0">

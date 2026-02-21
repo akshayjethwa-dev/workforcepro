@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Shield, Trash2, AlertTriangle } from 'lucide-react';
+import { UserPlus, Shield, Trash2, AlertTriangle, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 
 export const TeamScreen: React.FC = () => {
-  const { profile } = useAuth();
+  // PULL LIMITS FROM AUTH CONTEXT
+  const { profile, limits } = useAuth();
   const [team, setTeam] = useState<any[]>([]);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -21,6 +22,12 @@ export const TeamScreen: React.FC = () => {
 
   const handleInvite = async () => {
     if (!email || !name) return alert("Please enter Name and Email");
+    
+    // --- NEW: CHECK TEAM MANAGER LIMITS ---
+    if (limits && team.length >= limits.maxManagers) {
+        return alert(`Your current plan allows a maximum of ${limits.maxManagers} manager(s). Please upgrade to add more team members.`);
+    }
+
     setLoading(true);
     try {
       await dbService.inviteManager(profile!.tenantId, email.toLowerCase(), name);
@@ -35,7 +42,6 @@ export const TeamScreen: React.FC = () => {
   };
 
   const handleRemove = async (member: any) => {
-      // SPECIFIC WARNING MESSAGE
       const message = `Are you sure you want to remove ${member.name}?\n\nIf you remove them, the person CANNOT login and will lose all access to your factory data immediately.`;
       
       if(!window.confirm(message)) return;
@@ -54,16 +60,31 @@ export const TeamScreen: React.FC = () => {
       
       {/* Invite Form */}
       <div className="bg-white p-4 rounded-xl shadow-sm mb-6 border border-gray-100">
-        <h3 className="text-sm font-bold text-gray-600 mb-3 flex items-center">
-            <UserPlus size={16} className="mr-2 text-blue-600"/> Add Supervisor
-        </h3>
-        <input className="w-full p-3 border rounded-lg mb-2 text-sm outline-none focus:border-blue-500" 
-            placeholder="Supervisor Name" value={name} onChange={e => setName(e.target.value)}/>
-        <input className="w-full p-3 border rounded-lg mb-2 text-sm outline-none focus:border-blue-500" 
-            placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)}/>
-        <button onClick={handleInvite} disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg mt-2">
-            {loading ? "Processing..." : "Grant Access"}
-        </button>
+        <div className="flex justify-between items-center mb-3">
+           <h3 className="text-sm font-bold text-gray-600 flex items-center">
+               <UserPlus size={16} className="mr-2 text-blue-600"/> Add Supervisor
+           </h3>
+           <span className="text-[10px] text-gray-400 font-bold bg-gray-100 px-2 py-1 rounded">
+               {team.length} / {limits?.maxManagers || '∞'} Seats
+           </span>
+        </div>
+        
+        {limits && team.length >= limits.maxManagers ? (
+            <div className="bg-yellow-50 text-yellow-800 p-4 rounded-lg flex items-center text-sm border border-yellow-200">
+                <Lock size={18} className="mr-2 shrink-0" />
+                You have reached the maximum number of managers for your current plan. Please upgrade to add more.
+            </div>
+        ) : (
+            <>
+                <input className="w-full p-3 border rounded-lg mb-2 text-sm outline-none focus:border-blue-500" 
+                    placeholder="Supervisor Name" value={name} onChange={e => setName(e.target.value)}/>
+                <input className="w-full p-3 border rounded-lg mb-2 text-sm outline-none focus:border-blue-500" 
+                    placeholder="Email Address" value={email} onChange={e => setEmail(e.target.value)}/>
+                <button onClick={handleInvite} disabled={loading} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg mt-2 hover:bg-blue-700 transition-colors">
+                    {loading ? "Processing..." : "Grant Access"}
+                </button>
+            </>
+        )}
       </div>
 
       {/* Team List */}

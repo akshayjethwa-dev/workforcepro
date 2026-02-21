@@ -1,7 +1,7 @@
-
+// src/screens/DashboardScreen.tsx
 import React, { useState, useEffect } from 'react';
 import { 
-  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity
+  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
@@ -13,7 +13,8 @@ interface Props {
 }
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
-  const { profile } = useAuth();
+  // PULL LIMITS FROM AUTH CONTEXT
+  const { profile, limits } = useAuth(); 
   
   // Stats state including new "Pending" and "Half Day" counters
   const [stats, setStats] = useState({ 
@@ -102,7 +103,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       });
 
       // Absent = Total Active - (Anyone who has shown up or is on leave)
-      // Note: We count "Checked out < 4h" (ABSENT in computed) as Absent here.
       const attendedOrLeaved = presentCount + halfDayCount + pendingCount + onLeaveCount;
       const absentCount = Math.max(0, total - attendedOrLeaved);
 
@@ -164,17 +164,29 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </button>
         </div>
 
-        {/* Kiosk Launcher */}
-        <button onClick={onOpenKiosk} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
-            <div className="flex items-center space-x-3">
-                <div className="bg-indigo-800 p-2 rounded-lg"><PlayCircle size={24} className="text-indigo-200" /></div>
-                <div className="text-left">
-                    <p className="font-bold">Launch Attendance Kiosk</p>
-                    <p className="text-indigo-300 text-xs">Scan Faces for Check-In/Out</p>
+        {/* --- CONDITIONAL KIOSK LAUNCHER BASED ON TIER LIMITS --- */}
+        {limits?.kioskEnabled !== false ? (
+            <button onClick={onOpenKiosk} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
+                <div className="flex items-center space-x-3">
+                    <div className="bg-indigo-800 p-2 rounded-lg"><PlayCircle size={24} className="text-indigo-200" /></div>
+                    <div className="text-left">
+                        <p className="font-bold">Launch Attendance Kiosk</p>
+                        <p className="text-indigo-300 text-xs">Scan Faces for Check-In/Out</p>
+                    </div>
+                </div>
+                <ChevronRight className="text-indigo-400 group-hover:translate-x-1 transition-transform" />
+            </button>
+        ) : (
+             <div className="w-full bg-gray-200 text-gray-500 rounded-xl p-4 shadow-inner flex items-center justify-between opacity-80 cursor-not-allowed">
+                <div className="flex items-center space-x-3">
+                    <div className="bg-gray-300 p-2 rounded-lg"><Lock size={24} /></div>
+                    <div className="text-left">
+                        <p className="font-bold text-gray-700">Face Scan Kiosk (Locked)</p>
+                        <p className="text-xs text-gray-500">Upgrade to Pro to unlock AI Attendance</p>
+                    </div>
                 </div>
             </div>
-            <ChevronRight className="text-indigo-400 group-hover:translate-x-1 transition-transform" />
-        </button>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 gap-3">

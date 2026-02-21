@@ -18,6 +18,8 @@ export interface TenantProfile {
   name: string;
   ownerId: string;
   shifts: ShiftConfig[]; // Array of configured shifts
+  plan: SubscriptionTier;
+  trialEndsAt?: string; // ISO string
 }
 
 export interface ShiftConfig {
@@ -206,5 +208,23 @@ export interface AppNotification {
   read: boolean;
 }
 
+export type SubscriptionTier = 'TRIAL' | 'STARTER' | 'PRO' | 'ENTERPRISE';
+
+export interface PlanLimits {
+  maxWorkers: number;
+  maxManagers: number;
+  maxShifts: number;
+  kioskEnabled: boolean;
+  geofencingEnabled: boolean;
+  multiBranchEnabled: boolean;
+}
+
+export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
+  TRIAL: { maxWorkers: 100, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false },
+  STARTER: { maxWorkers: 25, maxManagers: 1, maxShifts: 1, kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false },
+  PRO: { maxWorkers: 100, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false },
+  ENTERPRISE: { maxWorkers: 250, maxManagers: 9999, maxShifts: 9999, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true }
+};
+
 // --- NAVIGATION ---
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' ;
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' ;
