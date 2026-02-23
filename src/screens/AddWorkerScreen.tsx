@@ -7,9 +7,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { Worker, ShiftConfig } from '../types/index';
-// NEW: Firebase Storage Imports
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
+import { useBackButton } from '../hooks/useBackButton'; 
 
 interface Props {
   onBack: () => void;
@@ -55,6 +55,17 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       allowances: { travel: 0, food: 0, nightShift: 0 }
     },
     status: 'ACTIVE'
+  });
+
+  // --- MULTI-STEP BACK BUTTON LOGIC ---
+  useBackButton(() => {
+    if (currentStep > 0) {
+      setCurrentStep(prev => prev - 1);
+      return true; // We handled it (stay in the wizard)
+    } else {
+      onBack();
+      return true; // We handled it (close the wizard, go back to Workers list)
+    }
   });
 
   // --- FETCH SHIFTS FROM SETTINGS ---
@@ -152,7 +163,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   // --- UPDATED SAVE LOGIC WITH FIREBASE STORAGE & VALIDATION ---
   const handleSave = async () => {
-    // Check if 5 images are captured
     if (capturedImages[0] !== "EXISTING_DATA" && capturedImages.length < 5) {
       alert("All 5 face scans are required to complete registration.");
       return;
@@ -169,7 +179,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           const base64Image = capturedImages[0];
           
           try {
-            // 1. Process Face Descriptor
             const img = document.createElement('img');
             img.src = base64Image;
             await new Promise((resolve) => { img.onload = resolve; });
@@ -182,11 +191,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               return;
             }
 
-            // 2. Upload Image to Firebase Storage
             const imageRef = ref(storage, `workers/${profile.tenantId}/${Date.now()}_profile.jpg`);
             await uploadString(imageRef, base64Image, 'data_url');
-            
-            // 3. Get the public download URL
             mainPhotoUrl = await getDownloadURL(imageRef);
 
           } catch (err) { 
@@ -200,7 +206,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       const workerData: any = {
         ...formData,
         tenantId: profile.tenantId,
-        photoUrl: mainPhotoUrl, // ✅ Safe URL instead of 1MB base64 string
+        photoUrl: mainPhotoUrl, 
         faceDescriptor: descriptor, 
         status: 'ACTIVE'
       };
@@ -209,8 +215,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           await dbService.updateWorker(initialData.id, workerData);
       } else {
           await dbService.addWorker(workerData);
-          
-          // Trigger Notification
           await dbService.addNotification({
               tenantId: profile.tenantId,
               title: 'New Worker Registered',
@@ -233,7 +237,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       {/* Header */}
       <div className="bg-white p-4 shadow-sm sticky top-0 z-10 flex items-center justify-between">
         <div className="flex items-center">
-          <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100"><ChevronLeft className="text-gray-600"/></button>
+          <button onClick={() => { currentStep > 0 ? setCurrentStep(c => c - 1) : onBack() }} className="p-2 -ml-2 rounded-full hover:bg-gray-100"><ChevronLeft className="text-gray-600"/></button>
           <h1 className="text-lg font-bold ml-2 text-gray-800">{isEditing ? 'Edit Worker' : 'New Registration'}</h1>
         </div>
         <div className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
@@ -442,7 +446,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             </div>
           </div>
         )}
-
 
         {/* STEP 4: FACE SCAN */}
         {currentStep === 3 && (

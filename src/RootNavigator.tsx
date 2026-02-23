@@ -11,13 +11,14 @@ import { AttendanceKioskScreen } from './screens/AttendanceKioskScreen';
 import { AttendanceScreen } from './screens/AttendanceScreen';
 import { PayrollScreen } from './screens/PayrollScreen';
 import { DailyWageScreen } from './screens/DailyWageScreen';
-import { TeamScreen } from './screens/TeamScreen'; // Ensure imported
+import { TeamScreen } from './screens/TeamScreen'; 
 import { ScreenName, Worker } from './types/index';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
 import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
+import { useBackButton } from './hooks/useBackButton'; // Added hook
 
 export const RootNavigator: React.FC = () => {
   const { user, loading } = useAuth();
@@ -26,6 +27,29 @@ export const RootNavigator: React.FC = () => {
   
   // State to hold the worker currently being edited
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
+
+  // --- GLOBAL BACK BUTTON INTERCEPTOR ---
+  useBackButton(() => {
+    // 1. If not logged in and on Register screen, go back to Login
+    if (!user) {
+      if (isRegistering) {
+        setIsRegistering(false);
+        return true; // Handled
+      }
+      return false; // Let app exit if on Login
+    }
+
+    // 2. If logged in and NOT on Dashboard, go to Dashboard
+    if (currentScreen !== 'DASHBOARD') {
+       // Kiosk and AddWorker handle their own specific back actions first,
+       // but if they aren't mounted, this catches the rest (like Settings, Payroll, etc.)
+       setCurrentScreen('DASHBOARD');
+       return true; // Handled
+    }
+
+    // 3. If on Dashboard, let Android close the app natively
+    return false;
+  });
 
   if (loading) {
     return (

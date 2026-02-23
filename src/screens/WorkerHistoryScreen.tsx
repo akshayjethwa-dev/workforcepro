@@ -1,9 +1,11 @@
+// src/screens/WorkerHistoryScreen.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Search, ArrowRight, Clock, IndianRupee, AlertCircle } from 'lucide-react';
+import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { Worker, AttendanceRecord } from '../types/index';
+import { attendanceLogic } from '../services/attendanceLogic';
+import { Worker, AttendanceRecord, Punch } from '../types/index';
 
 export const WorkerHistoryScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -12,6 +14,12 @@ export const WorkerHistoryScreen: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Regulation Modal State
+  const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
+  const [regulateType, setRegulateType] = useState<'IN' | 'OUT'>('OUT');
+  const [regulateTime, setRegulateTime] = useState<string>('18:00');
+  const [savingRegulation, setSavingRegulation] = useState(false);
 
   // 1. Load Workers on Mount
   useEffect(() => {
@@ -65,13 +73,64 @@ export const WorkerHistoryScreen: React.FC = () => {
        totalOT += record.hours?.overtime || 0;
     });
 
-    return { totalEarning, presentDays, halfDays, lateDays, totalOT, count: attendanceHistory.length };
+    return { totalEarning, presentDays, halfDays, absentDays, lateDays, totalOT, count: attendanceHistory.length };
   }, [attendanceHistory, selectedWorker]);
+
+  // 4. Handle Regulating a Missed Punch
+  const handleSaveRegulation = async () => {
+    if (!editingRecord || !profile?.tenantId || !selectedWorker) return;
+    setSavingRegulation(true);
+
+    try {
+      // Create the new manual punch
+      const timestamp = new Date(`${editingRecord.date}T${regulateTime}:00`).toISOString();
+      const newPunch: Punch = {
+        timestamp,
+        type: regulateType,
+        device: 'MANUAL_OVERRIDE_BY_ADMIN'
+      };
+
+      // Add to timeline
+      const updatedTimeline = [...(editingRecord.timeline || []), newPunch];
+
+      // Fetch requirements to recalculate status
+      const settings = await dbService.getOrgSettings(profile.tenantId);
+      const shift = settings.shifts.find(s => s.id === selectedWorker.shiftId) || settings.shifts[0];
+      const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, selectedWorker.id);
+
+      // Create draft record
+      const draftRecord: AttendanceRecord = {
+        ...editingRecord,
+        timeline: updatedTimeline
+      };
+
+      // Recalculate everything using the exact same engine
+      const finalRecord = attendanceLogic.processDailyStatus(
+        draftRecord, 
+        shift, 
+        lateCount, 
+        settings.enableBreakTracking
+      );
+
+      // Save to DB
+      await dbService.markAttendanceOnline(finalRecord);
+
+      // Update Local State
+      setAttendanceHistory(prev => prev.map(r => r.id === finalRecord.id ? finalRecord : r));
+      setEditingRecord(null);
+
+    } catch (error) {
+      console.error("Failed to regulate punch:", error);
+      alert("Failed to save the regulated punch.");
+    } finally {
+      setSavingRegulation(false);
+    }
+  };
 
   if (loading) return <div className="p-10 text-center">Loading...</div>;
 
   return (
-    <div className="p-4 bg-gray-50 min-h-screen pb-24">
+    <div className="p-4 bg-gray-50 min-h-screen pb-24 relative">
       <h1 className="text-xl font-bold text-gray-800 mb-6">Worker History</h1>
 
       {/* FILTERS */}
@@ -107,7 +166,6 @@ export const WorkerHistoryScreen: React.FC = () => {
         <>
             {/* Monthly Summary Card */}
             {summary && (
-                // FIXED: Replaced bg-gradient-to-r with bg-linear-to-r
                 <div className="bg-linear-to-r from-blue-600 to-indigo-700 rounded-xl p-5 text-white shadow-lg mb-6 relative overflow-hidden">
                     <div className="relative z-10">
                         <div className="flex justify-between items-start">
@@ -120,18 +178,23 @@ export const WorkerHistoryScreen: React.FC = () => {
                             </div>
                         </div>
                         
-                        <div className="grid grid-cols-3 gap-2 mt-6 pt-4 border-t border-white/20">
+                        {/* 4-Column Grid for Stats */}
+                        <div className="grid grid-cols-4 gap-2 mt-6 pt-4 border-t border-white/20">
                             <div className="text-center">
-                                <p className="text-xl font-bold">{summary.presentDays}</p>
-                                <p className="text-[10px] text-blue-200 uppercase">Present</p>
+                                <p className="text-lg font-bold">{summary.presentDays}</p>
+                                <p className="text-[9px] text-blue-200 uppercase">Present</p>
                             </div>
                             <div className="text-center border-l border-white/20">
-                                <p className="text-xl font-bold">{summary.lateDays}</p>
-                                <p className="text-[10px] text-blue-200 uppercase">Late</p>
+                                <p className="text-lg font-bold">{summary.absentDays}</p>
+                                <p className="text-[9px] text-blue-200 uppercase">Absent</p>
                             </div>
                             <div className="text-center border-l border-white/20">
-                                <p className="text-xl font-bold">{summary.totalOT.toFixed(1)}h</p>
-                                <p className="text-[10px] text-blue-200 uppercase">Overtime</p>
+                                <p className="text-lg font-bold">{summary.lateDays}</p>
+                                <p className="text-[9px] text-blue-200 uppercase">Late</p>
+                            </div>
+                            <div className="text-center border-l border-white/20">
+                                <p className="text-lg font-bold">{summary.totalOT.toFixed(1)}h</p>
+                                <p className="text-[9px] text-blue-200 uppercase">Overtime</p>
                             </div>
                         </div>
                     </div>
@@ -166,9 +229,19 @@ export const WorkerHistoryScreen: React.FC = () => {
                                         {record.lateStatus?.isLate && <span className="ml-1 text-red-600 font-extrabold">• LATE</span>}
                                     </span>
                                 </div>
-                                <div className="text-right">
+                                <div className="text-right flex flex-col items-end">
                                     <span className="text-green-600 font-bold">₹{wageRec.breakdown.total}</span>
                                     <p className="text-[10px] text-gray-400">Daily Pay</p>
+                                    
+                                    {/* Regulate Button */}
+                                    {(profile?.role === 'FACTORY_OWNER' || profile?.role === 'SUPERVISOR') && (
+                                      <button 
+                                        onClick={() => setEditingRecord(record)}
+                                        className="mt-2 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded flex items-center"
+                                      >
+                                        <Edit size={10} className="mr-1" /> Regulate
+                                      </button>
+                                    )}
                                 </div>
                             </div>
 
@@ -207,6 +280,62 @@ export const WorkerHistoryScreen: React.FC = () => {
         <div className="flex flex-col items-center justify-center h-64 text-gray-400">
             <Search size={48} className="mb-4 opacity-20" />
             <p>Select a worker to view history</p>
+        </div>
+      )}
+
+      {/* REGULATION MODAL */}
+      {editingRecord && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-800">Regulate Missed Punch</h3>
+              <button onClick={() => setEditingRecord(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              Add a manual punch for <span className="font-bold">{new Date(editingRecord.date).toLocaleDateString()}</span>. This will recalculate the worker's hours and wages automatically.
+            </p>
+
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">Punch Type</label>
+                <div className="flex space-x-2 mt-1">
+                  <button 
+                    onClick={() => setRegulateType('IN')}
+                    className={`flex-1 py-2 rounded-lg font-bold text-sm border ${regulateType === 'IN' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}
+                  >
+                    Check IN
+                  </button>
+                  <button 
+                    onClick={() => setRegulateType('OUT')}
+                    className={`flex-1 py-2 rounded-lg font-bold text-sm border ${regulateType === 'OUT' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}
+                  >
+                    Check OUT
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">Manual Time</label>
+                <input 
+                  type="time" 
+                  value={regulateTime}
+                  onChange={(e) => setRegulateTime(e.target.value)}
+                  className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveRegulation}
+              disabled={savingRegulation}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex justify-center items-center disabled:opacity-50"
+            >
+              {savingRegulation ? 'Saving...' : <><PlusCircle size={18} className="mr-2" /> Add Punch & Recalculate</>}
+            </button>
+          </div>
         </div>
       )}
     </div>

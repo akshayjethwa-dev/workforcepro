@@ -1,9 +1,10 @@
+// src/screens/RegisterScreen.tsx
 import React, { useState } from 'react';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
-import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight } from 'lucide-react';
+import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff } from 'lucide-react'; // Added Eye and EyeOff
 
 interface Props {
   onNavigateToLogin: () => void;
@@ -19,6 +20,9 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  
+  // New state for toggling password visibility
+  const [showPassword, setShowPassword] = useState(false);
 
   // Password Rules: Minimum 8 characters, at least 1 uppercase, 1 lowercase, 1 number, and 1 special character
   const validatePassword = (password: string) => {
@@ -166,12 +170,20 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             <div className="relative">
               <Lock className="absolute left-3 top-3 text-gray-400" size={18} />
               <input 
-                type="password"
-                className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                type={showPassword ? "text" : "password"} // Dynamic input type
+                className="w-full pl-10 pr-10 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="••••••••"
                 value={formData.password}
                 onChange={e => setFormData({...formData, password: e.target.value})}
               />
+              {/* Eye Icon Toggle Button */}
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 focus:outline-none transition-colors"
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
             <p className="text-[10px] text-gray-400 mt-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char.</p>
           </div>

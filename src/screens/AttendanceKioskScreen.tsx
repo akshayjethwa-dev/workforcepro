@@ -1,21 +1,63 @@
+// src/screens/AttendanceKioskScreen.tsx
 import React, { useRef, useEffect, useState } from 'react';
 import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { Worker, ShiftConfig, AttendanceRecord, OrgSettings } from '../types/index';
+import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
+import { useBackButton } from '../hooks/useBackButton';
 
 interface Props { onExit: () => void; }
+
+// --- SOUND GENERATOR HELPER ---
+const playSound = (type: 'SUCCESS' | 'ERROR') => {
+  try {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    
+    const audioCtx = new AudioContext();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    if (type === 'SUCCESS') {
+      // Pleasant high-pitched "ding"
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); 
+      oscillator.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
+      
+      gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+      
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.3);
+    } else {
+      // Low-pitched warning "buzz"
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(250, audioCtx.currentTime); 
+      oscillator.frequency.setValueAtTime(200, audioCtx.currentTime + 0.1);
+      
+      gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+      
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.4);
+    }
+  } catch (e) {
+    console.warn("Audio playback failed or is not supported", e);
+  }
+};
 
 export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
   const { profile } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   
-  // Refs for State (Crucial for setInterval loops to avoid stale closures)
+  // Refs for State 
   const processingRef = useRef(false); 
   const workersRef = useRef<Worker[]>([]);
-  // We store the full settings object in a Ref
   const settingsRef = useRef<OrgSettings>({ shifts: [], enableBreakTracking: false });
   
   const [feedback, setFeedback] = useState("Initializing System...");
@@ -24,6 +66,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
   // UI States
   const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT'} | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
+
+  // --- KIOSK BACK BUTTON INTERCEPTOR ---
+  useBackButton(() => {
+    onExit();
+    return true; // We handled it (closing Kiosk to go back to Dashboard)
+  });
 
   // 1. INITIAL SETUP
   useEffect(() => {
@@ -36,7 +84,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
 
         if (profile?.tenantId) {
             setFeedback("Fetching Workers...");
-            // Fetch Workers AND Org Settings (Logic Rules)
             const [w, settings] = await Promise.all([
                dbService.getWorkers(profile.tenantId),
                dbService.getOrgSettings(profile.tenantId)
@@ -44,9 +91,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             
             const validWorkers = w.filter(worker => worker.faceDescriptor && worker.faceDescriptor.length > 0);
             
-            // Update Refs immediately so the loop sees it
             workersRef.current = validWorkers;
-            settingsRef.current = settings; // Store settings (shifts + break tracking)
+            settingsRef.current = settings; 
             
             if (validWorkers.length === 0) {
                 setFeedback("No workers found with Face Data.");
@@ -82,13 +128,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
     if (!modelsLoaded) return;
 
     const scanInterval = setInterval(async () => {
-       // CHECKS:
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
            return;
        }
 
        try {
-           // Run Matching
            const match = await faceService.findMatch(videoRef.current, workersRef.current);
            
            if (match && match.distance > 0.65) {
@@ -97,16 +141,14 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
            }
        } catch (e) {
            console.error("Scan Loop Error", e);
-           // Force unlock if error happens
            processingRef.current = false;
        }
-    }, 500); // Check every 500ms
+    }, 500); 
 
     return () => clearInterval(scanInterval);
   }, [modelsLoaded]);
 
   const handlePunch = async (worker: Worker) => {
-    // LOCK
     processingRef.current = true;
     setFeedback(`Identifying ${worker.name}...`);
 
@@ -114,26 +156,23 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
         const today = new Date().toISOString().split('T')[0];
         const recordId = `${profile!.tenantId}_${worker.id}_${today}`;
         
-        // A. Fetch existing record
         const existingDocs = await dbService.getTodayAttendance(profile!.tenantId); 
         const existingRecord = existingDocs.find(r => r.id === recordId);
 
-        // B. Determine Action
         const punchCount = existingRecord?.timeline?.length || 0;
         const punchType = (punchCount % 2 === 0) ? 'IN' : 'OUT';
 
         const now = new Date();
         
-        // C. COOLDOWN (10 Seconds)
         if (existingRecord?.timeline && existingRecord.timeline.length > 0) {
             const lastPunchTime = new Date(existingRecord.timeline[existingRecord.timeline.length - 1].timestamp);
             const diffSeconds = (now.getTime() - lastPunchTime.getTime()) / 1000;
             
             if (diffSeconds < 10) { 
                 console.log("Cooldown active");
+                playSound('ERROR'); // Play error sound for cooldown
                 setErrorFeedback(`Wait ${Math.ceil(10 - diffSeconds)}s...`);
                 
-                // UNLOCK after short delay
                 setTimeout(() => { 
                     setErrorFeedback(null); 
                     setFeedback("Look at Camera"); 
@@ -143,7 +182,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             }
         }
 
-        // D. Create Timeline
         const currentTimeline = existingRecord?.timeline || [];
         const newTimeline = [...currentTimeline, { 
             timestamp: now.toISOString(), 
@@ -151,8 +189,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             device: 'Kiosk' 
         }];
 
-        // E. Logic
-        // Use settingsRef to get the correct Shift and Break Mode
         const { shifts, enableBreakTracking } = settingsRef.current;
         const shift = shifts.find(s => s.id === worker.shiftId) || shifts[0];
         
@@ -168,31 +204,29 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             date: today,
             shiftId: worker.shiftId || 'default',
             timeline: newTimeline,
-            status: 'ABSENT', // Default, logic will update
+            status: 'ABSENT', 
             lateStatus: existingRecord?.lateStatus || { isLate: false, lateByMins: 0, penaltyApplied: false },
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        // Pass enableBreakTracking to the calculation engine
         const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking);
 
-        // F. Save
         await dbService.markAttendance(finalRecord);
         
-        // G. Success UI
+        playSound('SUCCESS'); // Play success sound on successful punch
         setDetectedWorker({ worker, action: punchType });
         setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
 
-        // Close Kiosk and Go to Dashboard after 2 seconds
         setTimeout(() => {
             setDetectedWorker(null);
-            onExit(); // <--- This closes the kiosk
+            processingRef.current = false; // Resume scanning after success popup disappears
+            setFeedback("Look at Camera");
         }, 2000);
 
     } catch (e: any) {
         console.error("Handle Punch Error", e);
+        playSound('ERROR'); // Play error sound on system failure
         setFeedback("System Error: " + (e.message || "Unknown"));
-        // Force unlock
         processingRef.current = false;
         setTimeout(() => setFeedback("Look at Camera"), 2000);
     }
