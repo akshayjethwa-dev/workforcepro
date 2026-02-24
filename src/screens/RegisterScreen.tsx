@@ -79,13 +79,16 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         uid: user.uid,
         email: formData.email,
         name: formData.name,
-        phone: formData.phone, // Saved phone to DB
+        phone: formData.phone, 
         role: finalRole,       
         tenantId: finalTenantId, 
         companyName: finalCompanyName
       });
 
       await updateProfile(user, { displayName: formData.name });
+      setTimeout(() => {
+         window.location.reload(); 
+      }, 500);
 
     } catch (err: any) {
       console.error(err);

@@ -2,7 +2,7 @@ import {
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification } from "../types/index";
+import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll } from "../types/index";
 import { syncService } from './syncService';
 
 const getWorkersRef = () => collection(db, "workers");
@@ -12,7 +12,6 @@ const getNotificationsRef = () => collection(db, "notifications");
 export const dbService = {
   
   // --- SUPER ADMIN METHODS ---
-  
   getAllTenants: async () => {
     try {
       const q = query(collection(db, 'users'), where('role', '==', 'FACTORY_OWNER'));
@@ -27,7 +26,6 @@ export const dbService = {
           id: docSnap.id,
           ...data,
           workerCount: workersSnap.size,
-          // Default to true if not set
           isActive: data.isActive !== false, 
           joinedAt: data.createdAt || new Date().toISOString()
         };
@@ -42,9 +40,7 @@ export const dbService = {
 
   toggleTenantStatus: async (userId: string, currentStatus: boolean) => {
     const userRef = doc(db, 'users', userId);
-    await updateDoc(userRef, {
-      isActive: !currentStatus
-    });
+    await updateDoc(userRef, { isActive: !currentStatus });
   },
 
   makeSuperAdmin: async (userId: string) => {
@@ -71,11 +67,37 @@ export const dbService = {
     await updateDoc(docRef, data);
   },
 
-  deleteWorker: async (workerId: string) => {
+  // FIXED: Cascade Delete with Tenant Security Rule Compliance
+  deleteWorker: async (tenantId: string, workerId: string) => {
+    // 1. Fetch and Cascade delete Attendance Records securely
+    const attendanceQ = query(collection(db, "attendance"), where("tenantId", "==", tenantId));
+    const attendanceSnap = await getDocs(attendanceQ);
+    const attendanceDeletes = attendanceSnap.docs
+        .filter(d => d.data().workerId === workerId)
+        .map(d => deleteDoc(doc(db, "attendance", d.id)));
+
+    // 2. Fetch and Cascade delete Advances securely
+    const advancesQ = query(collection(db, "advances"), where("tenantId", "==", tenantId));
+    const advancesSnap = await getDocs(advancesQ);
+    const advanceDeletes = advancesSnap.docs
+        .filter(d => d.data().workerId === workerId)
+        .map(d => deleteDoc(doc(db, "advances", d.id)));
+
+    // 3. Fetch and Cascade delete Payrolls securely
+    const payrollsQ = query(collection(db, "payrolls"), where("tenantId", "==", tenantId));
+    const payrollsSnap = await getDocs(payrollsQ);
+    const payrollDeletes = payrollsSnap.docs
+        .filter(d => d.data().workerId === workerId)
+        .map(d => deleteDoc(doc(db, "payrolls", d.id)));
+
+    // Execute all related deletions in parallel
+    await Promise.all([...attendanceDeletes, ...advanceDeletes, ...payrollDeletes]);
+
+    // 4. FINALLY delete the worker profile document itself
     await deleteDoc(doc(db, "workers", workerId));
   },
 
-  // --- NEW: NOTIFICATIONS ---
+  // --- NOTIFICATIONS ---
   addNotification: async (notification: Omit<AppNotification, 'id'>) => {
     await addDoc(getNotificationsRef(), notification);
   },
@@ -121,13 +143,10 @@ export const dbService = {
   },
 
   markAttendance: async (record: AttendanceRecord) => {
-    // If clearly offline, drop it directly into the queue
     if (!navigator.onLine) {
        syncService.enqueue(record);
        return;
     }
-    
-    // If we think we're online, try sending. If it fails, catch and queue it.
     try {
        await dbService.markAttendanceOnline(record);
     } catch (e) {
@@ -231,5 +250,21 @@ export const dbService = {
   updateTenant: async (tenantId: string, data: { name: string }) => {
     const tenantRef = doc(db, "tenants", tenantId);
     await updateDoc(tenantRef, data);
+  },
+
+  // --- PAYROLL METHODS ---
+  getPayrollsByMonth: async (tenantId: string, month: string): Promise<MonthlyPayroll[]> => {
+    if (!tenantId) return [];
+    const q = query(
+      collection(db, "payrolls"), 
+      where("tenantId", "==", tenantId),
+      where("month", "==", month)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MonthlyPayroll));
+  },
+
+  savePayroll: async (payroll: MonthlyPayroll) => {
+    await setDoc(doc(db, "payrolls", payroll.id), payroll, { merge: true });
   }
 };

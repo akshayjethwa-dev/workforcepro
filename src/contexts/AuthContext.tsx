@@ -1,3 +1,4 @@
+// src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -54,10 +55,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
                  // Check Trial Status
                  if (currentPlan === 'TRIAL' && tenantData.trialEndsAt) {
+                     // Normalize end date to midnight
                      const endDate = new Date(tenantData.trialEndsAt);
+                     endDate.setHours(0, 0, 0, 0); 
+                     
+                     // Normalize current date to midnight
                      const now = new Date();
+                     now.setHours(0, 0, 0, 0); 
+                     
+                     // Calculate pure day difference
                      const diffTime = endDate.getTime() - now.getTime();
-                     daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                     daysLeft = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
                      if (daysLeft <= 0) {
                          currentPlan = 'STARTER'; // Trial Expired! Auto-downgrade.

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { IndianRupee, FileText, Download } from 'lucide-react';
+import { IndianRupee, FileText, Download, CheckCircle, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
@@ -13,57 +13,95 @@ export const PayrollScreen: React.FC = () => {
   const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
   
-  // NEW STATE: Store the factory address to pass to the Payslip
+  const [savedPayrolls, setSavedPayrolls] = useState<MonthlyPayroll[]>([]); 
   const [siteAddress, setSiteAddress] = useState<string>(''); 
   
   const [loading, setLoading] = useState(true);
   
-  const currentMonthStr = new Date().toISOString().slice(0, 7); // e.g. "2026-02"
+  const currentMonthStr = new Date().toISOString().slice(0, 7); 
 
   useEffect(() => {
     const loadData = async () => {
-      if (profile?.tenantId) {
+      if (!profile?.tenantId) return;
+      
+      try {
+        // 1. Fetch all the standard data safely
+        const fetchedWorkers = await dbService.getWorkers(profile.tenantId);
+        const fetchedAttendance = await dbService.getAttendanceHistory(profile.tenantId);
+        const fetchedAdvances = await dbService.getAdvances(profile.tenantId);
+        const fetchedSettings = await dbService.getOrgSettings(profile.tenantId);
+        
+        // 2. Fetch the new Payrolls data in a separate try/catch
+        // This prevents Firebase Permission Errors on the new collection from crashing the whole screen
+        let fetchedPayrolls: MonthlyPayroll[] = [];
         try {
-          // Fetch Workers, Attendance, Advances, AND OrgSettings in parallel
-          const [fetchedWorkers, fetchedAttendance, fetchedAdvances, fetchedSettings] = await Promise.all([
-            dbService.getWorkers(profile.tenantId),
-            dbService.getAttendanceHistory(profile.tenantId),
-            dbService.getAdvances(profile.tenantId),
-            dbService.getOrgSettings(profile.tenantId)
-          ]);
-          
-          setWorkers(fetchedWorkers);
-          setAdvances(fetchedAdvances);
-          setSiteAddress(fetchedSettings.baseLocation?.address || '');
-          
-          // Calculate daily wages from attendance history
-          const wages: DailyWageRecord[] = [];
-          fetchedAttendance.forEach(record => {
-             const worker = fetchedWorkers.find(w => w.id === record.workerId);
-             if (worker) wages.push(wageService.calculateDailyWage(worker, record));
-          });
-          setDailyWages(wages);
-        } catch (e) {
-          console.error(e);
-        } finally {
-          setLoading(false);
+           fetchedPayrolls = await dbService.getPayrollsByMonth(profile.tenantId, currentMonthStr);
+        } catch (payrollErr) {
+           console.warn("Could not load saved payrolls. Check Firestore Rules for the 'payrolls' collection.", payrollErr);
         }
+
+        // 3. Set standard state
+        setWorkers(fetchedWorkers);
+        setAdvances(fetchedAdvances);
+        setSiteAddress(fetchedSettings.baseLocation?.address || '');
+        setSavedPayrolls(fetchedPayrolls);
+        
+        // 4. Calculate daily wages
+        const wages: DailyWageRecord[] = [];
+        fetchedAttendance.forEach(record => {
+           const worker = fetchedWorkers.find(w => w.id === record.workerId);
+           if (worker) wages.push(wageService.calculateDailyWage(worker, record));
+        });
+        setDailyWages(wages);
+
+      } catch (e) {
+        console.error("Critical error loading data:", e);
+      } finally {
+        setLoading(false);
       }
     };
+    
     loadData();
-  }, [profile]);
+  }, [profile, currentMonthStr]);
 
   // Generate Payroll Data
   const payrolls = useMemo(() => {
     if (workers.length === 0) return [];
     
-    return workers.map(worker => 
-        wageService.generateMonthlyPayroll(worker, currentMonthStr, dailyWages, advances)
-    );
-  }, [workers, dailyWages, advances, currentMonthStr]);
+    return workers.map(worker => {
+        const savedPayroll = savedPayrolls.find(p => p.workerId === worker.id);
+        if (savedPayroll) return savedPayroll;
+
+        return wageService.generateMonthlyPayroll(worker, currentMonthStr, dailyWages, advances);
+    });
+  }, [workers, dailyWages, advances, currentMonthStr, savedPayrolls]);
+
+  // Handler for marking a salary as paid
+  const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
+    e.stopPropagation(); 
+    
+    if (window.confirm(`Mark ₹${payroll.netPayable} as paid to ${payroll.workerName}?`)) {
+      try {
+        const updatedPayroll: MonthlyPayroll = { ...payroll, status: 'PAID' };
+        await dbService.savePayroll(updatedPayroll);
+        
+        setSavedPayrolls(prev => {
+          const exists = prev.find(p => p.id === updatedPayroll.id);
+          if (exists) return prev.map(p => p.id === updatedPayroll.id ? updatedPayroll : p);
+          return [...prev, updatedPayroll];
+        });
+      } catch (error) {
+        console.error("Failed to mark as paid", error);
+        alert("Failed to save to database. If this persists, please check your Firestore Security Rules to ensure writes to 'payrolls' are allowed.");
+      }
+    }
+  };
 
   const totalPayout = payrolls.reduce((acc, p) => acc + p.netPayable, 0);
   const totalDeductions = payrolls.reduce((acc, p) => acc + p.deductions.total, 0);
+  
+  const pendingPayout = payrolls.filter(p => p.status !== 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
+  const paidPayout = payrolls.filter(p => p.status === 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
 
   if (loading) return (
     <div className="flex items-center justify-center min-h-screen">
@@ -81,12 +119,12 @@ export const PayrollScreen: React.FC = () => {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase font-bold">Total Net Pay</p>
-            <p className="text-2xl font-bold text-blue-600 mt-1">₹{(totalPayout/1000).toFixed(1)}k</p>
+            <p className="text-xs text-gray-500 uppercase font-bold">Pending Payout</p>
+            <p className="text-2xl font-bold text-orange-500 mt-1">₹{(pendingPayout/1000).toFixed(1)}k</p>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase font-bold">Deductions</p>
-            <p className="text-2xl font-bold text-red-500 mt-1">₹{(totalDeductions/1000).toFixed(1)}k</p>
+            <p className="text-xs text-gray-500 uppercase font-bold">Total Paid</p>
+            <p className="text-2xl font-bold text-green-600 mt-1">₹{(paidPayout/1000).toFixed(1)}k</p>
         </div>
       </div>
 
@@ -105,7 +143,7 @@ export const PayrollScreen: React.FC = () => {
                             </div>
                             <div>
                                 <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
-                                <div className="flex space-x-2 text-xs text-gray-500">
+                                <div className="flex space-x-2 text-xs text-gray-500 mt-1">
                                     <span>{payroll.attendanceSummary.presentDays} Days</span>
                                     <span>•</span>
                                     <span>{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
@@ -114,19 +152,44 @@ export const PayrollScreen: React.FC = () => {
                         </div>
                         <div className="text-right">
                             <p className="text-lg font-bold text-gray-900">₹{payroll.netPayable.toLocaleString()}</p>
-                            <p className="text-[10px] text-gray-400 uppercase">Net Payable</p>
+                            
+                            {payroll.status === 'PAID' ? (
+                                <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full mt-1">
+                                    <CheckCircle size={10} />
+                                    <span>PAID</span>
+                                </span>
+                            ) : (
+                                <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-orange-500 bg-orange-50 px-2 py-1 rounded-full mt-1">
+                                    <Clock size={10} />
+                                    <span>PENDING</span>
+                                </span>
+                            )}
                         </div>
                     </div>
                     
-                    {/* Mini Details */}
-                    <div className="mt-3 flex justify-between text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
-                        <span>Basic: ₹{payroll.earnings.basic}</span>
-                        <span>OT: ₹{payroll.earnings.overtime}</span>
-                        <span className="text-red-500 font-bold">Ded: -₹{payroll.deductions.total}</span>
+                    <div className="mt-3 flex items-center justify-between">
+                        <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg">
+                            <span>Base: ₹{payroll.earnings.basic}</span>
+                            <span className="text-red-500">Ded: -₹{payroll.deductions.total}</span>
+                        </div>
+                        
+                        {payroll.status !== 'PAID' && (
+                            <button 
+                                onClick={(e) => handleMarkAsPaid(payroll, e)}
+                                className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition-colors"
+                            >
+                                Mark as Paid
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
         ))}
+        {payrolls.length === 0 && !loading && (
+          <div className="text-center py-8 text-gray-500">
+             No workers found for this location.
+          </div>
+        )}
       </div>
 
       {/* Payslip Modal */}
