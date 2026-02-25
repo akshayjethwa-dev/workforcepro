@@ -1,3 +1,4 @@
+// src/services/db.ts
 import { 
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
@@ -114,6 +115,19 @@ export const dbService = {
   markNotificationRead: async (notificationId: string) => {
     const docRef = doc(db, "notifications", notificationId);
     await updateDoc(docRef, { read: true });
+  },
+
+  // --- NEW: Delete all notifications permanently ---
+  deleteAllNotifications: async (tenantId: string) => {
+    if (!tenantId) return;
+    const q = query(getNotificationsRef(), where("tenantId", "==", tenantId));
+    const snapshot = await getDocs(q);
+    
+    // Create an array of delete promises
+    const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, "notifications", d.id)));
+    
+    // Execute all deletions in parallel
+    await Promise.all(deletePromises);
   },
 
   // --- ATTENDANCE ---

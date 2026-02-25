@@ -92,21 +92,21 @@ Current Plan: ${tenantPlan}`;
       <div className="space-y-6">
         <PlanCard 
             title="Starter" 
-            price="399" 
+            price="299" 
             desc="Basic manual attendance for small workshops."
             features={["Up to 25 Workers", "1 Manager Seat", "1 General Shift", "Manual Attendance Entry", "Basic Payroll Reports"]}
             isCurrent={tenantPlan === 'STARTER'}
-            onUpgrade={() => handleUpgradeClick('Starter', '399')}
+            onUpgrade={() => handleUpgradeClick('Starter', '299')}
         />
         <PlanCard 
             title="Pro" 
-            price="1,299" 
+            price="999" 
             desc="Full automation and AI features for growing factories."
             features={["Up to 100 Workers", "5 Manager Seats", "5 Shift Profiles", "AI Face Scan Kiosk", "Geofencing & GPS Validation", "Automated Overtime Rules"]}
             isCurrent={tenantPlan === 'PRO' || tenantPlan === 'TRIAL'}
             currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
             isPopular={true}
-            onUpgrade={() => handleUpgradeClick('Pro', '1299')}
+            onUpgrade={() => handleUpgradeClick('Pro', '999')}
         />
         <PlanCard 
             title="Enterprise" 

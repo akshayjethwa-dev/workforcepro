@@ -4,33 +4,17 @@ import { AttendanceRecord, ShiftConfig, Punch } from '../types/index';
 export const attendanceLogic = {
   
   /**
-   * Calculates total hours based on Org Settings (Break Tracking ON/OFF)
+   * Calculates total hours based on actual punched segments (IN to OUT)
+   * This ensures gaps between check-outs and check-ins are NEVER counted as work time.
    */
   calculateHours: (timeline: Punch[], breakTrackingEnabled: boolean): number => {
     if (!timeline || timeline.length === 0) return 0;
 
-    // Sort punches by time
+    // Sort punches chronologically
     const sorted = [...timeline].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    const firstPunch = sorted[0];
-    const lastPunch = sorted[sorted.length - 1];
     const now = new Date().getTime();
 
-    // --- LOGIC 1: BREAK TRACKING OFF (Simple) ---
-    // Work Time = Last Checkout (or Now) - First Checkin
-    if (!breakTrackingEnabled) {
-        const start = new Date(firstPunch.timestamp).getTime();
-        
-        let end = now; // Default to NOW if currently IN
-        if (lastPunch.type === 'OUT') {
-            end = new Date(lastPunch.timestamp).getTime();
-        }
-
-        const durationMs = end - start;
-        return Math.max(0, durationMs / (1000 * 60 * 60)); // Return hours
-    }
-
-    // --- LOGIC 2: BREAK TRACKING ON (Advanced) ---
-    // Work Time = Sum of all (OUT - IN) segments
+    // Work Time = Sum of all actual (OUT - IN) segments
     let totalMs = 0;
     let lastInTime: number | null = null;
 
@@ -38,19 +22,23 @@ export const attendanceLogic = {
       const time = new Date(punch.timestamp).getTime();
       
       if (punch.type === 'IN') {
-        lastInTime = time;
+        // Prevent accidental double-INs from resetting the timer
+        if (lastInTime === null) {
+          lastInTime = time;
+        }
       } else if (punch.type === 'OUT' && lastInTime !== null) {
+        // Add the segment time and reset
         totalMs += (time - lastInTime);
-        lastInTime = null; // Reset segment
+        lastInTime = null; 
       }
     });
 
-    // If currently IN, add "Live" time
+    // If the worker is currently checked IN (no OUT punch yet), add the "Live" time up to right now
     if (lastInTime !== null) {
         totalMs += (now - lastInTime);
     }
 
-    return totalMs / (1000 * 60 * 60);
+    return Math.max(0, totalMs / (1000 * 60 * 60)); // Return exact hours
   },
 
   /**
@@ -79,7 +67,7 @@ export const attendanceLogic = {
     let isLate = lateByMins > shift.gracePeriodMins;
     let penaltyApplied = false;
 
-    // 3. Calculate Net Hours
+    // 3. Calculate exact Net Hours based on punches
     const netHours = attendanceLogic.calculateHours(record.timeline, breakTrackingEnabled);
 
     // 4. Determine Status (ADVANCED LOGIC)

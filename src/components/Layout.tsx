@@ -1,3 +1,4 @@
+// src/components/Layout.tsx
 import React, { useState, useEffect } from 'react';
 import { Home, Users, CalendarCheck, IndianRupee, Menu, Bell, X } from 'lucide-react'; 
 import { ScreenName, AppNotification } from '../types/index';
@@ -35,6 +36,21 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
     if (!notif.read) {
       await dbService.markNotificationRead(notif.id);
       setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+    }
+  };
+
+  // MODIFIED: Now permanently deletes from the database
+  const handleClearAll = async () => {
+    if (!profile?.tenantId) return;
+    
+    // Clear UI immediately for a responsive feel
+    setNotifications([]);
+    
+    try {
+      // Permanently delete from Firebase
+      await dbService.deleteAllNotifications(profile.tenantId);
+    } catch (error) {
+      console.error("Failed to clear notifications from database", error);
     }
   };
 
@@ -106,12 +122,24 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
           {/* Notifications Dropdown */}
           {showNotifications && (
             <div className="absolute top-12 right-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden z-50 text-gray-800">
+              
               <div className="flex justify-between items-center p-3 border-b border-gray-100 bg-gray-50">
                 <span className="font-bold text-sm">Notifications</span>
-                <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-gray-600">
-                  <X size={16} />
-                </button>
+                <div className="flex items-center space-x-3">
+                  {notifications.length > 0 && (
+                    <button 
+                      onClick={handleClearAll} 
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                  <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-gray-600">
+                    <X size={16} />
+                  </button>
+                </div>
               </div>
+
               <div className="max-h-72 overflow-y-auto">
                 {notifications.length === 0 ? (
                   <p className="text-center text-xs text-gray-400 py-4">No new notifications</p>

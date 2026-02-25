@@ -217,10 +217,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
         setDetectedWorker({ worker, action: punchType });
         setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
 
+        // MODIFIED: Close the Kiosk and return to Dashboard after success
         setTimeout(() => {
             setDetectedWorker(null);
-            processingRef.current = false; // Resume scanning after success popup disappears
-            setFeedback("Look at Camera");
+            processingRef.current = false; 
+            onExit(); 
         }, 2000);
 
     } catch (e: any) {
