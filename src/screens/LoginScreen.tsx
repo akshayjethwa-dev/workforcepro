@@ -65,7 +65,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister }) => {
             <LogIn className="text-blue-600" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-gray-800">Welcome Back</h1>
-          <p className="text-gray-500 text-sm mt-1">WorkForcePro Login</p>
+          <p className="text-gray-500 text-sm mt-1">WorkForce Login</p>
         </div>
 
         {error && (

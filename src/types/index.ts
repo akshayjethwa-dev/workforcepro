@@ -34,10 +34,24 @@ export interface ShiftConfig {
   minOvertimeMins: number;
 }
 
+export interface Branch {
+  id: string;
+  name: string;
+  location?: { lat: number; lng: number; radius: number; address?: string };
+}
+
 export interface OrgSettings {
   shifts: ShiftConfig[];
   enableBreakTracking: boolean; // Toggle for "Advanced Logic"
-  baseLocation?: { lat: number; lng: number; radius: number; address?: string };
+  baseLocation?: { lat: number; lng: number; radius: number; address?: string }; // Legacy
+  branches?: Branch[]; // NEW: Multi-branch support
+  departments?: string[]; // NEW: Dynamic departments
+  compliance?: {
+    pfRegistrationNumber: string;
+    esicCode: string;
+    capPfDeduction: boolean; // Cap at ₹15,000 basic
+    dailyWagePfPercentage: number; // e.g., 50 or 100
+  };
 }
 
 export interface Punch {
@@ -52,6 +66,12 @@ export interface Punch {
 export interface WageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
+  basicPercentage?: number; // e.g., 50% of monthly amount is Basic+DA
+  monthlyBreakdown?: {
+    basic: number;
+    hra: number;
+    others: number;
+  };
   overtimeEligible: boolean;
   overtimeRatePerHour?: number;
   workingDaysPerMonth?: number;
@@ -75,10 +95,14 @@ export interface Worker {
   designation: string;
   joinedDate: string;
   shiftId: string;
+  branchId?: string; // NEW: Assigned Branch
   wageConfig: WageConfig;
   photoUrl?: string;
   faceDescriptor?: number[];
   status: 'ACTIVE' | 'INACTIVE';
+  uan?: string;
+  esicIp?: string;
+  pan?: string;
 }
 
 // --- ATTENDANCE ---
@@ -106,32 +130,28 @@ export interface AttendanceRecord {
   workerId: string;
   workerName: string;
   date: string;
-  shiftId: string; // Changed from 'shift object' to just ID for cleaner DB
+  shiftId: string; 
   
-  // The Timeline tracks every movement
   timeline: Punch[]; 
   
-  // Computed Status (The "Result")
   status: 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'ON_LEAVE';
   lateStatus: {
     isLate: boolean;
     lateByMins: number;
-    penaltyApplied: boolean; // True if this caused a Half Day
+    penaltyApplied: boolean;
   };
   hours: {
     gross: number;
-    net: number; // Actual worked hours (excluding breaks)
+    net: number; 
     overtime: number;
   };
 
-  // Legacy fields (kept for compatibility, but you should migrate to timeline/hours)
   inTime?: TimeRecord;
   outTime?: TimeRecord;
   calculatedHours?: AttendanceCalculations;
 }
 
 // --- PAYROLL & WAGE RECORDS ---
-
 export interface DailyWageRecord {
   id: string;
   tenantId: string;
@@ -220,11 +240,10 @@ export interface PlanLimits {
 }
 
 export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
-  TRIAL: { maxWorkers: 100, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false },
+  TRIAL: { maxWorkers: 100, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true },
   STARTER: { maxWorkers: 25, maxManagers: 1, maxShifts: 1, kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false },
   PRO: { maxWorkers: 100, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false },
   ENTERPRISE: { maxWorkers: 250, maxManagers: 9999, maxShifts: 9999, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true }
 };
 
-// --- NAVIGATION ---
 export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' ;

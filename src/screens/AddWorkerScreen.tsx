@@ -1,12 +1,13 @@
+// src/screens/AddWorkerScreen.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, 
-  Camera, CheckCircle, Loader2, Clock, Calendar 
+  Camera, CheckCircle, Loader2, Clock, Calendar, Shield 
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
-import { Worker, ShiftConfig } from '../types/index';
+import { Worker, ShiftConfig, Branch } from '../types/index';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
 import { useBackButton } from '../hooks/useBackButton'; 
@@ -21,7 +22,8 @@ const STEPS = [
   { id: 0, title: 'Personal', icon: User },
   { id: 1, title: 'Employment', icon: Briefcase },
   { id: 2, title: 'Wage Info', icon: IndianRupee },
-  { id: 3, title: 'Face Scan', icon: Camera },
+  { id: 3, title: 'Statutory', icon: Shield }, // NEW COMPLIANCE TAB
+  { id: 4, title: 'Face Scan', icon: Camera },
 ];
 
 const FACE_ANGLES = [
@@ -36,7 +38,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   const { profile } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  
+  // Dynamic Dropdown States
   const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); 
+  const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
+  const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
+  
   const isEditing = !!initialData;
   
   // Camera State
@@ -46,14 +53,19 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   const [cameraError, setCameraError] = useState<string>('');
 
   const [formData, setFormData] = useState<Partial<Worker>>({
-    name: '', phone: '', aadhar: '', dob: '', gender: '' as any, // Default to empty to force selection
-    category: 'Daily Wage', department: 'Production', designation: '', 
+    name: '', phone: '', aadhar: '', dob: '', gender: '' as any, 
+    category: 'Daily Wage', department: '', designation: '', 
     joinedDate: new Date().toISOString().split('T')[0],
     shiftId: 'default',
+    branchId: 'default',
     wageConfig: {
-      type: 'DAILY', amount: 0, overtimeEligible: false, // Default to false
-      allowances: { travel: 0, food: 0, nightShift: 0 }
+      type: 'DAILY', amount: 0, overtimeEligible: false, 
+      allowances: { travel: 0, food: 0, nightShift: 0 },
+      monthlyBreakdown: { basic: 0, hra: 0, others: 0 }
     },
+    uan: '',
+    esicIp: '',
+    pan: '',
     status: 'ACTIVE'
   });
 
@@ -68,14 +80,25 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     }
   });
 
-  // --- FETCH SHIFTS FROM SETTINGS ---
+  // --- FETCH SETTINGS (SHIFTS, BRANCHES, DEPARTMENTS) ---
   useEffect(() => {
     if (profile?.tenantId) {
       dbService.getOrgSettings(profile.tenantId).then(settings => {
         setAvailableShifts(settings.shifts);
         
-        if (!isEditing && settings.shifts.length > 0) {
-          setFormData(prev => ({ ...prev, shiftId: settings.shifts[0].id }));
+        const branches = settings.branches?.length ? settings.branches : [{id: 'default', name: 'Main Branch'}];
+        setAvailableBranches(branches);
+        
+        const depts = settings.departments?.length ? settings.departments : ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
+        setAvailableDepartments(depts);
+        
+        if (!isEditing) {
+          setFormData(prev => ({ 
+             ...prev, 
+             shiftId: settings.shifts.length > 0 ? settings.shifts[0].id : 'default',
+             branchId: branches[0].id,
+             department: depts[0]
+          }));
         }
       });
     }
@@ -94,7 +117,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   // --- CAMERA LOGIC ---
   useEffect(() => {
     faceService.loadModels();
-    if (currentStep === 3 && capturedImages[0] !== "EXISTING_DATA") {
+    // Updated step to 4 for Face Scan
+    if (currentStep === 4 && capturedImages[0] !== "EXISTING_DATA") {
       startCamera();
     } else {
       stopCamera();
@@ -136,6 +160,25 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       setCapturedImages([]); 
   };
 
+  // --- NEW: Helper to auto-calculate Monthly Gross ---
+  const handleMonthlyWageChange = (field: 'basic' | 'hra' | 'others', value: string) => {
+    const numVal = parseFloat(value) || 0;
+    setFormData(prev => {
+      const currentBreakdown = prev.wageConfig?.monthlyBreakdown || { basic: 0, hra: 0, others: 0 };
+      const updatedBreakdown = { ...currentBreakdown, [field]: numVal };
+      const newTotal = updatedBreakdown.basic + updatedBreakdown.hra + updatedBreakdown.others;
+      
+      return {
+        ...prev,
+        wageConfig: {
+          ...prev.wageConfig!,
+          monthlyBreakdown: updatedBreakdown,
+          amount: newTotal // Auto-update the Gross Amount
+        }
+      };
+    });
+  };
+
   // --- STRICT VALIDATION RULES ---
   const validateStep = (step: number): boolean => {
     if (step === 0) {
@@ -149,11 +192,15 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       if (!formData.designation?.trim()) { alert("Designation is required."); return false; }
     }
     if (step === 2) {
-      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { alert("Wage Amount is required."); return false; }
+      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { alert("Wage Amount/Gross Salary is required and must be greater than 0."); return false; }
+      if (formData.wageConfig?.type === 'MONTHLY' && (!formData.wageConfig?.monthlyBreakdown?.basic || formData.wageConfig.monthlyBreakdown.basic <= 0)) {
+         alert("Basic Salary is required for Monthly Wages to process PF accurately."); return false;
+      }
       if (formData.wageConfig?.overtimeEligible && (!formData.wageConfig.overtimeRatePerHour || formData.wageConfig.overtimeRatePerHour <= 0)) {
          alert("Overtime Rate per hour is required because Overtime is enabled."); return false; 
       }
     }
+    // Step 3 (Statutory) is optional, so no strict validation blocks progressing
     return true;
   };
 
@@ -241,7 +288,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           <h1 className="text-lg font-bold ml-2 text-gray-800">{isEditing ? 'Edit Worker' : 'New Registration'}</h1>
         </div>
         <div className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
-          Step {currentStep + 1}/4
+          {/* Changed total steps to 5 */}
+          Step {currentStep + 1}/5
         </div>
       </div>
 
@@ -321,16 +369,32 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <option>Daily Wage</option><option>Monthly</option><option>Contract</option><option>Permanent</option>
                 </select>
               </div>
+
+              {/* DYNAMIC PRIMARY BRANCH */}
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Department *</label>
-                <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white"
-                  value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})}>
-                  <option>Production</option><option>Packaging</option><option>Maintenance</option><option>Loading</option><option>Quality</option>
+                <label className="text-xs font-bold text-gray-500 uppercase">Primary Branch *</label>
+                <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                  value={formData.branchId} onChange={e => setFormData({...formData, branchId: e.target.value})}>
+                  {availableBranches.map(branch => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
                 </select>
               </div>
+
+              {/* DYNAMIC DEPARTMENT */}
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">Department *</label>
+                <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                  value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})}>
+                  {availableDepartments.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Designation *</label>
-                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none"
+                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                   value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} placeholder="e.g. Helper, Operator" />
               </div>
               
@@ -360,7 +424,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {currentStep === 2 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-lg font-bold text-gray-800 mb-2">Wage Configuration</h2>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mb-4">
                <div 
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'DAILY'}}))}
                  className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col items-center justify-center space-y-2 ${
@@ -380,18 +444,59 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <span className="font-bold text-sm">Monthly Salary</span>
                </div>
             </div>
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase">
-                {formData.wageConfig?.type === 'DAILY' ? 'Daily Rate Amount' : 'Monthly Salary Amount'} *
-              </label>
-              <div className="relative mt-2">
-                <IndianRupee className="absolute left-3 top-3.5 text-gray-400" size={18}/>
-                <input type="number" className="w-full pl-10 p-3 border border-gray-200 rounded-xl font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder={formData.wageConfig?.type === 'DAILY' ? "e.g. 500" : "e.g. 15000"}
-                  value={formData.wageConfig?.amount || ''} 
-                  onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value)}})} />
+
+            {/* --- ADAPTIVE WAGE INPUTS --- */}
+            {formData.wageConfig?.type === 'DAILY' ? (
+              <div className="mt-4 animate-in fade-in">
+                <label className="text-xs font-bold text-gray-500 uppercase">Daily Rate Amount *</label>
+                <div className="relative mt-2">
+                  <IndianRupee className="absolute left-3 top-3.5 text-gray-400" size={18}/>
+                  <input type="number" className="w-full pl-10 p-3 border border-gray-200 rounded-xl font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g. 500"
+                    value={formData.wageConfig?.amount || ''} 
+                    onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value)}})} />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100 animate-in fade-in slide-in-from-top-2">
+                <h3 className="text-sm font-bold text-blue-900 mb-4 flex items-center">
+                  <Briefcase size={16} className="mr-2"/> Monthly Salary Structure
+                </h3>
+                <div className="space-y-3">
+                    <div>
+                        <label className="text-[10px] font-bold text-blue-800 uppercase">Basic + DA (PF Applicable) *</label>
+                        <div className="relative mt-1">
+                          <IndianRupee className="absolute left-3 top-2.5 text-blue-400" size={14}/>
+                          <input type="number" className="w-full pl-8 p-2 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={formData.wageConfig?.monthlyBreakdown?.basic || ''}
+                            onChange={e => handleMonthlyWageChange('basic', e.target.value)} placeholder="e.g. 15000" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-blue-800 uppercase">HRA (House Rent Allowance)</label>
+                        <div className="relative mt-1">
+                          <IndianRupee className="absolute left-3 top-2.5 text-blue-400" size={14}/>
+                          <input type="number" className="w-full pl-8 p-2 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={formData.wageConfig?.monthlyBreakdown?.hra || ''}
+                            onChange={e => handleMonthlyWageChange('hra', e.target.value)} placeholder="e.g. 5000" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-blue-800 uppercase">Other Allowances</label>
+                        <div className="relative mt-1">
+                          <IndianRupee className="absolute left-3 top-2.5 text-blue-400" size={14}/>
+                          <input type="number" className="w-full pl-8 p-2 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={formData.wageConfig?.monthlyBreakdown?.others || ''}
+                            onChange={e => handleMonthlyWageChange('others', e.target.value)} placeholder="e.g. 2000" />
+                        </div>
+                    </div>
+                </div>
+                <div className="mt-4 pt-3 border-t border-blue-200 flex justify-between items-center">
+                    <span className="text-xs font-bold text-blue-900 uppercase">Total Gross Salary</span>
+                    <span className="text-xl font-black text-blue-700">₹ {formData.wageConfig?.amount || 0}</span>
+                </div>
+              </div>
+            )}
 
             <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
                 <div className="flex items-center justify-between mb-3">
@@ -447,8 +552,32 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           </div>
         )}
 
-        {/* STEP 4: FACE SCAN */}
+        {/* STEP 4: STATUTORY (NEW) */}
         {currentStep === 3 && (
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-lg font-bold text-gray-800 mb-2">Statutory Details (Optional)</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">UAN (PF Number)</label>
+                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  maxLength={12} value={formData.uan || ''} onChange={e => setFormData({...formData, uan: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UAN" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">ESIC IP Number</label>
+                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  maxLength={10} value={formData.esicIp || ''} onChange={e => setFormData({...formData, esicIp: e.target.value.replace(/\D/g, '')})} placeholder="10-digit ESIC Number" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">PAN Number</label>
+                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase"
+                  maxLength={10} value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value.toUpperCase()})} placeholder="e.g. ABCDE1234F" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 5: FACE SCAN */}
+        {currentStep === 4 && (
           <div className="flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
              <h2 className="text-lg font-bold text-gray-800 mb-4">Face Registration *</h2>
              {capturedImages[0] === "EXISTING_DATA" ? (
@@ -527,7 +656,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       </div>
 
       {/* Footer Navigation */}
-      {currentStep < 3 && (
+      {/* Updated condition to < 4 to allow navigation buttons up to Face Scan */}
+      {currentStep < 4 && (
         <div className="p-4 bg-white border-t border-gray-100 flex justify-between">
           <button onClick={() => currentStep > 0 ? setCurrentStep(c => c - 1) : onBack()} 
             className="px-6 py-3 rounded-xl text-gray-500 font-bold hover:bg-gray-50">

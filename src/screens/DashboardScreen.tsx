@@ -1,15 +1,15 @@
 // src/screens/DashboardScreen.tsx
 import React, { useState, useEffect } from 'react';
 import { 
-  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock
+  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { AttendanceRecord } from '../types/index';
+import { AttendanceRecord, OrgSettings } from '../types/index';
 
 interface Props {
-  onOpenKiosk: () => void;
+  onOpenKiosk: (branchId: string) => void; // UPDATED to require branch ID
 }
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
@@ -23,12 +23,18 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       halfDay: 0,
       absent: 0, 
       late: 0, 
-      pending: 0, // Workers checked in but < 4 hours
+      pending: 0, 
       onLeave: 0 
   });
   
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // NEW DYNAMIC BRANCH STATE
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [selectedDashboardBranch, setSelectedDashboardBranch] = useState<string>('ALL');
+  const [showKioskModal, setShowKioskModal] = useState(false);
+  const [selectedKioskBranch, setSelectedKioskBranch] = useState<string>('default');
 
   const refreshData = async () => {
     if (!profile?.tenantId) return;
@@ -40,7 +46,14 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
         dbService.getOrgSettings(profile.tenantId)
       ]);
 
-      const activeWorkers = workers.filter(w => w.status === 'ACTIVE');
+      setOrgSettings(settings);
+
+      // --- FILTER LOGIC BY BRANCH ---
+      const activeWorkers = workers.filter(w => 
+          w.status === 'ACTIVE' && 
+          (selectedDashboardBranch === 'ALL' || (w.branchId || 'default') === selectedDashboardBranch)
+      );
+      
       const total = activeWorkers.length;
       
       let presentCount = 0;
@@ -49,18 +62,19 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       let onLeaveCount = 0;
       let pendingCount = 0;
 
+      // Only process attendance for filtered workers
+      const activeWorkerIds = new Set(activeWorkers.map(w => w.id));
+      const filteredAttendance = attendance.filter(r => activeWorkerIds.has(r.workerId));
+
       // Process each attendance record with real-time logic
-      const processedActivity = attendance.map(record => {
-          // 1. Calculate real-time duration (Current Time - In Time)
+      const processedActivity = filteredAttendance.map(record => {
           const currentHours = attendanceLogic.calculateHours(record.timeline, settings.enableBreakTracking);
           
-          // 2. Determine if currently active (Last punch was IN)
           const lastPunch = record.timeline && record.timeline.length > 0 
               ? record.timeline[record.timeline.length - 1] 
               : null;
           const isCurrentlyIn = lastPunch?.type === 'IN';
 
-          // 3. Dynamic Status Calculation
           let computedStatus = 'ABSENT';
           
           if (record.status === 'ON_LEAVE') {
@@ -71,16 +85,14 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               } else if (currentHours >= 4) {
                   computedStatus = 'HALF_DAY';
               } else {
-                  // Less than 4 hours
                   if (isCurrentlyIn) {
-                      computedStatus = 'PENDING'; // Still working, hasn't reached threshold
+                      computedStatus = 'PENDING'; 
                   } else {
-                      computedStatus = 'ABSENT'; // Checked out early
+                      computedStatus = 'ABSENT'; 
                   }
               }
           }
 
-          // 4. Check Late Status (Database source of truth)
           if (record.lateStatus?.isLate) {
               lateCount++;
           }
@@ -102,7 +114,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
           else if (r.computedStatus === 'ON_LEAVE') onLeaveCount++;
       });
 
-      // Absent = Total Active - (Anyone who has shown up or is on leave)
       const attendedOrLeaved = presentCount + halfDayCount + pendingCount + onLeaveCount;
       const absentCount = Math.max(0, total - attendedOrLeaved);
 
@@ -116,13 +127,12 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
           onLeave: onLeaveCount 
       });
 
-      // Sort by most recent activity time
       const sorted = processedActivity.sort((a, b) => {
         const getLastTime = (r: any) => {
            if (r.timeline && r.timeline.length > 0) {
               return new Date(r.timeline[r.timeline.length - 1].timestamp).getTime();
            }
-           return new Date(r.date).getTime(); // Fallback
+           return new Date(r.date).getTime(); 
         };
         return getLastTime(b) - getLastTime(a);
       });
@@ -135,7 +145,18 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
     }
   };
 
-  useEffect(() => { refreshData(); }, [profile]);
+  useEffect(() => { refreshData(); }, [profile, selectedDashboardBranch]);
+
+  // Handle opening the Kiosk Logic
+  const handleKioskLaunch = () => {
+      const branches = orgSettings?.branches || [];
+      if (branches.length > 1) {
+          setSelectedKioskBranch(branches[0].id);
+          setShowKioskModal(true);
+      } else {
+          onOpenKiosk(branches[0]?.id || 'default');
+      }
+  };
 
   // Reusable Stat Card Component
   const StatCard = ({ icon: Icon, value, label, subLabel, color, bg }: any) => (
@@ -153,20 +174,35 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
 
   return (
     <div className="p-4 space-y-6 pb-24 bg-gray-50 min-h-full">
-        {/* Header */}
-        <div className="flex justify-between items-center">
+        {/* Header & Branch Filter */}
+        <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center">
             <div>
                 <h1 className="text-xl font-bold text-gray-800">Dashboard</h1>
                 <p className="text-xs text-gray-500">{profile?.companyName || 'Overview'}</p>
             </div>
-            <button onClick={refreshData} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100 transition-colors">
-                <RefreshCw size={18} className={loading ? "animate-spin text-blue-600" : "text-gray-600"}/>
-            </button>
+            
+            <div className="flex items-center space-x-2">
+                {orgSettings?.branches && orgSettings.branches.length > 1 && (
+                    <select 
+                       className="bg-white border border-gray-200 text-sm font-bold text-gray-700 py-1.5 px-3 rounded-lg shadow-sm outline-none"
+                       value={selectedDashboardBranch} 
+                       onChange={e => setSelectedDashboardBranch(e.target.value)}
+                    >
+                       <option value="ALL">All Branches</option>
+                       {orgSettings.branches.map(b => (
+                           <option key={b.id} value={b.id}>{b.name}</option>
+                       ))}
+                    </select>
+                )}
+                <button onClick={refreshData} className="p-2 bg-white rounded-lg border border-gray-200 shadow-sm hover:bg-gray-100 transition-colors">
+                    <RefreshCw size={18} className={loading ? "animate-spin text-blue-600" : "text-gray-600"}/>
+                </button>
+            </div>
         </div>
 
-        {/* --- CONDITIONAL KIOSK LAUNCHER BASED ON TIER LIMITS --- */}
+        {/* --- CONDITIONAL KIOSK LAUNCHER --- */}
         {limits?.kioskEnabled !== false ? (
-            <button onClick={onOpenKiosk} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
+            <button onClick={handleKioskLaunch} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
                 <div className="flex items-center space-x-3">
                     <div className="bg-indigo-800 p-2 rounded-lg"><PlayCircle size={24} className="text-indigo-200" /></div>
                     <div className="text-left">
@@ -185,6 +221,39 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                         <p className="text-xs text-gray-500">Upgrade to Pro to unlock AI Attendance</p>
                     </div>
                 </div>
+            </div>
+        )}
+
+        {/* KIOSK BRANCH SELECTOR MODAL */}
+        {showKioskModal && (
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+               <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
+                   <h2 className="text-lg font-black text-gray-900 mb-2">Select Kiosk Location</h2>
+                   <p className="text-xs text-gray-500 mb-6">Which factory/godown is this device located at? We will only download faces for this branch to ensure maximum performance.</p>
+                   
+                   <div className="space-y-3 mb-6">
+                       {orgSettings?.branches?.map(b => (
+                           <div 
+                              key={b.id} 
+                              onClick={() => setSelectedKioskBranch(b.id)}
+                              className={`p-4 rounded-xl border-2 cursor-pointer flex items-center transition-all ${selectedKioskBranch === b.id ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'}`}
+                           >
+                              <MapPin size={18} className={selectedKioskBranch === b.id ? "text-indigo-600 mr-3" : "text-gray-400 mr-3"} />
+                              <span className="font-bold text-sm text-gray-800">{b.name}</span>
+                           </div>
+                       ))}
+                   </div>
+
+                   <div className="flex space-x-3">
+                       <button onClick={() => setShowKioskModal(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl text-sm hover:bg-gray-200">Cancel</button>
+                       <button 
+                          onClick={() => { setShowKioskModal(false); onOpenKiosk(selectedKioskBranch); }} 
+                          className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl text-sm shadow-lg shadow-indigo-200 hover:bg-indigo-700"
+                       >
+                          Launch Device
+                       </button>
+                   </div>
+               </div>
             </div>
         )}
 

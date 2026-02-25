@@ -101,7 +101,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
               <Menu size={24} />
             </button>
             <div className="ml-2">
-              <h1 className="text-lg font-bold tracking-tight">WorkForcePro</h1>
+              <h1 className="text-lg font-bold tracking-tight">WorkForce</h1>
               <p className="text-blue-100 text-[10px] uppercase tracking-wide">
                 {profile?.companyName || 'Factory Admin'}
               </p>

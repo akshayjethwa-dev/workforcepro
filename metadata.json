@@ -1,5 +1,5 @@
 {
-  "name": "WorkForcePro",
+  "name": "WorkForce",
   "description": "A comprehensive workforce management application for Indian factories, featuring attendance tracking, payroll management, and worker profiles.",
   "requestFramePermissions": [
     "camera"

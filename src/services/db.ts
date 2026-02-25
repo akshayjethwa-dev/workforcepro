@@ -1,4 +1,3 @@
-// src/services/db.ts
 import { 
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
@@ -68,33 +67,26 @@ export const dbService = {
     await updateDoc(docRef, data);
   },
 
-  // FIXED: Cascade Delete with Tenant Security Rule Compliance
   deleteWorker: async (tenantId: string, workerId: string) => {
-    // 1. Fetch and Cascade delete Attendance Records securely
     const attendanceQ = query(collection(db, "attendance"), where("tenantId", "==", tenantId));
     const attendanceSnap = await getDocs(attendanceQ);
     const attendanceDeletes = attendanceSnap.docs
         .filter(d => d.data().workerId === workerId)
         .map(d => deleteDoc(doc(db, "attendance", d.id)));
 
-    // 2. Fetch and Cascade delete Advances securely
     const advancesQ = query(collection(db, "advances"), where("tenantId", "==", tenantId));
     const advancesSnap = await getDocs(advancesQ);
     const advanceDeletes = advancesSnap.docs
         .filter(d => d.data().workerId === workerId)
         .map(d => deleteDoc(doc(db, "advances", d.id)));
 
-    // 3. Fetch and Cascade delete Payrolls securely
     const payrollsQ = query(collection(db, "payrolls"), where("tenantId", "==", tenantId));
     const payrollsSnap = await getDocs(payrollsQ);
     const payrollDeletes = payrollsSnap.docs
         .filter(d => d.data().workerId === workerId)
         .map(d => deleteDoc(doc(db, "payrolls", d.id)));
 
-    // Execute all related deletions in parallel
     await Promise.all([...attendanceDeletes, ...advanceDeletes, ...payrollDeletes]);
-
-    // 4. FINALLY delete the worker profile document itself
     await deleteDoc(doc(db, "workers", workerId));
   },
 
@@ -117,16 +109,11 @@ export const dbService = {
     await updateDoc(docRef, { read: true });
   },
 
-  // --- NEW: Delete all notifications permanently ---
   deleteAllNotifications: async (tenantId: string) => {
     if (!tenantId) return;
     const q = query(getNotificationsRef(), where("tenantId", "==", tenantId));
     const snapshot = await getDocs(q);
-    
-    // Create an array of delete promises
     const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, "notifications", d.id)));
-    
-    // Execute all deletions in parallel
     await Promise.all(deletePromises);
   },
 
@@ -180,27 +167,25 @@ export const dbService = {
   getOrgSettings: async (tenantId: string): Promise<OrgSettings> => {
     const docRef = doc(db, "settings", tenantId);
     const snap = await getDoc(docRef);
+    
     const defaultShifts: ShiftConfig[] = [{
-      id: 'default',
-      name: 'General Shift',
-      startTime: '09:00',
-      endTime: '18:00',
-      gracePeriodMins: 15,
-      maxGraceAllowed: 3,
-      breakDurationMins: 60,
-      minOvertimeMins:60,
-      minHalfDayHours: 4
+      id: 'default', name: 'General Shift', startTime: '09:00', endTime: '18:00',
+      gracePeriodMins: 15, maxGraceAllowed: 3, breakDurationMins: 60, minOvertimeMins:60, minHalfDayHours: 4
     }];
+    const defaultDepartments = ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
+    const defaultBranch = { id: 'default', name: 'Main Branch' };
 
     if (snap.exists()) {
       const data = snap.data();
       return {
         shifts: data.shifts || defaultShifts,
         enableBreakTracking: data.enableBreakTracking ?? false,
-        baseLocation: data.baseLocation
+        baseLocation: data.baseLocation,
+        branches: data.branches?.length ? data.branches : [{ ...defaultBranch, location: data.baseLocation }],
+        departments: data.departments?.length ? data.departments : defaultDepartments
       };
     }
-    return { shifts: defaultShifts, enableBreakTracking: false };
+    return { shifts: defaultShifts, enableBreakTracking: false, branches: [defaultBranch], departments: defaultDepartments };
   },
 
   saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
@@ -238,11 +223,7 @@ export const dbService = {
 
   inviteManager: async (adminTenantId: string, managerEmail: string, managerName: string) => {
     await setDoc(doc(db, "invites", managerEmail), {
-      email: managerEmail,
-      name: managerName,
-      tenantId: adminTenantId,
-      role: 'SUPERVISOR',
-      createdAt: new Date().toISOString()
+      email: managerEmail, name: managerName, tenantId: adminTenantId, role: 'SUPERVISOR', createdAt: new Date().toISOString()
     });
   },
 

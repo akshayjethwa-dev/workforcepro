@@ -8,7 +8,8 @@ import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 import { useBackButton } from '../hooks/useBackButton';
 
-interface Props { onExit: () => void; }
+// NEW PROP: branchId determines which faces to download
+interface Props { onExit: () => void; branchId: string; }
 
 // --- SOUND GENERATOR HELPER ---
 const playSound = (type: 'SUCCESS' | 'ERROR') => {
@@ -24,25 +25,19 @@ const playSound = (type: 'SUCCESS' | 'ERROR') => {
     gainNode.connect(audioCtx.destination);
 
     if (type === 'SUCCESS') {
-      // Pleasant high-pitched "ding"
       oscillator.type = 'sine';
       oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); 
       oscillator.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
-      
       gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-      
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.3);
     } else {
-      // Low-pitched warning "buzz"
       oscillator.type = 'square';
       oscillator.frequency.setValueAtTime(250, audioCtx.currentTime); 
       oscillator.frequency.setValueAtTime(200, audioCtx.currentTime + 0.1);
-      
       gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
-      
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.4);
     }
@@ -51,7 +46,7 @@ const playSound = (type: 'SUCCESS' | 'ERROR') => {
   }
 };
 
-export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
+export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => {
   const { profile } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   
@@ -67,10 +62,9 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
   const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT'} | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
 
-  // --- KIOSK BACK BUTTON INTERCEPTOR ---
   useBackButton(() => {
     onExit();
-    return true; // We handled it (closing Kiosk to go back to Dashboard)
+    return true; 
   });
 
   // 1. INITIAL SETUP
@@ -83,21 +77,27 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
         console.log("Models Loaded.");
 
         if (profile?.tenantId) {
-            setFeedback("Fetching Workers...");
+            setFeedback("Loading Local Branch Faces...");
             const [w, settings] = await Promise.all([
                dbService.getWorkers(profile.tenantId),
                dbService.getOrgSettings(profile.tenantId)
             ]);
             
-            const validWorkers = w.filter(worker => worker.faceDescriptor && worker.faceDescriptor.length > 0);
+            // --- OPTIMIZATION FILTER ---
+            // Only load face descriptors into RAM for workers assigned to THIS branch
+            const validWorkers = w.filter(worker => 
+                 worker.faceDescriptor && 
+                 worker.faceDescriptor.length > 0 && 
+                 (worker.branchId || 'default') === branchId
+            );
             
             workersRef.current = validWorkers;
             settingsRef.current = settings; 
             
             if (validWorkers.length === 0) {
-                setFeedback("No workers found with Face Data.");
+                setFeedback("No registered faces for this Branch.");
             } else {
-                setFeedback("Look at Camera");
+                setFeedback(`Ready. Loaded ${validWorkers.length} faces.`);
             }
         }
       } catch (e) {
@@ -121,7 +121,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
     return () => {
         processingRef.current = false;
     };
-  }, [profile]);
+  }, [profile, branchId]);
 
   // 2. SCANNING LOOP
   useEffect(() => {
@@ -170,7 +170,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
             
             if (diffSeconds < 10) { 
                 console.log("Cooldown active");
-                playSound('ERROR'); // Play error sound for cooldown
+                playSound('ERROR'); 
                 setErrorFeedback(`Wait ${Math.ceil(10 - diffSeconds)}s...`);
                 
                 setTimeout(() => { 
@@ -213,11 +213,10 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
 
         await dbService.markAttendance(finalRecord);
         
-        playSound('SUCCESS'); // Play success sound on successful punch
+        playSound('SUCCESS'); 
         setDetectedWorker({ worker, action: punchType });
         setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
 
-        // MODIFIED: Close the Kiosk and return to Dashboard after success
         setTimeout(() => {
             setDetectedWorker(null);
             processingRef.current = false; 
@@ -226,7 +225,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit }) => {
 
     } catch (e: any) {
         console.error("Handle Punch Error", e);
-        playSound('ERROR'); // Play error sound on system failure
+        playSound('ERROR'); 
         setFeedback("System Error: " + (e.message || "Unknown"));
         processingRef.current = false;
         setTimeout(() => setFeedback("Look at Camera"), 2000);
