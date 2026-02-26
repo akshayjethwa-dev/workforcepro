@@ -3,7 +3,6 @@ import {
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll } from "../types/index";
-import { syncService } from './syncService';
 
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
@@ -144,15 +143,15 @@ export const dbService = {
   },
 
   markAttendance: async (record: AttendanceRecord) => {
-    if (!navigator.onLine) {
-       syncService.enqueue(record);
-       return;
-    }
+    // Firebase persistentLocalCache automatically handles offline queueing.
+    // If there is no internet, this write gets saved locally and synced when online.
+    const recordId = `${record.tenantId}_${record.workerId}_${record.date}`;
+    const finalRecord = { ...record, id: recordId };
+    
     try {
-       await dbService.markAttendanceOnline(record);
+      await setDoc(doc(db, "attendance", recordId), finalRecord, { merge: true });
     } catch (e) {
-       console.warn("Network write failed, queueing offline");
-       syncService.enqueue(record);
+      console.error("Failed to write to local cache", e);
     }
   },
 
@@ -186,7 +185,7 @@ export const dbService = {
       return {
         shifts: data.shifts || defaultShifts,
         enableBreakTracking: data.enableBreakTracking ?? false,
-        strictLiveness: data.strictLiveness ?? false, // NEW
+        strictLiveness: data.strictLiveness ?? false,
         baseLocation: data.baseLocation,
         branches: data.branches?.length ? data.branches : [{ ...defaultBranch, location: data.baseLocation }],
         departments: data.departments?.length ? data.departments : defaultDepartments
