@@ -43,6 +43,7 @@ export interface Branch {
 export interface OrgSettings {
   shifts: ShiftConfig[];
   enableBreakTracking: boolean; // Toggle for "Advanced Logic"
+  strictLiveness?: boolean;
   baseLocation?: { lat: number; lng: number; radius: number; address?: string }; // Legacy
   branches?: Branch[]; // NEW: Multi-branch support
   departments?: string[]; // NEW: Dynamic departments
@@ -225,6 +226,7 @@ export interface AppNotification {
   tenantId: string;
   title: string;
   message: string;
+  imageUrl?: string;
   type: 'INFO' | 'WARNING' | 'ALERT';
   createdAt: string;
   read: boolean;

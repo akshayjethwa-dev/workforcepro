@@ -9,15 +9,15 @@ const humanConfig = {
   face: {
     enabled: true,
     detector: { rotation: false }, // faster processing
-    mesh: { enabled: false },      // we don't need 3D mesh
-    iris: { enabled: false },      // we don't need iris
+    mesh: { enabled: true },       // MUST BE TRUE for blink detection
+    iris: { enabled: true },       // MUST BE TRUE for eye tracking
     description: { enabled: true }, // <--- THIS IS CRITICAL (Face Recognition)
     emotion: { enabled: false },
   },
   body: { enabled: false },
   hand: { enabled: false },
   object: { enabled: false },
-  gesture: { enabled: false },
+  gesture: { enabled: true },      // NEW: Enable built-in gestures (blink)
 };
 
 // Singleton instance
@@ -57,27 +57,21 @@ export const faceService = {
   },
 
   /**
-   * Matches a face from the camera against a list of known workers
+   * Original Match function (kept for backward compatibility if needed elsewhere)
    */
   findMatch: async (input: HTMLVideoElement, workers: Worker[]): Promise<{ worker: Worker; distance: number } | null> => {
     if (!faceService.isLoaded) await faceService.loadModels();
     
-    // 1. Scan current frame
     const result = await human.detect(input);
     if (!result || !result.face || result.face.length === 0) return null;
 
     const currentEmbedding = result.face[0].embedding;
-
-    // 2. Compare against DB
     let bestMatch: Worker | null = null;
-    let bestScore = 0; // Similarity score (Higher is better in Human API)
+    let bestScore = 0; 
 
     workers.forEach(worker => {
       if (worker.faceDescriptor && worker.faceDescriptor.length > 0) {
-        // Human library has a built-in similarity function
-        // similarity returns 0 to 1 (1 = exact match)
         const score = human.match.similarity(currentEmbedding, worker.faceDescriptor);
-        
         if (score > bestScore) {
           bestScore = score;
           bestMatch = worker;
@@ -85,12 +79,47 @@ export const faceService = {
       }
     });
 
-    // 3. Threshold Check
-    // With Human library, > 0.6 is usually a good match. > 0.8 is very strong.
-    // We invert it to "distance" concept for compatibility (1 - score) if needed, 
-    // or just return score directly.
     if (bestMatch && bestScore > 0.65) {
-      return { worker: bestMatch, distance: bestScore }; // Returning score as "distance" context
+      return { worker: bestMatch, distance: bestScore };
+    }
+    
+    return null;
+  },
+
+  /**
+   * NEW: Matches face AND checks for liveness gestures (like blinking)
+   */
+  findMatchAndLiveness: async (input: HTMLVideoElement, workers: Worker[]): Promise<{ worker: Worker; distance: number; hasBlinked: boolean } | null> => {
+    if (!faceService.isLoaded) await faceService.loadModels();
+    
+    // Scan current frame
+    const result = await human.detect(input);
+    if (!result || !result.face || result.face.length === 0) return null;
+
+    const currentEmbedding = result.face[0].embedding;
+
+    // FIX: Check if the AI detected any gesture containing "blink" (e.g., "blink left eye" or "blink right eye")
+    let hasBlinked = false;
+    if (result.gesture && result.gesture.length > 0) {
+      hasBlinked = result.gesture.some(g => g.gesture.includes('blink'));
+    }
+
+    // Compare against DB
+    let bestMatch: Worker | null = null;
+    let bestScore = 0; 
+
+    workers.forEach(worker => {
+      if (worker.faceDescriptor && worker.faceDescriptor.length > 0) {
+        const score = human.match.similarity(currentEmbedding, worker.faceDescriptor);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = worker;
+        }
+      }
+    });
+
+    if (bestMatch && bestScore > 0.65) {
+      return { worker: bestMatch, distance: bestScore, hasBlinked };
     }
     
     return null;

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Save, Plus, Trash2, Clock, AlertCircle, CheckCircle, 
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
-  GitBranch, Layers, X
+  GitBranch, Layers, X, ScanFace
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
@@ -313,7 +313,7 @@ export const SettingsScreen: React.FC = () => {
               </label>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 mb-6">
                 <div className="flex items-center text-slate-600 mb-2">
                     <Info size={14} className="mr-2 text-indigo-500" />
                     <span className="text-xs font-bold">What does this do?</span>
@@ -325,6 +325,47 @@ export const SettingsScreen: React.FC = () => {
                     </li>
                 </ul>
             </div>
+
+            {/* --- NEW: LIVENESS DETECTION TOGGLE --- */}
+            <div className="flex items-center justify-between mb-4 pt-6 border-t border-slate-100">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-purple-50 rounded-xl">
+                    <ScanFace className="text-purple-500" size={20} />
+                </div>
+                <div>
+                    <p className="text-sm font-black text-slate-800 uppercase tracking-tight">Strict Liveness Detection</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">Anti-Spoofing & Proxy Prevention</p>
+                </div>
+              </div>
+              
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={settings?.strictLiveness || false} 
+                    onChange={(e) => setSettings(s => s ? {...s, strictLiveness: e.target.checked} : null)}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              </label>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                <div className="flex items-center text-slate-600 mb-2">
+                    <Info size={14} className="mr-2 text-purple-500" />
+                    <span className="text-xs font-bold">What does this do?</span>
+                </div>
+                <ul className="space-y-2">
+                    <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
+                        <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
+                        Requires workers to physically blink when facing the Kiosk.
+                    </li>
+                    <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
+                        <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
+                        Prevents "Proxy Punching" via printed photos or phone screens. Logs 3 failed attempts to Admin Notifications.
+                    </li>
+                </ul>
+            </div>
+
           </div>
         </div>
       )}

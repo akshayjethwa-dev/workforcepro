@@ -55,6 +55,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
   const workersRef = useRef<Worker[]>([]);
   const settingsRef = useRef<OrgSettings>({ shifts: [], enableBreakTracking: false });
   
+  // Liveness States
+  const [livenessState, setLivenessState] = useState<'SCANNING' | 'CHALLENGE'>('SCANNING');
+  const targetWorkerRef = useRef<Worker | null>(null);
+  const livenessTimerRef = useRef<number>(0);
+  const failedAttemptsRef = useRef<Record<string, number>>({});
+
   const [feedback, setFeedback] = useState("Initializing System...");
   const [modelsLoaded, setModelsLoaded] = useState(false);
   
@@ -83,12 +89,22 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
                dbService.getOrgSettings(profile.tenantId)
             ]);
             
-            // --- OPTIMIZATION FILTER ---
-            // Only load face descriptors into RAM for workers assigned to THIS branch
-            const validWorkers = w.filter(worker => 
+            // --- OPTIMIZATION FILTER & FIREBASE FIX ---
+            // Safely handle missing/undefined branch IDs
+            const targetBranch = branchId || 'default';
+
+            const validWorkers = w.map(worker => {
+                // FIX: Firestore sometimes converts Float32Arrays into Objects {0: val, 1: val}. 
+                // We must convert it back to a standard Array for the .length check and AI matcher.
+                let fd = worker.faceDescriptor;
+                if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
+                    fd = Object.values(fd) as number[];
+                }
+                return { ...worker, faceDescriptor: fd };
+            }).filter(worker => 
                  worker.faceDescriptor && 
                  worker.faceDescriptor.length > 0 && 
-                 (worker.branchId || 'default') === branchId
+                 (worker.branchId || 'default') === targetBranch
             );
             
             workersRef.current = validWorkers;
@@ -96,6 +112,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             
             if (validWorkers.length === 0) {
                 setFeedback("No registered faces for this Branch.");
+                console.warn(`0 faces found. Total workers in DB: ${w.length}. Target Branch: ${targetBranch}`);
             } else {
                 setFeedback(`Ready. Loaded ${validWorkers.length} faces.`);
             }
@@ -127,26 +144,127 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
   useEffect(() => {
     if (!modelsLoaded) return;
 
+    // Faster interval needed to catch quick blinks
     const scanInterval = setInterval(async () => {
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
            return;
        }
 
        try {
-           const match = await faceService.findMatch(videoRef.current, workersRef.current);
+           const matchResult = await faceService.findMatchAndLiveness(videoRef.current, workersRef.current);
            
-           if (match && match.distance > 0.65) {
-               console.log("Face Found:", match.worker.name);
-               await handlePunch(match.worker);
+           if (!matchResult) {
+               // If person leaves frame, reset challenge
+               if (livenessState === 'CHALLENGE') {
+                   setLivenessState('SCANNING');
+                   setFeedback("Look at Camera");
+                   targetWorkerRef.current = null;
+               }
+               return;
            }
+
+           // --- STEP 1: IDENTITY MATCHED ---
+           if (livenessState === 'SCANNING') {
+               if (settingsRef.current?.strictLiveness) {
+                   // Start Liveness Challenge
+                   setLivenessState('CHALLENGE');
+                   targetWorkerRef.current = matchResult.worker;
+                   livenessTimerRef.current = Date.now();
+                   setFeedback(`Hi ${matchResult.worker.name.split(' ')[0]}, please BLINK to verify...`);
+                   playSound('SUCCESS'); // Soft ping to grab attention
+               } else {
+                   // Standard Punch (No Liveness logic)
+                   await handlePunch(matchResult.worker);
+               }
+           } 
+           // --- STEP 2: LIVENESS CHALLENGE ACTIVE ---
+           else if (livenessState === 'CHALLENGE' && targetWorkerRef.current) {
+               // Ensure the same person is still in the frame
+               if (matchResult.worker.id === targetWorkerRef.current.id) {
+                   
+                   // Check for Blink
+                   if (matchResult.hasBlinked) {
+                       setFeedback("Liveness Verified!");
+                       setLivenessState('SCANNING');
+                       await handlePunch(matchResult.worker);
+                       targetWorkerRef.current = null;
+                   } 
+                   // Check for Timeout (3 seconds)
+                   else if (Date.now() - livenessTimerRef.current > 3000) {
+                       handleSpoofFailure(targetWorkerRef.current);
+                   }
+
+               } else {
+                   // A different person stepped into the frame
+                   setLivenessState('SCANNING');
+                   setFeedback("Look at Camera");
+               }
+           }
+
        } catch (e) {
            console.error("Scan Loop Error", e);
            processingRef.current = false;
        }
-    }, 500); 
+    }, 150); // Using 150ms to make sure we don't miss quick blinks
 
     return () => clearInterval(scanInterval);
-  }, [modelsLoaded]);
+  }, [modelsLoaded, livenessState]);
+
+  const handleSpoofFailure = async (worker: Worker) => {
+    processingRef.current = true; // Pause scanning
+    playSound('ERROR');
+    
+    const fails = (failedAttemptsRef.current[worker.id] || 0) + 1;
+    failedAttemptsRef.current[worker.id] = fails;
+
+    if (fails >= 3) {
+        setFeedback("🚨 SPOOFING ATTEMPT LOGGED!");
+        
+        // Capture Image of the spoofer
+        let base64Image = "";
+        if (videoRef.current) {
+            const canvas = document.createElement('canvas');
+            canvas.width = videoRef.current.videoWidth;
+            canvas.height = videoRef.current.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(videoRef.current, 0, 0);
+                base64Image = canvas.toDataURL('image/jpeg', 0.5); // compress slightly
+            }
+        }
+
+        // Send Alert to Admin
+        if (profile?.tenantId) {
+            await dbService.addNotification({
+                tenantId: profile.tenantId,
+                title: "⚠️ Security Alert: Liveness Failed",
+                message: `Multiple failed liveness checks for ${worker.name}. This may be a proxy punch attempt.`,
+                imageUrl: base64Image,
+                type: 'ALERT',
+                createdAt: new Date().toISOString(),
+                read: false
+            });
+        }
+
+        // Reset worker attempts after logging so they can try again later if it was a mistake
+        failedAttemptsRef.current[worker.id] = 0;
+
+        setTimeout(() => {
+            setLivenessState('SCANNING');
+            setFeedback("Look at Camera");
+            processingRef.current = false;
+            targetWorkerRef.current = null;
+        }, 3000);
+    } else {
+        setFeedback("Verification Failed. Please blink clearly.");
+        setTimeout(() => {
+            setLivenessState('SCANNING');
+            setFeedback("Look at Camera");
+            processingRef.current = false;
+            targetWorkerRef.current = null;
+        }, 2000);
+    }
+  };
 
   const handlePunch = async (worker: Worker) => {
     processingRef.current = true;
@@ -251,11 +369,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
          
          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-             <div className="w-72 h-72 border-2 border-white/30 rounded-full flex items-center justify-center">
+             <div className={`w-72 h-72 border-4 rounded-full flex items-center justify-center transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'border-purple-500' : 'border-white/30'}`}>
                  <div className="w-64 h-64 border-2 border-dashed border-white/50 rounded-full opacity-50"></div>
              </div>
-             <p className="absolute mt-80 text-white/70 text-sm font-bold bg-black/20 px-3 py-1 rounded-full backdrop-blur-sm">
-                 Place face within circle
+             <p className={`absolute mt-80 text-white/90 text-sm font-bold px-4 py-2 rounded-full backdrop-blur-sm shadow-lg transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-600' : 'bg-black/40'}`}>
+                 {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place face within circle"}
              </p>
          </div>
       </div>
@@ -294,9 +412,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
       
       {/* STATUS BAR */}
       <div className="absolute bottom-10 w-full text-center pointer-events-none z-10">
-         <div className="bg-white/10 backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border border-white/20 shadow-lg">
+         <div className={`backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border shadow-lg transition-all duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-900/80 border-purple-500' : 'bg-white/10 border-white/20'}`}>
             {!modelsLoaded ? (
                 <Loader2 className="animate-spin text-white mr-3" />
+            ) : livenessState === 'CHALLENGE' ? (
+                <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
             ) : (
                 <ScanFace className="text-white mr-3 animate-pulse" />
             )}

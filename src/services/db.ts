@@ -186,12 +186,13 @@ export const dbService = {
       return {
         shifts: data.shifts || defaultShifts,
         enableBreakTracking: data.enableBreakTracking ?? false,
+        strictLiveness: data.strictLiveness ?? false, // NEW
         baseLocation: data.baseLocation,
         branches: data.branches?.length ? data.branches : [{ ...defaultBranch, location: data.baseLocation }],
         departments: data.departments?.length ? data.departments : defaultDepartments
       };
     }
-    return { shifts: defaultShifts, enableBreakTracking: false, branches: [defaultBranch], departments: defaultDepartments };
+    return { shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch], departments: defaultDepartments };
   },
 
   saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
