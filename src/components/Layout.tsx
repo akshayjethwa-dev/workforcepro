@@ -6,7 +6,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { Sidebar } from './Sidebar';
 import { dbService } from '../services/db';
 import { Zap } from 'lucide-react';
-import { AIAssistant } from './AIAssistant';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -178,8 +177,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
           <NavItem screen="PAYROLL" icon={IndianRupee} label="Payroll" />
         </div>
       </nav>
-      <AIAssistant />
-
     </div>
   );
 };
