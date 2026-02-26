@@ -52,8 +52,17 @@ export const attendanceLogic = {
   ): AttendanceRecord => {
     
     // 1. Get First Punch
-    const firstPunch = record.timeline.find(p => p.type === 'IN');
-    if (!firstPunch) return record; // No data
+    const firstPunch = record.timeline?.find(p => p.type === 'IN');
+    
+    // FIX: If timeline is empty or no IN punch, fully reset the status
+    if (!firstPunch) {
+        return {
+            ...record,
+            status: 'ABSENT',
+            lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
+            hours: { gross: 0, net: 0, overtime: 0 }
+        };
+    }
 
     // 2. Calculate Lateness
     const punchTime = new Date(firstPunch.timestamp);
@@ -64,17 +73,13 @@ export const attendanceLogic = {
     const diffMs = punchTime.getTime() - shiftStartTime.getTime();
     const lateByMins = Math.max(0, Math.floor(diffMs / (1000 * 60)));
 
-    let isLate = lateByMins > shift.gracePeriodMins;
+    let isLate = lateByMins > (shift.gracePeriodMins || 15);
     let penaltyApplied = false;
 
     // 3. Calculate exact Net Hours based on punches
     const netHours = attendanceLogic.calculateHours(record.timeline, breakTrackingEnabled);
 
     // 4. Determine Status (ADVANCED LOGIC)
-    // < 4 hrs : ABSENT
-    // 4 - 6 hrs : HALF DAY
-    // > 6 hrs : PRESENT (FULL DAY)
-
     let status: 'PRESENT' | 'HALF_DAY' | 'ABSENT' | 'ON_LEAVE' = 'ABSENT';
 
     if (netHours < 4) {
@@ -86,8 +91,7 @@ export const attendanceLogic = {
     }
 
     // Grace Period Penalty Override
-    // If they worked full day but were late too many times -> Downgrade to Half Day
-    if (status === 'PRESENT' && isLate && lateCountThisMonth >= shift.maxGraceAllowed) {
+    if (status === 'PRESENT' && isLate && lateCountThisMonth >= (shift.maxGraceAllowed || 3)) {
         status = 'HALF_DAY';
         penaltyApplied = true;
     }
@@ -103,7 +107,6 @@ export const attendanceLogic = {
     const minOtThresholdHours = (shift.minOvertimeMins || 0) / 60;
     
     let overtime = 0;
-    // Only grant OT if they cross the minimum extra minutes setting
     if (extraHours >= minOtThresholdHours) {
         overtime = extraHours; 
     }

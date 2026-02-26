@@ -1,11 +1,11 @@
 // src/screens/WorkerHistoryScreen.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle } from 'lucide-react';
+import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { Worker, AttendanceRecord, Punch } from '../types/index';
+import { Worker, AttendanceRecord, Punch, OrgSettings } from '../types/index';
 
 export const WorkerHistoryScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -13,20 +13,28 @@ export const WorkerHistoryScreen: React.FC = () => {
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
   const [loading, setLoading] = useState(true);
+
+  // Expanded View State for Punches
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
 
   // Regulation Modal State
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
-  const [regulateType, setRegulateType] = useState<'IN' | 'OUT'>('OUT');
-  const [regulateTime, setRegulateTime] = useState<string>('18:00');
+  const [regulateType, setRegulateType] = useState<'IN' | 'OUT'>('IN');
+  const [regulateTime, setRegulateTime] = useState<string>('09:00');
   const [savingRegulation, setSavingRegulation] = useState(false);
 
-  // 1. Load Workers on Mount
+  // 1. Load Workers & Settings on Mount
   useEffect(() => {
     if (profile?.tenantId) {
-      dbService.getWorkers(profile.tenantId).then(data => {
-        setWorkers(data);
-        setLoading(false);
+      Promise.all([
+         dbService.getWorkers(profile.tenantId),
+         dbService.getOrgSettings(profile.tenantId)
+      ]).then(([workersData, settingsData]) => {
+         setWorkers(workersData);
+         setSettings(settingsData);
+         setLoading(false);
       });
     }
   }, [profile]);
@@ -76,35 +84,67 @@ export const WorkerHistoryScreen: React.FC = () => {
     return { totalEarning, presentDays, halfDays, absentDays, lateDays, totalOT, count: attendanceHistory.length };
   }, [attendanceHistory, selectedWorker]);
 
+  const toggleExpand = (recordId: string) => {
+      setExpandedLogs(prev => {
+          const next = new Set(prev);
+          if (next.has(recordId)) next.delete(recordId);
+          else next.add(recordId);
+          return next;
+      });
+  };
+
   // 4. Handle Regulating a Missed Punch
   const handleSaveRegulation = async () => {
     if (!editingRecord || !profile?.tenantId || !selectedWorker) return;
     setSavingRegulation(true);
 
     try {
-      // Create the new manual punch
-      const timestamp = new Date(`${editingRecord.date}T${regulateTime}:00`).toISOString();
+      // Safely construct the exact local time using numbers (Prevents UTC timezone offset bugs)
+      const [year, month, day] = editingRecord.date.split('-').map(Number);
+      const [hour, min] = regulateTime.split(':').map(Number);
+      const localDate = new Date(year, month - 1, day, hour, min);
+      
       const newPunch: Punch = {
-        timestamp,
+        timestamp: localDate.toISOString(),
         type: regulateType,
         device: 'MANUAL_OVERRIDE_BY_ADMIN'
       };
 
-      // Add to timeline
-      const updatedTimeline = [...(editingRecord.timeline || []), newPunch];
+      // Replace existing punch instead of adding duplicates
+      let updatedTimeline = [...(editingRecord.timeline || [])];
+      
+      if (regulateType === 'IN') {
+          // Replace the FIRST 'IN' punch if it exists
+          const firstInIdx = updatedTimeline.findIndex(p => p.type === 'IN');
+          if (firstInIdx >= 0) {
+              updatedTimeline[firstInIdx] = newPunch;
+          } else {
+              updatedTimeline.push(newPunch);
+          }
+      } else {
+          // Replace the LAST 'OUT' punch if it exists
+          const reverseOutIdx = [...updatedTimeline].reverse().findIndex(p => p.type === 'OUT');
+          if (reverseOutIdx >= 0) {
+              const lastOutIdx = updatedTimeline.length - 1 - reverseOutIdx;
+              updatedTimeline[lastOutIdx] = newPunch;
+          } else {
+              updatedTimeline.push(newPunch);
+          }
+      }
+
+      // Ensure chronological order
+      updatedTimeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       // Fetch requirements to recalculate status
-      const settings = await dbService.getOrgSettings(profile.tenantId);
       const shift = settings.shifts.find(s => s.id === selectedWorker.shiftId) || settings.shifts[0];
       const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, selectedWorker.id);
 
-      // Create draft record
       const draftRecord: AttendanceRecord = {
         ...editingRecord,
         timeline: updatedTimeline
       };
 
-      // Recalculate everything using the exact same engine
+      // Recalculate everything
       const finalRecord = attendanceLogic.processDailyStatus(
         draftRecord, 
         shift, 
@@ -127,6 +167,19 @@ export const WorkerHistoryScreen: React.FC = () => {
     }
   };
 
+  const openRegulationModal = (record: AttendanceRecord) => {
+      // Pre-fill the modal with the first IN time or shift time
+      setEditingRecord(record);
+      setRegulateType('IN');
+      const firstIn = record.timeline?.find(p => p.type === 'IN');
+      if (firstIn) {
+          const time = new Date(firstIn.timestamp);
+          setRegulateTime(`${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`);
+      } else {
+          setRegulateTime('09:00');
+      }
+  };
+
   if (loading) return <div className="p-10 text-center">Loading...</div>;
 
   return (
@@ -139,7 +192,7 @@ export const WorkerHistoryScreen: React.FC = () => {
             <label className="text-xs font-bold text-gray-500 uppercase">Select Worker</label>
             <div className="relative mt-1">
                 <select 
-                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none appearance-none"
+                    className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none appearance-none font-bold"
                     value={selectedWorkerId}
                     onChange={(e) => setSelectedWorkerId(e.target.value)}
                 >
@@ -154,7 +207,7 @@ export const WorkerHistoryScreen: React.FC = () => {
             <label className="text-xs font-bold text-gray-500 uppercase">Select Month</label>
             <input 
                 type="month" 
-                className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none"
+                className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold"
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
             />
@@ -178,7 +231,6 @@ export const WorkerHistoryScreen: React.FC = () => {
                             </div>
                         </div>
                         
-                        {/* 4-Column Grid for Stats */}
                         <div className="grid grid-cols-4 gap-2 mt-6 pt-4 border-t border-white/20">
                             <div className="text-center">
                                 <p className="text-lg font-bold">{summary.presentDays}</p>
@@ -206,38 +258,69 @@ export const WorkerHistoryScreen: React.FC = () => {
             
             <div className="space-y-3">
                 {attendanceHistory.map(record => {
-                    // Re-calc wage for display
                     const wageRec = wageService.calculateDailyWage(selectedWorker!, record);
                     
-                    // Format times
-                    const checkIn = record.timeline?.find(p => p.type === 'IN');
-                    const checkOut = record.timeline?.slice().reverse().find(p => p.type === 'OUT');
+                    const sortedTimeline = [...(record.timeline || [])].sort(
+                        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                    );
+                    const checkIn = sortedTimeline.find(p => p.type === 'IN');
+                    const checkOut = sortedTimeline.slice().reverse().find(p => p.type === 'OUT');
+                    const isCurrentlyIn = sortedTimeline.length > 0 && sortedTimeline[sortedTimeline.length - 1].type === 'IN';
+                    const isExpanded = expandedLogs.has(record.id);
+
+                    // Dynamic "Live" Calculation for Today's Date
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const isToday = record.date === todayStr;
+                    
+                    let displayHours = record.hours?.net || 0;
+                    let computedStatus = record.status;
+                    
+                    if (isToday && record.status !== 'ON_LEAVE') {
+                        displayHours = attendanceLogic.calculateHours(record.timeline || [], settings.enableBreakTracking);
+                        if (displayHours >= 6) {
+                            computedStatus = 'PRESENT';
+                        } else if (displayHours >= 4) {
+                            computedStatus = 'HALF_DAY';
+                        } else {
+                            if (isCurrentlyIn) {
+                                computedStatus = 'PENDING';
+                            } else {
+                                computedStatus = 'ABSENT';
+                            }
+                        }
+                    }
+
+                    // Status Badges
+                    let statusColor = 'bg-gray-100 text-gray-500';
+                    let statusText = 'ABSENT';
+
+                    if (computedStatus === 'PRESENT') { statusColor = 'bg-green-100 text-green-700'; statusText = 'PRESENT'; }
+                    else if (computedStatus === 'HALF_DAY') { statusColor = 'bg-orange-100 text-orange-700'; statusText = 'HALF DAY'; }
+                    else if (computedStatus === 'PENDING') { statusColor = 'bg-blue-50 text-blue-600 animate-pulse'; statusText = 'IN PROGRESS'; }
+                    else if (computedStatus === 'ON_LEAVE') { statusColor = 'bg-blue-100 text-blue-700'; statusText = 'ON LEAVE'; }
+                    else { statusColor = 'bg-red-100 text-red-700'; statusText = 'ABSENT'; }
                     
                     return (
                         <div key={record.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                            {/* Top Header */}
                             <div className="flex justify-between items-start mb-2">
                                 <div>
                                     <span className="font-bold text-gray-900 block">
                                         {new Date(record.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
                                     </span>
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase mt-1 ${
-                                        record.status === 'PRESENT' ? 'bg-green-100 text-green-700' :
-                                        record.status === 'HALF_DAY' ? 'bg-orange-100 text-orange-700' :
-                                        'bg-red-100 text-red-700'
-                                    }`}>
-                                        {record.status.replace('_', ' ')}
-                                        {record.lateStatus?.isLate && <span className="ml-1 text-red-600 font-extrabold">• LATE</span>}
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase mt-1 ${statusColor}`}>
+                                        {statusText}
+                                        {record.lateStatus?.isLate && computedStatus !== 'PENDING' && <span className="ml-1 text-red-600 font-extrabold">• LATE</span>}
                                     </span>
                                 </div>
                                 <div className="text-right flex flex-col items-end">
                                     <span className="text-green-600 font-bold">₹{wageRec.breakdown.total}</span>
                                     <p className="text-[10px] text-gray-400">Daily Pay</p>
                                     
-                                    {/* Regulate Button */}
                                     {(profile?.role === 'FACTORY_OWNER' || profile?.role === 'SUPERVISOR') && (
                                       <button 
-                                        onClick={() => setEditingRecord(record)}
-                                        className="mt-2 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded flex items-center"
+                                        onClick={() => openRegulationModal(record)}
+                                        className="mt-2 text-[10px] font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded flex items-center transition-colors"
                                       >
                                         <Edit size={10} className="mr-1" /> Regulate
                                       </button>
@@ -245,25 +328,62 @@ export const WorkerHistoryScreen: React.FC = () => {
                                 </div>
                             </div>
 
-                            {/* Timeline Bar */}
-                            <div className="bg-gray-50 rounded-lg p-2 mt-2 flex justify-between items-center text-xs">
-                                <div className="flex items-center text-gray-600">
-                                    <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                                    {checkIn ? new Date(checkIn.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--:--'}
-                                </div>
-                                <ArrowRight size={12} className="text-gray-300"/>
-                                <div className="flex items-center text-gray-600">
-                                    {checkOut ? new Date(checkOut.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--:--'}
-                                    <div className="w-2 h-2 bg-red-500 rounded-full ml-2"></div>
-                                </div>
-                            </div>
+                            {/* Detailed Expandable Timeline */}
+                            {sortedTimeline.length > 0 && (
+                                <div className="bg-gray-50 p-3 rounded-lg text-xs mt-3 border border-gray-100">
+                                   <div 
+                                      className={`flex justify-between items-center text-gray-700 font-bold cursor-pointer ${isExpanded ? 'border-b border-gray-200 pb-2 mb-2' : ''}`}
+                                      onClick={() => toggleExpand(record.id)}
+                                   >
+                                       <div className="flex items-center space-x-2">
+                                           <span>Net: {displayHours.toFixed(1)} hrs</span>
+                                           <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full text-gray-600">{sortedTimeline.length} Punches</span>
+                                           {record.hours?.overtime > 0 && <span className="text-orange-500 font-bold ml-2">(+{record.hours.overtime} OT)</span>}
+                                       </div>
+                                       <div className="flex items-center text-blue-600">
+                                           {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                       </div>
+                                   </div>
 
-                            {/* Hours */}
-                            <div className="flex items-center justify-end mt-2 text-xs text-gray-400">
-                                <Clock size={12} className="mr-1"/>
-                                {record.hours?.net.toFixed(1)} hrs worked
-                                {record.hours?.overtime > 0 && <span className="ml-2 text-orange-500 font-bold">(+{record.hours.overtime} OT)</span>}
-                            </div>
+                                   {!isExpanded ? (
+                                       <div className="flex justify-between items-center text-gray-500 mt-2">
+                                           <div className="flex flex-col">
+                                               <span className="text-[9px] uppercase font-bold text-gray-400">First In</span>
+                                               <span className="font-bold text-gray-700">
+                                                   {checkIn ? new Date(checkIn.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--:--'}
+                                               </span>
+                                           </div>
+                                           <ArrowRight size={14} className="text-gray-300"/>
+                                           <div className="flex flex-col text-right">
+                                               <span className="text-[9px] uppercase font-bold text-gray-400">Last Out</span>
+                                               <span className="font-bold text-gray-700">
+                                                    {checkOut ? new Date(checkOut.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : <span className="text-blue-600 animate-pulse">Active</span>}
+                                               </span>
+                                           </div>
+                                       </div>
+                                   ) : (
+                                       <div className="space-y-2 mt-3">
+                                           {sortedTimeline.map((punch, idx) => {
+                                               const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
+                                               return (
+                                                   <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100 shadow-sm">
+                                                        <div className="flex items-center">
+                                                            <div className={`w-2 h-2 rounded-full mr-2 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                            <span className="font-bold uppercase tracking-wide">{punch.type}</span>
+                                                            {isRegulated && (
+                                                                <span className="ml-2 text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                            )}
+                                                        </div>
+                                                        <span className="font-mono font-bold text-gray-800">
+                                                            {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                                                        </span>
+                                                   </div>
+                                               );
+                                           })}
+                                       </div>
+                                   )}
+                                </div>
+                            )}
                         </div>
                     );
                 })}
@@ -295,22 +415,22 @@ export const WorkerHistoryScreen: React.FC = () => {
             </div>
             
             <p className="text-sm text-gray-600 mb-4">
-              Add a manual punch for <span className="font-bold">{new Date(editingRecord.date).toLocaleDateString()}</span>. This will recalculate the worker's hours and wages automatically.
+              Modify the punch for <span className="font-bold">{new Date(editingRecord.date).toLocaleDateString()}</span>. This will replace the existing punch and recalculate the worker's hours.
             </p>
 
             <div className="space-y-4 mb-6">
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Punch Type</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Which Punch to Modify?</label>
                 <div className="flex space-x-2 mt-1">
                   <button 
                     onClick={() => setRegulateType('IN')}
-                    className={`flex-1 py-2 rounded-lg font-bold text-sm border ${regulateType === 'IN' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}
+                    className={`flex-1 py-2 rounded-lg font-bold text-sm border transition-colors ${regulateType === 'IN' ? 'bg-green-50 border-green-500 text-green-700' : 'border-gray-200 text-gray-500'}`}
                   >
                     Check IN
                   </button>
                   <button 
                     onClick={() => setRegulateType('OUT')}
-                    className={`flex-1 py-2 rounded-lg font-bold text-sm border ${regulateType === 'OUT' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}
+                    className={`flex-1 py-2 rounded-lg font-bold text-sm border transition-colors ${regulateType === 'OUT' ? 'bg-red-50 border-red-500 text-red-700' : 'border-gray-200 text-gray-500'}`}
                   >
                     Check OUT
                   </button>
@@ -318,7 +438,7 @@ export const WorkerHistoryScreen: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Manual Time</label>
+                <label className="text-xs font-bold text-gray-500 uppercase">Correct Time</label>
                 <input 
                   type="time" 
                   value={regulateTime}
@@ -331,9 +451,9 @@ export const WorkerHistoryScreen: React.FC = () => {
             <button
               onClick={handleSaveRegulation}
               disabled={savingRegulation}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex justify-center items-center disabled:opacity-50"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex justify-center items-center disabled:opacity-50 transition-colors"
             >
-              {savingRegulation ? 'Saving...' : <><PlusCircle size={18} className="mr-2" /> Add Punch & Recalculate</>}
+              {savingRegulation ? 'Saving...' : <><PlusCircle size={18} className="mr-2" /> Save Regulation</>}
             </button>
           </div>
         </div>

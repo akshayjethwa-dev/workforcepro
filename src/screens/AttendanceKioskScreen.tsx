@@ -159,8 +159,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
         const existingDocs = await dbService.getTodayAttendance(profile!.tenantId); 
         const existingRecord = existingDocs.find(r => r.id === recordId);
 
-        const punchCount = existingRecord?.timeline?.length || 0;
-        const punchType = (punchCount % 2 === 0) ? 'IN' : 'OUT';
+        // FIX: Look at the LAST punch type instead of relying on array length mathematically
+        let punchType: 'IN' | 'OUT' = 'IN';
+        if (existingRecord?.timeline && existingRecord.timeline.length > 0) {
+            const lastPunch = existingRecord.timeline[existingRecord.timeline.length - 1];
+            punchType = lastPunch.type === 'IN' ? 'OUT' : 'IN';
+        }
 
         const now = new Date();
         
@@ -185,7 +189,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
         const currentTimeline = existingRecord?.timeline || [];
         const newTimeline = [...currentTimeline, { 
             timestamp: now.toISOString(), 
-            type: punchType as 'IN' | 'OUT', 
+            type: punchType, 
             device: 'Kiosk' 
         }];
 

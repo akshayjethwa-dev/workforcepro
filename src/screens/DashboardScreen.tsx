@@ -9,14 +9,12 @@ import { attendanceLogic } from '../services/attendanceLogic';
 import { AttendanceRecord, OrgSettings } from '../types/index';
 
 interface Props {
-  onOpenKiosk: (branchId: string) => void; // UPDATED to require branch ID
+  onOpenKiosk: (branchId: string) => void;
 }
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
-  // PULL LIMITS FROM AUTH CONTEXT
   const { profile, limits } = useAuth(); 
   
-  // Stats state including new "Pending" and "Half Day" counters
   const [stats, setStats] = useState({ 
       total: 0, 
       present: 0, 
@@ -30,7 +28,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // NEW DYNAMIC BRANCH STATE
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
   const [selectedDashboardBranch, setSelectedDashboardBranch] = useState<string>('ALL');
   const [showKioskModal, setShowKioskModal] = useState(false);
@@ -48,7 +45,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
 
       setOrgSettings(settings);
 
-      // --- FILTER LOGIC BY BRANCH ---
       const activeWorkers = workers.filter(w => 
           w.status === 'ACTIVE' && 
           (selectedDashboardBranch === 'ALL' || (w.branchId || 'default') === selectedDashboardBranch)
@@ -62,11 +58,9 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       let onLeaveCount = 0;
       let pendingCount = 0;
 
-      // Only process attendance for filtered workers
       const activeWorkerIds = new Set(activeWorkers.map(w => w.id));
       const filteredAttendance = attendance.filter(r => activeWorkerIds.has(r.workerId));
 
-      // Process each attendance record with real-time logic
       const processedActivity = filteredAttendance.map(record => {
           const currentHours = attendanceLogic.calculateHours(record.timeline, settings.enableBreakTracking);
           
@@ -74,6 +68,24 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               ? record.timeline[record.timeline.length - 1] 
               : null;
           const isCurrentlyIn = lastPunch?.type === 'IN';
+
+          // FIX: Dynamically recalculate "Late" status based on actual timeline,
+          // so if a supervisor updates the time to 9 AM, it will no longer show late!
+          let dynamicallyCalculatedLate = false;
+          const shift = settings.shifts.find(s => s.id === record.shiftId) || settings.shifts[0];
+          const firstPunch = record.timeline?.find(p => p.type === 'IN');
+          
+          if (firstPunch && shift) {
+              const punchTime = new Date(firstPunch.timestamp);
+              const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
+              const shiftStartTime = new Date(punchTime);
+              shiftStartTime.setHours(shiftHour, shiftMin, 0, 0);
+
+              const diffMs = punchTime.getTime() - shiftStartTime.getTime();
+              const lateByMins = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+
+              dynamicallyCalculatedLate = lateByMins > (shift.gracePeriodMins || 15);
+          }
 
           let computedStatus = 'ABSENT';
           
@@ -93,7 +105,7 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               }
           }
 
-          if (record.lateStatus?.isLate) {
+          if (dynamicallyCalculatedLate) {
               lateCount++;
           }
 
@@ -102,11 +114,10 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               currentHours,
               computedStatus,
               isCurrentlyIn,
-              isLate: record.lateStatus?.isLate
+              isLate: dynamicallyCalculatedLate
           };
       });
 
-      // Aggregate Counts
       processedActivity.forEach(r => {
           if (r.computedStatus === 'PRESENT') presentCount++;
           else if (r.computedStatus === 'HALF_DAY') halfDayCount++;
@@ -147,7 +158,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
 
   useEffect(() => { refreshData(); }, [profile, selectedDashboardBranch]);
 
-  // Handle opening the Kiosk Logic
   const handleKioskLaunch = () => {
       const branches = orgSettings?.branches || [];
       if (branches.length > 1) {
@@ -158,7 +168,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       }
   };
 
-  // Reusable Stat Card Component
   const StatCard = ({ icon: Icon, value, label, subLabel, color, bg }: any) => (
     <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between h-32 relative overflow-hidden">
         <div className={`absolute top-0 right-0 p-2 rounded-bl-xl ${bg} bg-opacity-30`}>
@@ -174,7 +183,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
 
   return (
     <div className="p-4 space-y-6 pb-24 bg-gray-50 min-h-full">
-        {/* Header & Branch Filter */}
         <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center">
             <div>
                 <h1 className="text-xl font-bold text-gray-800">Dashboard</h1>
@@ -200,7 +208,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
         </div>
 
-        {/* --- CONDITIONAL KIOSK LAUNCHER --- */}
         {limits?.kioskEnabled !== false ? (
             <button onClick={handleKioskLaunch} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
                 <div className="flex items-center space-x-3">
@@ -224,7 +231,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
         )}
 
-        {/* KIOSK BRANCH SELECTOR MODAL */}
         {showKioskModal && (
             <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
                <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
@@ -257,7 +263,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
         )}
 
-        {/* Stats Grid */}
         <div className="grid grid-cols-2 gap-3">
             <StatCard 
                 icon={CheckCircle} 
@@ -293,7 +298,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             />
         </div>
 
-        {/* Live Feed */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-4 border-b border-gray-50 flex justify-between items-center">
                 <h3 className="font-bold text-gray-800 text-sm flex items-center">
@@ -315,7 +319,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                     const typeStr = lastPunch ? lastPunch.type : 'IN';
                     const isOut = typeStr === 'OUT';
 
-                    // Status Badge Logic for List
                     let badgeColor = 'bg-gray-100 text-gray-500';
                     let badgeText = record.computedStatus;
 

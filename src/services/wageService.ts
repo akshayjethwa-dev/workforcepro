@@ -84,15 +84,16 @@ export const wageService = {
   generateMonthlyPayroll: (
     worker: Worker, 
     month: string, 
-    dailyWages: DailyWageRecord[],
+    attendanceRecords: AttendanceRecord[],
     advances: Advance[]
   ): MonthlyPayroll => {
     
-    // Filter records for this exact month
-    const monthWages = dailyWages.filter(w => w.date.startsWith(month));
+    // Filter attendance records for this exact month and worker
+    const monthAttendance = attendanceRecords.filter(a => a.workerId === worker.id && a.date.startsWith(month));
     
     let presentDays = 0;
     let halfDays = 0; 
+    let absentDays = 0;
     let totalRegularHours = 0;
     let totalOvertimeHours = 0;
     
@@ -100,9 +101,19 @@ export const wageService = {
     let totalOTPay = 0;
     let totalAllowances = 0;
 
-    monthWages.forEach(dw => {
-      if (dw.breakdown.baseWage > 0) presentDays++;
+    monthAttendance.forEach(record => {
+      // Re-calculate the exact financial implication of the record
+      const dw = wageService.calculateDailyWage(worker, record);
       
+      // FIX: Strictly align payroll counts with the Attendance Logic Engine
+      if (record.status === 'PRESENT') {
+          presentDays++;
+      } else if (record.status === 'HALF_DAY') {
+          halfDays++;
+      } else if (record.status === 'ABSENT') {
+          absentDays++;
+      }
+
       totalBasic += dw.breakdown.baseWage;
       totalOTPay += dw.breakdown.overtimeWage;
       totalAllowances += dw.breakdown.allowances;
@@ -130,6 +141,10 @@ export const wageService = {
     const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
     const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
 
+    // Ensure missing calendar days without records are marked as Absent
+    const missingDays = Math.max(0, totalWorkingDays - (presentDays + halfDays + absentDays));
+    const finalAbsentDays = absentDays + missingDays;
+
     return {
       id: `payroll_${worker.id}_${month}`,
       tenantId: worker.tenantId,
@@ -141,7 +156,7 @@ export const wageService = {
       attendanceSummary: {
         totalDays: totalWorkingDays,
         presentDays,
-        absentDays: Math.max(0, totalWorkingDays - presentDays), // Ensures it never drops below 0
+        absentDays: finalAbsentDays,
         halfDays,
         totalRegularHours: parseFloat(totalRegularHours.toFixed(1)),
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))

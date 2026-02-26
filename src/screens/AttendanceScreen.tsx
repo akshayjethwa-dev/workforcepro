@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2 } from 'lucide-react';
+import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
-import { geoUtils } from '../utils/geo'; // Ensures distance calculation works
+import { geoUtils } from '../utils/geo'; 
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -14,7 +14,9 @@ export const AttendanceScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Load Workers, Attendance, AND Settings
+  // Expanded View State
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     const loadData = async () => {
       if (profile?.tenantId) {
@@ -43,13 +45,11 @@ export const AttendanceScreen: React.FC = () => {
     loadData();
   }, [profile]);
 
-  // Handle Time-Based Punches (IN/OUT) with Geofencing
   const handlePunch = async (worker: Worker, type: 'IN' | 'OUT') => {
     if (!profile?.tenantId) return;
     setActionLoading(worker.id);
 
     try {
-        // --- 1. CAPTURE LOCATION & CHECK GEOFENCE ---
         let currentLocation: { lat: number; lng: number } | undefined;
         let isOutOfGeofence = false;
 
@@ -60,7 +60,6 @@ export const AttendanceScreen: React.FC = () => {
                 });
                 currentLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 
-                // If the owner has set a base location, calculate distance
                 if (settings.baseLocation) {
                     const dist = geoUtils.getDistanceInMeters(
                         currentLocation.lat, currentLocation.lng,
@@ -77,11 +76,9 @@ export const AttendanceScreen: React.FC = () => {
         const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
         const now = new Date();
 
-        // --- 2. GET OR INIT RECORD ---
         const existingRecord = attendanceMap[worker.id];
         let currentTimeline = existingRecord?.timeline || [];
         
-        // --- 3. CREATE NEW PUNCH ---
         const newPunch = {
             timestamp: now.toISOString(),
             type: type,
@@ -92,7 +89,6 @@ export const AttendanceScreen: React.FC = () => {
 
         const newTimeline = [...currentTimeline, newPunch];
 
-        // --- 4. APPLY LOGIC ---
         const shift = settings.shifts.find(s => s.id === worker.shiftId) || settings.shifts[0];
         const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, worker.id);
 
@@ -118,11 +114,9 @@ export const AttendanceScreen: React.FC = () => {
             settings.enableBreakTracking
         );
 
-        // --- 5. SAVE & UPDATE UI ---
         await dbService.markAttendance(finalRecord);
         setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
 
-        // ** NEW: TRIGGER NOTIFICATIONS **
         if (isOutOfGeofence) {
             await dbService.addNotification({
                 tenantId: profile.tenantId,
@@ -135,7 +129,6 @@ export const AttendanceScreen: React.FC = () => {
             alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
         }
 
-        // Check Late Notification
         if (finalRecord.lateStatus.isLate && !existingRecord?.lateStatus?.isLate) {
              await dbService.addNotification({
                 tenantId: profile.tenantId,
@@ -179,6 +172,15 @@ export const AttendanceScreen: React.FC = () => {
       setAttendanceMap(prev => ({ ...prev, [worker.id]: leaveRecord }));
   };
 
+  const toggleExpand = (workerId: string) => {
+      setExpandedLogs(prev => {
+          const next = new Set(prev);
+          if (next.has(workerId)) next.delete(workerId);
+          else next.add(workerId);
+          return next;
+      });
+  };
+
   if (loading) return (
      <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -201,12 +203,15 @@ export const AttendanceScreen: React.FC = () => {
         {workers.map(worker => {
             const record = attendanceMap[worker.id];
             
-            // Determine Current State
-            const lastPunch = record?.timeline?.[record.timeline.length - 1];
+            const sortedTimeline = [...(record?.timeline || [])].sort(
+                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+            
+            const lastPunch = sortedTimeline[sortedTimeline.length - 1];
             const isInside = lastPunch?.type === 'IN';
             const isOnLeave = record?.status === 'ON_LEAVE';
+            const isExpanded = expandedLogs.has(worker.id);
             
-            // Dynamic Status Label
             let statusLabel = 'ABSENT';
             let statusColor = 'bg-gray-100 text-gray-500';
 
@@ -243,18 +248,71 @@ export const AttendanceScreen: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Timeline Info */}
-                    {record && !isOnLeave && (
-                        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg text-xs text-gray-500 mb-3">
-                           <span>Hours: <span className="font-bold text-gray-800">{record.hours.net.toFixed(1)}</span></span>
-                           {lastPunch && (
-                               <span>Last: {new Date(lastPunch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ({lastPunch.type})</span>
+                    {/* EXPANDABLE TIMELINE INFO */}
+                    {record && !isOnLeave && sortedTimeline.length > 0 && (
+                        <div className="bg-gray-50 p-3 rounded-lg text-xs mb-4">
+                           {/* Summary / Toggle Bar */}
+                           <div 
+                              className={`flex justify-between items-center text-gray-700 font-bold cursor-pointer ${isExpanded ? 'border-b border-gray-200 pb-2 mb-2' : ''}`}
+                              onClick={() => toggleExpand(worker.id)}
+                           >
+                               <div className="flex items-center space-x-2">
+                                   <span>Net: {record.hours.net.toFixed(1)} hrs</span>
+                                   <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full text-gray-600">{sortedTimeline.length} Punches</span>
+                               </div>
+                               <div className="flex items-center text-blue-600">
+                                   {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                               </div>
+                           </div>
+
+                           {/* Collapsed View (First & Last) */}
+                           {!isExpanded ? (
+                               <div className="flex justify-between items-center text-gray-500 mt-2">
+                                   <div className="flex flex-col">
+                                       <span className="text-[9px] uppercase font-bold text-gray-400">First In</span>
+                                       <span className="font-bold text-gray-700">
+                                           {sortedTimeline.find(p => p.type === 'IN') 
+                                               ? new Date(sortedTimeline.find(p => p.type === 'IN')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
+                                               : '--:--'}
+                                       </span>
+                                   </div>
+                                   <ArrowRight size={14} className="text-gray-300"/>
+                                   <div className="flex flex-col text-right">
+                                       <span className="text-[9px] uppercase font-bold text-gray-400">Last Out</span>
+                                       <span className="font-bold text-gray-700">
+                                            {sortedTimeline.slice().reverse().find(p => p.type === 'OUT') 
+                                               ? new Date(sortedTimeline.slice().reverse().find(p => p.type === 'OUT')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
+                                               : <span className="text-green-600">Active</span>}
+                                       </span>
+                                   </div>
+                               </div>
+                           ) : (
+                               /* Expanded View (Full Details) */
+                               <div className="space-y-2 mt-3">
+                                   {sortedTimeline.map((punch, idx) => {
+                                       const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
+                                       return (
+                                           <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100">
+                                                <div className="flex items-center">
+                                                    <div className={`w-2 h-2 rounded-full mr-2 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                    <span className="font-bold uppercase tracking-wide">{punch.type}</span>
+                                                    {isRegulated && (
+                                                        <span className="ml-2 text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                    )}
+                                                </div>
+                                                <span className="font-mono font-bold text-gray-800">
+                                                    {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                                                </span>
+                                           </div>
+                                       );
+                                   })}
+                               </div>
                            )}
                         </div>
                     )}
 
                     {/* ACTION BUTTONS */}
-                    <div className="grid grid-cols-5 gap-2">
+                    <div className="grid grid-cols-5 gap-2 mt-auto">
                         <button 
                             onClick={() => handlePunch(worker, 'IN')}
                             disabled={isInside || isOnLeave || actionLoading === worker.id}

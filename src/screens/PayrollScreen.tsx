@@ -3,14 +3,14 @@ import { IndianRupee, FileText, Download, CheckCircle, Clock } from 'lucide-reac
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { MonthlyPayroll, Worker, DailyWageRecord, Advance } from '../types/index';
+import { MonthlyPayroll, Worker, AttendanceRecord, Advance } from '../types/index';
 import { Payslip } from '../components/Payslip';
 
 export const PayrollScreen: React.FC = () => {
   const { profile } = useAuth();
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
+  const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
   
   const [savedPayrolls, setSavedPayrolls] = useState<MonthlyPayroll[]>([]); 
@@ -25,14 +25,11 @@ export const PayrollScreen: React.FC = () => {
       if (!profile?.tenantId) return;
       
       try {
-        // 1. Fetch all the standard data safely
         const fetchedWorkers = await dbService.getWorkers(profile.tenantId);
         const fetchedAttendance = await dbService.getAttendanceHistory(profile.tenantId);
         const fetchedAdvances = await dbService.getAdvances(profile.tenantId);
         const fetchedSettings = await dbService.getOrgSettings(profile.tenantId);
         
-        // 2. Fetch the new Payrolls data in a separate try/catch
-        // This prevents Firebase Permission Errors on the new collection from crashing the whole screen
         let fetchedPayrolls: MonthlyPayroll[] = [];
         try {
            fetchedPayrolls = await dbService.getPayrollsByMonth(profile.tenantId, currentMonthStr);
@@ -40,19 +37,11 @@ export const PayrollScreen: React.FC = () => {
            console.warn("Could not load saved payrolls. Check Firestore Rules for the 'payrolls' collection.", payrollErr);
         }
 
-        // 3. Set standard state
         setWorkers(fetchedWorkers);
         setAdvances(fetchedAdvances);
         setSiteAddress(fetchedSettings.baseLocation?.address || '');
         setSavedPayrolls(fetchedPayrolls);
-        
-        // 4. Calculate daily wages
-        const wages: DailyWageRecord[] = [];
-        fetchedAttendance.forEach(record => {
-           const worker = fetchedWorkers.find(w => w.id === record.workerId);
-           if (worker) wages.push(wageService.calculateDailyWage(worker, record));
-        });
-        setDailyWages(wages);
+        setAttendanceHistory(fetchedAttendance);
 
       } catch (e) {
         console.error("Critical error loading data:", e);
@@ -72,9 +61,9 @@ export const PayrollScreen: React.FC = () => {
         const savedPayroll = savedPayrolls.find(p => p.workerId === worker.id);
         if (savedPayroll) return savedPayroll;
 
-        return wageService.generateMonthlyPayroll(worker, currentMonthStr, dailyWages, advances);
+        return wageService.generateMonthlyPayroll(worker, currentMonthStr, attendanceHistory, advances);
     });
-  }, [workers, dailyWages, advances, currentMonthStr, savedPayrolls]);
+  }, [workers, attendanceHistory, advances, currentMonthStr, savedPayrolls]);
 
   // Handler for marking a salary as paid
   const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
@@ -97,9 +86,6 @@ export const PayrollScreen: React.FC = () => {
     }
   };
 
-  const totalPayout = payrolls.reduce((acc, p) => acc + p.netPayable, 0);
-  const totalDeductions = payrolls.reduce((acc, p) => acc + p.deductions.total, 0);
-  
   const pendingPayout = payrolls.filter(p => p.status !== 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
   const paidPayout = payrolls.filter(p => p.status === 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
 
@@ -143,10 +129,12 @@ export const PayrollScreen: React.FC = () => {
                             </div>
                             <div>
                                 <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
-                                <div className="flex space-x-2 text-xs text-gray-500 mt-1">
-                                    <span>{payroll.attendanceSummary.presentDays} Days</span>
-                                    <span>•</span>
-                                    <span>{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
+                                <div className="flex space-x-2 text-xs mt-1 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                                    <span className="text-green-600 font-bold">{payroll.attendanceSummary.presentDays} P</span>
+                                    {payroll.attendanceSummary.halfDays > 0 && <span className="text-orange-500 font-bold">• {payroll.attendanceSummary.halfDays} HD</span>}
+                                    {payroll.attendanceSummary.absentDays > 0 && <span className="text-red-500 font-bold">• {payroll.attendanceSummary.absentDays} A</span>}
+                                    <span className="text-gray-400">•</span>
+                                    <span className="text-gray-600 font-bold">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
                                 </div>
                             </div>
                         </div>
@@ -168,7 +156,7 @@ export const PayrollScreen: React.FC = () => {
                     </div>
                     
                     <div className="mt-3 flex items-center justify-between">
-                        <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg">
+                        <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
                             <span>Base: ₹{payroll.earnings.basic}</span>
                             <span className="text-red-500">Ded: -₹{payroll.deductions.total}</span>
                         </div>
