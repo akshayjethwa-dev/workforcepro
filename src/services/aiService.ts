@@ -1,6 +1,6 @@
 // src/services/aiService.ts
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { app, auth } from '../lib/firebase'; // Import app and auth
+import { app, auth } from '../lib/firebase';
 
 export const aiService = {
   askAssistant: async (tenantId: string, message: string): Promise<string> => {
@@ -10,12 +10,12 @@ export const aiService = {
         throw new Error("Firebase Auth user is not loaded yet.");
       }
 
-      // 2. Use the directly exported app instance
-      const functions = getFunctions(app); 
-      
-      // Note: If your Firebase backend is hosted outside the default us-central1 
-      // (e.g., asia-south1), you must specify it here to avoid CORS/401 errors:
-      // const functions = getFunctions(app, 'asia-south1');
+      /**
+       * 2. UPDATED: Specify the 'asia-south1' region.
+       * This must exactly match the region defined in your index.js file
+       * to avoid "404 Not Found" or "CORS" errors.
+       */
+      const functions = getFunctions(app, 'asia-south1'); 
       
       const askFactoryAI = httpsCallable(functions, 'askFactoryAI');
       
