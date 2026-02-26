@@ -206,11 +206,13 @@ export interface MonthlyPayroll {
     details: { description: string; amount: number }[];
   };
   netPayable: number;
+  carriedForwardAdvance?: number;
   status: 'DRAFT' | 'LOCKED' | 'PAID';
 }
 
 export interface Advance {
   id: string;
+  tenantId: string;
   workerId: string;
   amount: number;
   date: string;

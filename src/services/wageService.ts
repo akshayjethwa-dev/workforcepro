@@ -1,6 +1,18 @@
 import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance} from '../types/index';
 
 export const wageService = {
+
+  // NEW: Helper to calculate currently earned wages mid-month (Used for Guardrail)
+  calculateCurrentEarnings: (worker: Worker, monthStr: string, attendanceRecords: AttendanceRecord[]) => {
+    const monthAttendance = attendanceRecords.filter(a => a.workerId === worker.id && a.date.startsWith(monthStr));
+    let totalEarned = 0;
+    monthAttendance.forEach(record => {
+      const dw = wageService.calculateDailyWage(worker, record);
+      totalEarned += dw.breakdown.total;
+    });
+    return totalEarned;
+  },
+
   /**
    * Calculate earnings for a single day
    */
@@ -145,6 +157,11 @@ export const wageService = {
     const missingDays = Math.max(0, totalWorkingDays - (presentDays + halfDays + absentDays));
     const finalAbsentDays = absentDays + missingDays;
 
+    // NEW: Carry Forward Logic (If Advances taken exceed Gross Earned)
+    const rawNetPayable = gross - totalDeductions;
+    const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
+    const finalNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
+
     return {
       id: `payroll_${worker.id}_${month}`,
       tenantId: worker.tenantId,
@@ -178,7 +195,8 @@ export const wageService = {
         total: totalDeductions,
         details: deductionDetails
       },
-      netPayable: parseFloat((gross - totalDeductions).toFixed(2)),
+      netPayable: parseFloat(finalNetPayable.toFixed(2)),
+      carriedForwardAdvance: parseFloat(carriedForwardAdvance.toFixed(2)),
       status: 'DRAFT'
     };
   }

@@ -156,11 +156,17 @@ export const dbService = {
     }
   },
 
+  // --- ADVANCES / KHARCHI ---
   getAdvances: async (tenantId: string): Promise<Advance[]> => {
     if (!tenantId) return [];
     const q = query(collection(db, "advances"), where("tenantId", "==", tenantId));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Advance));
+  },
+
+  addAdvance: async (advance: Omit<Advance, 'id'>) => {
+    const docRef = await addDoc(collection(db, "advances"), advance);
+    return docRef.id;
   },
 
   // --- SETTINGS ---

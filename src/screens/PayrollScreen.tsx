@@ -71,6 +71,28 @@ export const PayrollScreen: React.FC = () => {
     
     if (window.confirm(`Mark ₹${payroll.netPayable} as paid to ${payroll.workerName}?`)) {
       try {
+        // NEW: Carry-Forward Logic
+        if (payroll.carriedForwardAdvance && payroll.carriedForwardAdvance > 0) {
+            const [year, month] = currentMonthStr.split('-');
+            let nextMonth = parseInt(month) + 1;
+            let nextYear = parseInt(year);
+            if (nextMonth > 12) { 
+                nextMonth = 1; 
+                nextYear++; 
+            }
+            const nextMonthStr = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+
+            await dbService.addAdvance({
+                tenantId: profile!.tenantId, 
+                workerId: payroll.workerId, 
+                amount: payroll.carriedForwardAdvance, 
+                date: nextMonthStr, 
+                reason: 'Carry Forward from Previous Month', 
+                status: 'APPROVED'
+            });
+            alert(`Note: Negative balance of ₹${payroll.carriedForwardAdvance} was automatically carried forward as an advance for next month.`);
+        }
+
         const updatedPayroll: MonthlyPayroll = { ...payroll, status: 'PAID' };
         await dbService.savePayroll(updatedPayroll);
         
@@ -156,9 +178,10 @@ export const PayrollScreen: React.FC = () => {
                     </div>
                     
                     <div className="mt-3 flex items-center justify-between">
+                        {/* NEW: Updated List View Summary for Clear Ledger Layout */}
                         <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
-                            <span>Base: ₹{payroll.earnings.basic}</span>
-                            <span className="text-red-500">Ded: -₹{payroll.deductions.total}</span>
+                            <span className="font-medium">Earned: ₹{payroll.earnings.gross}</span>
+                            <span className="text-red-500 font-bold">Less: -₹{payroll.deductions.advances}</span>
                         </div>
                         
                         {payroll.status !== 'PAID' && (

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Edit2, Trash2, AlertTriangle, X } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
+import { wageService } from '../services/wageService';
 import { Worker } from '../types/index';
 
 interface Props {
@@ -15,9 +16,21 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   
-  // NEW: State for deletion modal
+  // State for deletion modal
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // NEW: State for Advance (Kharchi) Modal
+  const [advanceModal, setAdvanceModal] = useState({
+    isOpen: false,
+    worker: null as Worker | null,
+    amount: '',
+    date: new Date().toISOString().split('T')[0],
+    reason: 'Kharchi',
+    earned: 0,
+    existingAdvances: 0,
+    isSaving: false
+  });
 
   const loadWorkers = async () => {
     if (profile?.tenantId) {
@@ -34,7 +47,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
 
   useEffect(() => { loadWorkers(); }, [profile]);
 
-  // NEW: Custom deletion logic handled via modal
+  // Custom deletion logic handled via modal
   const confirmDelete = async () => {
     if (!workerToDelete || !profile?.tenantId) return;
     setIsDeleting(true);
@@ -61,10 +74,58 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     onAddWorker();
   };
 
+  // NEW: Quick Action Logic for Advances
+  const handleOpenAdvance = async (worker: Worker) => {
+    if (!profile?.tenantId) return;
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    
+    // Quick calc for guardrail
+    const attendance = await dbService.getAttendanceHistory(profile.tenantId);
+    const advances = await dbService.getAdvances(profile.tenantId);
+    
+    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance);
+    const existingAdvances = advances
+        .filter(a => a.workerId === worker.id && a.date.startsWith(currentMonth))
+        .reduce((sum, a) => sum + a.amount, 0);
+
+    setAdvanceModal({ 
+        isOpen: true, 
+        worker, 
+        amount: '', 
+        date: new Date().toISOString().split('T')[0], 
+        reason: 'Kharchi', 
+        earned, 
+        existingAdvances, 
+        isSaving: false 
+    });
+  };
+
+  const handleSaveAdvance = async () => {
+    if (!profile?.tenantId || !advanceModal.worker || !advanceModal.amount) return;
+    setAdvanceModal(prev => ({ ...prev, isSaving: true }));
+    try {
+      await dbService.addAdvance({
+        tenantId: profile.tenantId,
+        workerId: advanceModal.worker.id,
+        amount: parseFloat(advanceModal.amount),
+        date: advanceModal.date,
+        reason: advanceModal.reason || 'Kharchi',
+        status: 'APPROVED'
+      });
+      setAdvanceModal(prev => ({ ...prev, isOpen: false, isSaving: false }));
+    } catch (e) {
+      console.error(e);
+      alert("Error saving advance.");
+      setAdvanceModal(prev => ({ ...prev, isSaving: false }));
+    }
+  };
+
   const filteredWorkers = workers.filter(w => 
     w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     w.phone.includes(searchTerm)
   );
+
+  const willOverBorrow = (Number(advanceModal.amount || 0) + advanceModal.existingAdvances) > advanceModal.earned;
 
   return (
     <div className="p-4 h-full relative bg-gray-50 min-h-screen">
@@ -110,6 +171,15 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
               </div>
               
               <div className="flex space-x-2">
+                {/* NEW: Quick Advance Button */}
+                <button 
+                    onClick={() => handleOpenAdvance(worker)}
+                    className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
+                    title="Give Advance"
+                >
+                    <IndianRupee size={18} />
+                </button>
+
                 <button 
                     onClick={() => onEditWorker(worker)}
                     className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
@@ -138,7 +208,83 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
         </div>
       )}
 
-      {/* NEW: Deletion Warning Modal */}
+      {/* NEW: Advance (Kharchi) Modal */}
+      {advanceModal.isOpen && advanceModal.worker && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl overflow-hidden">
+            <div className="bg-green-50 p-4 flex items-center justify-between border-b border-green-100">
+              <div className="flex items-center text-green-700 font-bold">
+                  <IndianRupee size={20} className="mr-2" /> Give Advance
+              </div>
+              <button 
+                  onClick={() => setAdvanceModal(prev => ({ ...prev, isOpen: false }))} 
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                  <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-4">
+              <div className="flex justify-between text-xs bg-gray-50 p-2 rounded-lg border border-gray-100">
+                  <span className="text-gray-500">Earned so far: <span className="font-bold text-gray-800">₹{advanceModal.earned.toLocaleString()}</span></span>
+                  <span className="text-gray-500">Taken: <span className="font-bold text-red-500">₹{advanceModal.existingAdvances.toLocaleString()}</span></span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">Amount (₹)</label>
+                <input 
+                    type="number" 
+                    autoFocus 
+                    value={advanceModal.amount} 
+                    onChange={(e) => setAdvanceModal(prev => ({ ...prev, amount: e.target.value }))} 
+                    className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-green-500 font-bold text-lg" 
+                    placeholder="e.g. 500" 
+                />
+              </div>
+
+              {/* OVER-BORROWING GUARDRAIL */}
+              {willOverBorrow && advanceModal.amount && (
+                 <div className="flex items-start bg-orange-50 text-orange-800 p-3 rounded-lg border border-orange-200 text-xs">
+                    <AlertTriangle size={16} className="mr-2 shrink-0 mt-0.5" />
+                    <p><strong>Over-Borrowing Alert:</strong> The total advance taken will exceed their currently earned wages. Proceed with caution.</p>
+                 </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase">Date</label>
+                    <input 
+                        type="date" 
+                        value={advanceModal.date} 
+                        onChange={(e) => setAdvanceModal(prev => ({ ...prev, date: e.target.value }))} 
+                        className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-sm" 
+                    />
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase">Note</label>
+                    <input 
+                        type="text" 
+                        value={advanceModal.reason} 
+                        onChange={(e) => setAdvanceModal(prev => ({ ...prev, reason: e.target.value }))} 
+                        className="w-full p-3 mt-1 bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-sm" 
+                        placeholder="e.g. Medical" 
+                    />
+                </div>
+              </div>
+
+              <button 
+                  onClick={handleSaveAdvance} 
+                  disabled={advanceModal.isSaving || !advanceModal.amount} 
+                  className="w-full mt-4 py-3 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition-colors flex justify-center items-center disabled:opacity-50"
+              >
+                {advanceModal.isSaving ? 'Saving...' : <><Save size={18} className="mr-2" /> Save Advance</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deletion Warning Modal */}
       {workerToDelete && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl overflow-hidden animate-in fade-in zoom-in duration-200">

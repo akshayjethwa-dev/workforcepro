@@ -1,11 +1,10 @@
-// src/screens/WorkerHistoryScreen.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { Worker, AttendanceRecord, Punch, OrgSettings } from '../types/index';
+import { Worker, AttendanceRecord, Punch, OrgSettings, Advance } from '../types/index';
 
 export const WorkerHistoryScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -13,6 +12,7 @@ export const WorkerHistoryScreen: React.FC = () => {
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [monthAdvances, setMonthAdvances] = useState<Advance[]>([]);
   const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
   const [loading, setLoading] = useState(true);
 
@@ -39,7 +39,7 @@ export const WorkerHistoryScreen: React.FC = () => {
     }
   }, [profile]);
 
-  // 2. Load Attendance when Worker or Month changes
+  // 2. Load Attendance & Advances when Worker or Month changes
   useEffect(() => {
     if (profile?.tenantId && selectedWorkerId) {
       dbService.getAttendanceHistory(profile.tenantId).then(allRecords => {
@@ -51,14 +51,20 @@ export const WorkerHistoryScreen: React.FC = () => {
         filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         setAttendanceHistory(filtered);
       });
+
+      // Load Advances for Ledger & Net Calculation
+      dbService.getAdvances(profile.tenantId).then(advances => {
+        setMonthAdvances(advances.filter(a => a.workerId === selectedWorkerId && a.date.startsWith(selectedMonth)));
+      });
     } else {
         setAttendanceHistory([]);
+        setMonthAdvances([]);
     }
   }, [selectedWorkerId, selectedMonth, profile]);
 
   const selectedWorker = workers.find(w => w.id === selectedWorkerId);
 
-  // 3. Calculate Summary Stats
+  // 3. Calculate Summary Stats & Net Earnings
   const summary = useMemo(() => {
     if (!selectedWorker) return null;
     
@@ -81,8 +87,11 @@ export const WorkerHistoryScreen: React.FC = () => {
        totalOT += record.hours?.overtime || 0;
     });
 
-    return { totalEarning, presentDays, halfDays, absentDays, lateDays, totalOT, count: attendanceHistory.length };
-  }, [attendanceHistory, selectedWorker]);
+    const totalAdvances = monthAdvances.reduce((sum, a) => sum + a.amount, 0);
+    const netEarning = Math.max(0, totalEarning - totalAdvances);
+
+    return { totalEarning, totalAdvances, netEarning, presentDays, halfDays, absentDays, lateDays, totalOT, count: attendanceHistory.length };
+  }, [attendanceHistory, monthAdvances, selectedWorker]);
 
   const toggleExpand = (recordId: string) => {
       setExpandedLogs(prev => {
@@ -99,63 +108,37 @@ export const WorkerHistoryScreen: React.FC = () => {
     setSavingRegulation(true);
 
     try {
-      // Safely construct the exact local time using numbers (Prevents UTC timezone offset bugs)
       const [year, month, day] = editingRecord.date.split('-').map(Number);
       const [hour, min] = regulateTime.split(':').map(Number);
       const localDate = new Date(year, month - 1, day, hour, min);
       
-      const newPunch: Punch = {
-        timestamp: localDate.toISOString(),
-        type: regulateType,
-        device: 'MANUAL_OVERRIDE_BY_ADMIN'
-      };
+      const newPunch: Punch = { timestamp: localDate.toISOString(), type: regulateType, device: 'MANUAL_OVERRIDE_BY_ADMIN' };
 
-      // Replace existing punch instead of adding duplicates
       let updatedTimeline = [...(editingRecord.timeline || [])];
       
       if (regulateType === 'IN') {
-          // Replace the FIRST 'IN' punch if it exists
           const firstInIdx = updatedTimeline.findIndex(p => p.type === 'IN');
-          if (firstInIdx >= 0) {
-              updatedTimeline[firstInIdx] = newPunch;
-          } else {
-              updatedTimeline.push(newPunch);
-          }
+          if (firstInIdx >= 0) updatedTimeline[firstInIdx] = newPunch;
+          else updatedTimeline.push(newPunch);
       } else {
-          // Replace the LAST 'OUT' punch if it exists
           const reverseOutIdx = [...updatedTimeline].reverse().findIndex(p => p.type === 'OUT');
           if (reverseOutIdx >= 0) {
               const lastOutIdx = updatedTimeline.length - 1 - reverseOutIdx;
               updatedTimeline[lastOutIdx] = newPunch;
-          } else {
-              updatedTimeline.push(newPunch);
-          }
+          } else updatedTimeline.push(newPunch);
       }
 
-      // Ensure chronological order
       updatedTimeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-      // Fetch requirements to recalculate status
       const shift = settings.shifts.find(s => s.id === selectedWorker.shiftId) || settings.shifts[0];
       const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, selectedWorker.id);
 
-      const draftRecord: AttendanceRecord = {
-        ...editingRecord,
-        timeline: updatedTimeline
-      };
+      const draftRecord: AttendanceRecord = { ...editingRecord, timeline: updatedTimeline };
 
-      // Recalculate everything
-      const finalRecord = attendanceLogic.processDailyStatus(
-        draftRecord, 
-        shift, 
-        lateCount, 
-        settings.enableBreakTracking
-      );
+      const finalRecord = attendanceLogic.processDailyStatus(draftRecord, shift, lateCount, settings.enableBreakTracking);
 
-      // Save to DB
       await dbService.markAttendanceOnline(finalRecord);
 
-      // Update Local State
       setAttendanceHistory(prev => prev.map(r => r.id === finalRecord.id ? finalRecord : r));
       setEditingRecord(null);
 
@@ -168,7 +151,6 @@ export const WorkerHistoryScreen: React.FC = () => {
   };
 
   const openRegulationModal = (record: AttendanceRecord) => {
-      // Pre-fill the modal with the first IN time or shift time
       setEditingRecord(record);
       setRegulateType('IN');
       const firstIn = record.timeline?.find(p => p.type === 'IN');
@@ -223,8 +205,13 @@ export const WorkerHistoryScreen: React.FC = () => {
                     <div className="relative z-10">
                         <div className="flex justify-between items-start">
                             <div>
-                                <p className="text-blue-100 text-xs font-bold uppercase">Estimated Earnings</p>
-                                <h3 className="text-3xl font-bold mt-1">₹{summary.totalEarning.toLocaleString()}</h3>
+                                <p className="text-blue-100 text-xs font-bold uppercase">Estimated Net Earnings</p>
+                                <h3 className="text-3xl font-bold mt-1">₹{summary.netEarning.toLocaleString()}</h3>
+                                {summary.totalAdvances > 0 && (
+                                   <p className="text-[10px] text-blue-200 mt-1 font-medium">
+                                      Gross: ₹{summary.totalEarning.toLocaleString()} - Advances: ₹{summary.totalAdvances.toLocaleString()}
+                                   </p>
+                                )}
                             </div>
                             <div className="bg-white/10 p-2 rounded-lg backdrop-blur-sm">
                                 <Calendar className="text-white" size={24} />
@@ -253,6 +240,30 @@ export const WorkerHistoryScreen: React.FC = () => {
                 </div>
             )}
 
+            {/* NEW: Kharchi / Advances Ledger */}
+            {monthAdvances.length > 0 && (
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-orange-100 mb-6">
+                 <h3 className="font-bold text-gray-700 mb-3 text-sm flex items-center">
+                    <IndianRupee size={16} className="mr-1 text-orange-500"/> Kharchi / Advances Ledger
+                 </h3>
+                 <div className="space-y-2">
+                    {monthAdvances.map(adv => (
+                       <div key={adv.id} className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
+                          <div>
+                             <p className="font-bold text-gray-800">{new Date(adv.date).toLocaleDateString()}</p>
+                             <p className="text-xs text-gray-500">{adv.reason}</p>
+                          </div>
+                          <span className="font-bold text-red-500">-₹{adv.amount}</span>
+                       </div>
+                    ))}
+                    <div className="flex justify-between items-center pt-2 font-bold text-sm">
+                       <span>Total Taken:</span>
+                       <span className="text-red-600">-₹{summary?.totalAdvances}</span>
+                    </div>
+                 </div>
+              </div>
+            )}
+
             {/* Daily List */}
             <h3 className="font-bold text-gray-700 mb-3 text-sm">Daily Records ({attendanceHistory.length})</h3>
             
@@ -268,7 +279,6 @@ export const WorkerHistoryScreen: React.FC = () => {
                     const isCurrentlyIn = sortedTimeline.length > 0 && sortedTimeline[sortedTimeline.length - 1].type === 'IN';
                     const isExpanded = expandedLogs.has(record.id);
 
-                    // Dynamic "Live" Calculation for Today's Date
                     const todayStr = new Date().toISOString().split('T')[0];
                     const isToday = record.date === todayStr;
                     
@@ -277,20 +287,14 @@ export const WorkerHistoryScreen: React.FC = () => {
                     
                     if (isToday && record.status !== 'ON_LEAVE') {
                         displayHours = attendanceLogic.calculateHours(record.timeline || [], settings.enableBreakTracking);
-                        if (displayHours >= 6) {
-                            computedStatus = 'PRESENT';
-                        } else if (displayHours >= 4) {
-                            computedStatus = 'HALF_DAY';
-                        } else {
-                            if (isCurrentlyIn) {
-                                computedStatus = 'PENDING';
-                            } else {
-                                computedStatus = 'ABSENT';
-                            }
+                        if (displayHours >= 6) computedStatus = 'PRESENT';
+                        else if (displayHours >= 4) computedStatus = 'HALF_DAY';
+                        else {
+                            if (isCurrentlyIn) computedStatus = 'PENDING';
+                            else computedStatus = 'ABSENT';
                         }
                     }
 
-                    // Status Badges
                     let statusColor = 'bg-gray-100 text-gray-500';
                     let statusText = 'ABSENT';
 
