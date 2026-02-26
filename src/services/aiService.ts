@@ -1,15 +1,22 @@
 // src/services/aiService.ts
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db } from '../lib/firebase'; 
+import { app, auth } from '../lib/firebase'; // Import app and auth
 
 export const aiService = {
   askAssistant: async (tenantId: string, message: string): Promise<string> => {
     try {
-      // FIX: Explicitly pass 'db.app' here. 
-      // This tells the function to attach the current user's Auth Token!
-      const functions = getFunctions(db.app); 
+      // 1. Prevent the call if the token isn't ready
+      if (!auth.currentUser) {
+        throw new Error("Firebase Auth user is not loaded yet.");
+      }
+
+      // 2. Use the directly exported app instance
+      const functions = getFunctions(app); 
       
-      // Call the cloud function named 'askFactoryAI'
+      // Note: If your Firebase backend is hosted outside the default us-central1 
+      // (e.g., asia-south1), you must specify it here to avoid CORS/401 errors:
+      // const functions = getFunctions(app, 'asia-south1');
+      
       const askFactoryAI = httpsCallable(functions, 'askFactoryAI');
       
       const result = await askFactoryAI({ tenantId, message });
