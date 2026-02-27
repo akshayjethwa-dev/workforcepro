@@ -1,12 +1,22 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 import * as admin from 'firebase-admin';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 admin.initializeApp();
 const db = admin.firestore();
 
-const GEMINI_API_KEY = 'AIzaSyAo_lEkpMKCIwdEKf2T8KU_ft_VPTj9OWQ';
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+// ✅ SECURE: Using Firebase Secrets instead of hardcoded key
+const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+
+// ✅ Lazy initialization - only creates when needed
+let genAI: GoogleGenerativeAI | null = null;
+function getGenAI() {
+  if (!genAI) {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+  }
+  return genAI;
+}
 
 enum QueryIntent {
   ATTENDANCE_TODAY = 'attendance_today',
@@ -29,7 +39,9 @@ export const chatWithAI = onCall(
   {
     region: 'asia-south1',
     timeoutSeconds: 60,
-    memory: '512MiB'
+    memory: '512MiB',
+    // ✅ SECURE: Binds the secret to this function
+    secrets: [GEMINI_API_KEY]
   },
   async (request) => {
     console.log('🔐 Auth Status:', {
@@ -75,7 +87,7 @@ export const chatWithAI = onCall(
 );
 
 async function classifyIntent(message: string): Promise<QueryIntent> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const prompt = `
 You are an intent classifier for a factory workforce management system.
@@ -118,7 +130,8 @@ async function fetchDataBasedOnIntent(
   tenantId: string,
   message: string
 ): Promise<any> {
-  const today = new Date().toISOString().split('T')[0];
+  // ✅ Fixed Timezone: Using IST date instead of UTC
+  const today = getISTDateString();
 
   console.log(`📍 Processing intent: ${intent}`);
 
@@ -295,7 +308,9 @@ async function fetchDataBasedOnIntent(
   }
 
   if (intent === QueryIntent.PAYROLL) {
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    // ✅ Fixed Timezone: Using IST month instead of UTC
+    const currentMonth = getISTMonthString();
+    
     const payrollSnapshot = await db
       .collection('payrolls')
       .where('tenantId', '==', tenantId)
@@ -326,7 +341,7 @@ async function generateResponse(
   intent: QueryIntent,
   language: 'english' | 'gujarati'
 ): Promise<string> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const languageInstruction = language === 'gujarati' 
     ? 'Respond in Gujarati script (ગુજરાતી). Use English numbers (123) but Gujarati text.'
@@ -375,17 +390,20 @@ function extractWorkerName(message: string): string | null {
 }
 
 function extractDate(message: string): string | null {
-  const today = new Date();
   const lowerMessage = message.toLowerCase();
 
   if (lowerMessage.includes('today')) {
-    return today.toISOString().split('T')[0];
+    return getISTDateString();
   }
 
   if (lowerMessage.includes('yesterday')) {
-    const yesterday = new Date(today);
+    const yesterday = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
     yesterday.setDate(yesterday.getDate() - 1);
-    return yesterday.toISOString().split('T')[0];
+    
+    const y = yesterday.getFullYear();
+    const m = String(yesterday.getMonth() + 1).padStart(2, '0');
+    const d = String(yesterday.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
 
   return null;
@@ -393,12 +411,16 @@ function extractDate(message: string): string | null {
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
-  const today = new Date().toISOString().split('T')[0];
-  const yesterday = new Date();
+  const todayStr = getISTDateString();
+  
+  const yesterday = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
   yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const y = yesterday.getFullYear();
+  const m = String(yesterday.getMonth() + 1).padStart(2, '0');
+  const d = String(yesterday.getDate()).padStart(2, '0');
+  const yesterdayStr = `${y}-${m}-${d}`;
 
-  if (dateStr === today) return 'today';
+  if (dateStr === todayStr) return 'today';
   if (dateStr === yesterdayStr) return 'yesterday';
   
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -411,4 +433,29 @@ function formatTime(timestamp: string): string {
     minute: '2-digit',
     hour12: true 
   });
+}
+
+// ==========================================
+// 🕒 IST Timezone Helper Functions Added
+// ==========================================
+
+function getISTDateString(date: Date = new Date()): string {
+  const options: Intl.DateTimeFormatOptions = { 
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', 
+    month: '2-digit', 
+    day: '2-digit' 
+  };
+  
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  const parts = formatter.formatToParts(date);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  
+  return `${year}-${month}-${day}`;
+}
+
+function getISTMonthString(): string {
+  return getISTDateString().slice(0, 7);
 }

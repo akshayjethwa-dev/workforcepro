@@ -24,14 +24,22 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.chatWithAI = void 0;
-const functions = __importStar(require("firebase-functions/v2"));
+const https_1 = require("firebase-functions/v2/https");
+const params_1 = require("firebase-functions/params");
 const admin = __importStar(require("firebase-admin"));
 const generative_ai_1 = require("@google/generative-ai");
 admin.initializeApp();
 const db = admin.firestore();
-// ✅ SIMPLE: Hardcoded API key (no secrets)
-const GEMINI_API_KEY = 'AIzaSyAo_lEkpMKCIwdEKf2T8KU_ft_VPTj9OWQ';
-const genAI = new generative_ai_1.GoogleGenerativeAI(GEMINI_API_KEY);
+// ✅ SECURE: Using Firebase Secrets instead of hardcoded key
+const GEMINI_API_KEY = (0, params_1.defineSecret)('GEMINI_API_KEY');
+// ✅ Lazy initialization - only creates when needed
+let genAI = null;
+function getGenAI() {
+    if (!genAI) {
+        genAI = new generative_ai_1.GoogleGenerativeAI(GEMINI_API_KEY.value());
+    }
+    return genAI;
+}
 var QueryIntent;
 (function (QueryIntent) {
     QueryIntent["ATTENDANCE_TODAY"] = "attendance_today";
@@ -43,26 +51,29 @@ var QueryIntent;
     QueryIntent["WORKER_COUNT"] = "worker_count";
     QueryIntent["GENERAL"] = "general";
 })(QueryIntent || (QueryIntent = {}));
-// ✅ NO SECRETS in function config
-exports.chatWithAI = functions.https.onCall({
+exports.chatWithAI = (0, https_1.onCall)({
     region: 'asia-south1',
     timeoutSeconds: 60,
-    memory: '512MiB'
-    // ❌ NO secrets: [] here!
+    memory: '512MiB',
+    // ✅ SECURE: Binds the secret to this function
+    secrets: [GEMINI_API_KEY]
 }, async (request) => {
-    if (!request.auth) {
-        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
-    }
+    var _a, _b, _c;
+    console.log('🔐 Auth Status:', {
+        hasAuth: !!request.auth,
+        uid: (_a = request.auth) === null || _a === void 0 ? void 0 : _a.uid,
+        email: (_c = (_b = request.auth) === null || _b === void 0 ? void 0 : _b.token) === null || _c === void 0 ? void 0 : _c.email
+    });
     const { message, tenantId, language = 'english' } = request.data;
     if (!message || !tenantId) {
-        throw new functions.https.HttpsError('invalid-argument', 'Message and tenantId are required');
+        throw new https_1.HttpsError('invalid-argument', 'Message and tenantId are required');
     }
     try {
         console.log(`AI Query from ${tenantId}: ${message}`);
         const intent = await classifyIntent(message);
         console.log(`Classified intent: ${intent}`);
         const firestoreData = await fetchDataBasedOnIntent(intent, tenantId, message);
-        console.log(`Fetched data:`, firestoreData);
+        console.log(`Fetched data:`, JSON.stringify(firestoreData).substring(0, 500));
         const response = await generateResponse(message, firestoreData, intent, language);
         return {
             success: true,
@@ -73,28 +84,29 @@ exports.chatWithAI = functions.https.onCall({
     }
     catch (error) {
         console.error('AI Chat Error:', error);
-        throw new functions.https.HttpsError('internal', `Failed to process request: ${error}`);
+        throw new https_1.HttpsError('internal', `Failed to process request: ${error.message || error}`);
     }
 });
 async function classifyIntent(message) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // ✅ Changed from genAI to getGenAI()
+    const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' });
     const prompt = `
 You are an intent classifier for a factory workforce management system.
 Classify this user query into ONE category:
 
 Categories:
-- attendance_today: "Who is absent today?", "Who came today?", "Today's attendance"
-- attendance_specific: "Was Ramesh present yesterday?", "Attendance for specific date/person"
+- attendance_today: "Who is absent today?", "Who came today?", "Today's attendance summary"
+- attendance_specific: "Check-in time of [name]", "punch in time", "When did [name] arrive?", "Was [name] present on [date]?", "Attendance of [name]", "Show me [name]'s attendance"
 - overtime: "How much overtime did [name] do?", "Overtime this week/month"
 - payroll: "Total payroll cost", "Monthly salary expenses", "Payment summary"
-- worker_info: "Worker details", "Phone number of [name]", "Department info"
-- advances: "Advances given", "How much kharchi did [name] take?"
-- worker_count: "How many workers?", "Total employees", "Active workers"
-- general: Any other questions
+- worker_info: "Phone number of [name]", "Department of [name]", "Worker details of [name]"
+- advances: "Advances given to [name]", "How much kharchi did [name] take?"
+- worker_count: "How many workers?", "Total employees", "Active workers count"
+- general: System questions, greetings, unclear queries
 
 User query: "${message}"
 
-Respond with ONLY the category name (e.g., "attendance_today"), nothing else.
+Respond with ONLY the category name (e.g., "attendance_specific"), nothing else.
 `;
     const result = await model.generateContent(prompt);
     const response = result.response.text().trim().toLowerCase();
@@ -111,171 +123,180 @@ Respond with ONLY the category name (e.g., "attendance_today"), nothing else.
     return intentMap[response] || QueryIntent.GENERAL;
 }
 async function fetchDataBasedOnIntent(intent, tenantId, message) {
-    var _a, _b, _c;
+    var _a, _b;
     const today = new Date().toISOString().split('T')[0];
-    switch (intent) {
-        case QueryIntent.ATTENDANCE_TODAY: {
-            const attendanceSnapshot = await db
-                .collection('attendance')
-                .where('tenantId', '==', tenantId)
-                .where('date', '==', today)
-                .get();
-            const workersSnapshot = await db
-                .collection('workers')
-                .where('tenantId', '==', tenantId)
-                .where('status', '==', 'ACTIVE')
-                .get();
-            const attendance = attendanceSnapshot.docs.map(doc => doc.data());
-            const allWorkers = workersSnapshot.docs.map(doc => ({
-                id: doc.id,
-                name: doc.data().name,
-                phone: doc.data().phone
-            }));
-            const presentWorkerIds = new Set(attendance.map((a) => a.workerId));
-            const absentWorkers = allWorkers.filter(w => !presentWorkerIds.has(w.id));
+    console.log(`📍 Processing intent: ${intent}`);
+    if (intent === QueryIntent.ATTENDANCE_SPECIFIC) {
+        console.log('🎯 ATTENDANCE_SPECIFIC case triggered');
+        const workerName = extractWorkerName(message);
+        const targetDate = extractDate(message) || today;
+        console.log('🔍 Searching for worker:', workerName, 'on date:', targetDate);
+        if (!workerName) {
             return {
-                date: today,
-                presentCount: attendance.filter((a) => a.status === 'PRESENT' || a.status === 'HALF_DAY').length,
-                absentCount: absentWorkers.length,
-                totalWorkers: allWorkers.length,
-                absentWorkers: absentWorkers.map(w => w.name),
-                attendance: attendance
+                error: 'Could not identify worker name',
+                message: 'Please specify which worker you want to check'
             };
         }
-        case QueryIntent.OVERTIME: {
-            const workerName = extractWorkerName(message);
-            let workerId = null;
-            if (workerName) {
-                const workerSnapshot = await db
-                    .collection('workers')
-                    .where('tenantId', '==', tenantId)
-                    .where('name', '==', workerName)
-                    .limit(1)
-                    .get();
-                if (!workerSnapshot.empty) {
-                    workerId = workerSnapshot.docs[0].id;
+        // Get ALL active workers
+        const allWorkersSnap = await db
+            .collection('workers')
+            .where('tenantId', '==', tenantId)
+            .where('status', '==', 'ACTIVE')
+            .get();
+        console.log('📋 Total active workers found:', allWorkersSnap.size);
+        if (allWorkersSnap.empty) {
+            return {
+                error: 'No active workers found',
+                message: 'There are no active workers in your system'
+            };
+        }
+        // Find matching worker
+        let matchedWorkerId = null;
+        let matchedWorkerName = null;
+        const searchNameLower = workerName.toLowerCase().trim();
+        // Exact match
+        for (const doc of allWorkersSnap.docs) {
+            const dbName = doc.data().name.toLowerCase().trim();
+            if (dbName === searchNameLower) {
+                matchedWorkerId = doc.id;
+                matchedWorkerName = doc.data().name;
+                console.log('✅ Exact match found:', matchedWorkerName);
+                break;
+            }
+        }
+        // Partial match
+        if (!matchedWorkerId) {
+            for (const doc of allWorkersSnap.docs) {
+                const dbName = doc.data().name.toLowerCase().trim();
+                if (dbName.includes(searchNameLower) || searchNameLower.includes(dbName)) {
+                    matchedWorkerId = doc.id;
+                    matchedWorkerName = doc.data().name;
+                    console.log('✅ Partial match found:', matchedWorkerName);
+                    break;
                 }
             }
-            const query = db
-                .collection('attendance')
-                .where('tenantId', '==', tenantId);
-            const attendanceSnapshot = workerId
-                ? await query.where('workerId', '==', workerId).get()
-                : await query.get();
-            const overtimeRecords = attendanceSnapshot.docs
-                .map(doc => doc.data())
-                .filter((record) => { var _a; return ((_a = record.hours) === null || _a === void 0 ? void 0 : _a.overtime) > 0; });
+        }
+        if (!matchedWorkerId) {
+            console.log('❌ No worker found matching:', workerName);
+            const availableNames = allWorkersSnap.docs.map(d => d.data().name);
+            console.log('Available workers:', availableNames);
             return {
-                workerName,
-                overtimeRecords: overtimeRecords.map((r) => ({
-                    workerName: r.workerName,
-                    date: r.date,
-                    overtimeHours: r.hours.overtime
-                }))
+                error: 'Worker not found',
+                searchedName: workerName,
+                availableWorkers: availableNames,
+                message: `Could not find "${workerName}". Available: ${availableNames.slice(0, 5).join(', ')}`
             };
         }
-        case QueryIntent.PAYROLL: {
-            const currentMonth = new Date().toISOString().slice(0, 7);
-            const payrollSnapshot = await db
-                .collection('payrolls')
-                .where('tenantId', '==', tenantId)
-                .where('month', '==', currentMonth)
-                .get();
-            const payrolls = payrollSnapshot.docs.map(doc => doc.data());
-            const totalPayroll = payrolls.reduce((sum, p) => sum + (p.netPayable || 0), 0);
+        console.log('🎯 Using worker:', matchedWorkerName, 'ID:', matchedWorkerId);
+        // Get attendance
+        const attendanceSnap = await db
+            .collection('attendance')
+            .where('tenantId', '==', tenantId)
+            .where('workerId', '==', matchedWorkerId)
+            .where('date', '==', targetDate)
+            .limit(1)
+            .get();
+        console.log('📅 Attendance records found:', attendanceSnap.size);
+        if (attendanceSnap.empty) {
             return {
-                month: currentMonth,
-                totalPayroll,
-                workerCount: payrolls.length,
-                payrolls: payrolls.map((p) => ({
-                    workerName: p.workerName,
-                    netPayable: p.netPayable,
-                    status: p.status
-                }))
+                workerName: matchedWorkerName,
+                date: targetDate,
+                status: 'ABSENT',
+                message: `No attendance record for ${matchedWorkerName} on ${formatDate(targetDate)}`
             };
         }
-        case QueryIntent.WORKER_INFO: {
-            const workerName = extractWorkerName(message);
-            if (workerName) {
-                const workerSnapshot = await db
-                    .collection('workers')
-                    .where('tenantId', '==', tenantId)
-                    .where('name', '==', workerName)
-                    .limit(1)
-                    .get();
-                if (!workerSnapshot.empty) {
-                    const worker = workerSnapshot.docs[0].data();
-                    return {
-                        workerName: worker.name,
-                        phone: worker.phone,
-                        department: worker.department,
-                        designation: worker.designation,
-                        joinedDate: worker.joinedDate,
-                        wageType: (_a = worker.wageConfig) === null || _a === void 0 ? void 0 : _a.type,
-                        amount: (_b = worker.wageConfig) === null || _b === void 0 ? void 0 : _b.amount
-                    };
-                }
+        const attendance = attendanceSnap.docs[0].data();
+        console.log('✅ Attendance status:', attendance.status);
+        let checkInTime = 'Not recorded';
+        let checkOutTime = 'Not checked out yet';
+        if (attendance.timeline && attendance.timeline.length > 0) {
+            const timeline = attendance.timeline;
+            const firstIn = timeline.find((p) => p.type === 'IN');
+            if (firstIn) {
+                checkInTime = formatTime(firstIn.timestamp);
             }
-            const workersSnapshot = await db
-                .collection('workers')
-                .where('tenantId', '==', tenantId)
-                .where('status', '==', 'ACTIVE')
-                .get();
-            return {
-                workers: workersSnapshot.docs.map(doc => ({
-                    name: doc.data().name,
-                    department: doc.data().department,
-                    designation: doc.data().designation
-                }))
-            };
-        }
-        case QueryIntent.ADVANCES: {
-            const advancesSnapshot = await db
-                .collection('advances')
-                .where('tenantId', '==', tenantId)
-                .where('status', '==', 'APPROVED')
-                .get();
-            const advances = advancesSnapshot.docs.map(doc => doc.data());
-            const totalAdvances = advances.reduce((sum, a) => sum + a.amount, 0);
-            const workerIds = [...new Set(advances.map((a) => a.workerId))];
-            const workerNames = {};
-            for (const wid of workerIds) {
-                const workerDoc = await db.collection('workers').doc(wid).get();
-                if (workerDoc.exists) {
-                    workerNames[wid] = ((_c = workerDoc.data()) === null || _c === void 0 ? void 0 : _c.name) || 'Unknown';
-                }
+            const lastOut = [...timeline].reverse().find((p) => p.type === 'OUT');
+            if (lastOut) {
+                checkOutTime = formatTime(lastOut.timestamp);
             }
-            return {
-                totalAdvances,
-                count: advances.length,
-                advances: advances.map((a) => ({
-                    workerName: workerNames[a.workerId],
-                    amount: a.amount,
-                    date: a.date,
-                    reason: a.reason
-                }))
-            };
         }
-        case QueryIntent.WORKER_COUNT: {
-            const workersSnapshot = await db
-                .collection('workers')
-                .where('tenantId', '==', tenantId)
-                .where('status', '==', 'ACTIVE')
-                .get();
-            return {
-                totalWorkers: workersSnapshot.size,
-                workers: workersSnapshot.docs.map(doc => ({
-                    name: doc.data().name,
-                    department: doc.data().department
-                }))
-            };
-        }
-        default:
-            return { message: 'General query - no specific data needed' };
+        return {
+            workerName: matchedWorkerName,
+            date: targetDate,
+            status: attendance.status || 'PRESENT',
+            checkInTime,
+            checkOutTime,
+            totalHours: ((_a = attendance.hours) === null || _a === void 0 ? void 0 : _a.total) || 0,
+            overtime: ((_b = attendance.hours) === null || _b === void 0 ? void 0 : _b.overtime) || 0,
+            timeline: attendance.timeline || []
+        };
     }
+    if (intent === QueryIntent.ATTENDANCE_TODAY) {
+        const attendanceSnapshot = await db
+            .collection('attendance')
+            .where('tenantId', '==', tenantId)
+            .where('date', '==', today)
+            .get();
+        const workersSnapshot = await db
+            .collection('workers')
+            .where('tenantId', '==', tenantId)
+            .where('status', '==', 'ACTIVE')
+            .get();
+        const attendance = attendanceSnapshot.docs.map(doc => doc.data());
+        const allWorkers = workersSnapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name
+        }));
+        const presentWorkerIds = new Set(attendance.map((a) => a.workerId));
+        const absentWorkers = allWorkers.filter(w => !presentWorkerIds.has(w.id));
+        return {
+            date: today,
+            presentCount: attendance.filter((a) => a.status === 'PRESENT' || a.status === 'HALF_DAY').length,
+            absentCount: absentWorkers.length,
+            totalWorkers: allWorkers.length,
+            absentWorkers: absentWorkers.map(w => w.name),
+            attendance: attendance
+        };
+    }
+    if (intent === QueryIntent.WORKER_COUNT) {
+        const workersSnapshot = await db
+            .collection('workers')
+            .where('tenantId', '==', tenantId)
+            .where('status', '==', 'ACTIVE')
+            .get();
+        return {
+            totalWorkers: workersSnapshot.size,
+            workers: workersSnapshot.docs.map(doc => ({
+                name: doc.data().name,
+                department: doc.data().department
+            }))
+        };
+    }
+    if (intent === QueryIntent.PAYROLL) {
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        const payrollSnapshot = await db
+            .collection('payrolls')
+            .where('tenantId', '==', tenantId)
+            .where('month', '==', currentMonth)
+            .get();
+        const payrolls = payrollSnapshot.docs.map(doc => doc.data());
+        const totalPayroll = payrolls.reduce((sum, p) => sum + (p.netPayable || 0), 0);
+        return {
+            month: currentMonth,
+            totalPayroll,
+            workerCount: payrolls.length,
+            payrolls: payrolls.map((p) => ({
+                workerName: p.workerName,
+                netPayable: p.netPayable,
+                status: p.status
+            }))
+        };
+    }
+    return { message: 'General query - no specific data needed' };
 }
 async function generateResponse(userQuery, firestoreData, intent, language) {
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // ✅ Changed from genAI to getGenAI()
+    const model = getGenAI().getGenerativeModel({ model: 'gemini-2.5-flash' });
     const languageInstruction = language === 'gujarati'
         ? 'Respond in Gujarati script (ગુજરાતી). Use English numbers (123) but Gujarati text.'
         : 'Respond in simple English.';
@@ -290,13 +311,11 @@ ${JSON.stringify(firestoreData, null, 2)}
 Instructions:
 1. ${languageInstruction}
 2. Be conversational and friendly
-3. Use ₹ symbol for money (e.g., ₹5,000)
-4. Format numbers clearly with commas
-5. If data is empty, say "No records found" politely
-6. Keep response under 5 sentences
-7. If asked about absent workers, list names clearly
-8. For overtime, show hours and worker names
-9. For payroll, show total amount clearly
+3. Use ₹ symbol for money
+4. If data shows error or "not found", politely explain
+5. For check-in/out times, format clearly
+6. If worker absent, say so clearly
+7. Keep response under 5 sentences
 
 Generate a helpful response:
 `;
@@ -304,12 +323,48 @@ Generate a helpful response:
     return result.response.text();
 }
 function extractWorkerName(message) {
-    const words = message.split(' ');
+    const commonWords = ['check', 'in', 'time', 'of', 'for', 'give', 'me', 'show', 'what', 'when', 'did', 'the', 'a', 'an', 'is', 'was', 'today', 'yesterday', 'attendance', 'punch', 'present'];
+    const words = message.split(' ').filter(word => !commonWords.includes(word.toLowerCase()) &&
+        word.length > 2 &&
+        /^[A-Za-z]+$/.test(word));
     for (const word of words) {
-        if (word[0] === word[0].toUpperCase() && word.length > 2 && /^[A-Za-z]+$/.test(word)) {
+        if (word[0] === word[0].toUpperCase()) {
             return word;
         }
     }
+    return words[0] || null;
+}
+function extractDate(message) {
+    const today = new Date();
+    const lowerMessage = message.toLowerCase();
+    if (lowerMessage.includes('today')) {
+        return today.toISOString().split('T')[0];
+    }
+    if (lowerMessage.includes('yesterday')) {
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        return yesterday.toISOString().split('T')[0];
+    }
     return null;
+}
+function formatDate(dateStr) {
+    const date = new Date(dateStr);
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    if (dateStr === today)
+        return 'today';
+    if (dateStr === yesterdayStr)
+        return 'yesterday';
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function formatTime(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
 }
 //# sourceMappingURL=index.js.map
