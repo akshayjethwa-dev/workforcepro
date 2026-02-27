@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react';
+import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight, MapPin } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
@@ -293,13 +293,18 @@ export const AttendanceScreen: React.FC = () => {
                                        const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
                                        return (
                                            <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100">
-                                                <div className="flex items-center">
-                                                    <div className={`w-2 h-2 rounded-full mr-2 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                                    <span className="font-bold uppercase tracking-wide">{punch.type}</span>
-                                                    {isRegulated && (
-                                                        <span className="ml-2 text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
-                                                    )}
-                                                </div>
+                                                <div className="flex items-center flex-wrap gap-1">
+    <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+    <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
+    {isRegulated && (
+        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+    )}
+    {punch.isOutOfGeofence && (
+        <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" title="Outside Geofence">
+            <MapPin size={10} className="mr-0.5"/> Out of Zone
+        </span>
+    )}
+</div>
                                                 <span className="font-mono font-bold text-gray-800">
                                                     {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                                                 </span>

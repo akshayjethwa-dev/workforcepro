@@ -34,7 +34,8 @@ export const SettingsScreen: React.FC = () => {
     if (profile) {
       const currentOrg = { 
         companyName: profile.companyName || '', 
-        ownerName: profile.name || '' 
+        // @ts-ignore - name might exist dynamically or we fallback to email
+        ownerName: (profile as any).name || profile.email || '' 
       };
       setOrgProfile(currentOrg);
       setInitialOrgProfile(currentOrg);
@@ -179,7 +180,8 @@ export const SettingsScreen: React.FC = () => {
       }
 
       if (JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile)) {
-        const userId = profile.uid || profile.id; 
+        // Fix: Use profile.uid directly (removed profile.id to fix TS error)
+        const userId = profile.uid; 
         if (userId) {
             await updateDoc(doc(db, "users", userId), {
                 companyName: orgProfile.companyName,

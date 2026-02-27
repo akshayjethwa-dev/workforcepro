@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee } from 'lucide-react';
+import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee, MapPin } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
@@ -283,7 +283,9 @@ export const WorkerHistoryScreen: React.FC = () => {
                     const isToday = record.date === todayStr;
                     
                     let displayHours = record.hours?.net || 0;
-                    let computedStatus = record.status;
+                    
+                    // FIX: Explicitly tell TypeScript that computedStatus can be 'PENDING' too
+                    let computedStatus: 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'ON_LEAVE' | 'PENDING' = record.status;
                     
                     if (isToday && record.status !== 'ON_LEAVE') {
                         displayHours = attendanceLogic.calculateHours(record.timeline || [], settings.enableBreakTracking);
@@ -371,11 +373,16 @@ export const WorkerHistoryScreen: React.FC = () => {
                                                const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
                                                return (
                                                    <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100 shadow-sm">
-                                                        <div className="flex items-center">
-                                                            <div className={`w-2 h-2 rounded-full mr-2 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                                            <span className="font-bold uppercase tracking-wide">{punch.type}</span>
+                                                        <div className="flex items-center flex-wrap gap-1">
+                                                            <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                            <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
                                                             {isRegulated && (
-                                                                <span className="ml-2 text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                                <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                            )}
+                                                            {punch.isOutOfGeofence && (
+                                                                <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" title="Outside Geofence">
+                                                                    <MapPin size={10} className="mr-0.5"/> Out of Zone
+                                                                </span>
                                                             )}
                                                         </div>
                                                         <span className="font-mono font-bold text-gray-800">

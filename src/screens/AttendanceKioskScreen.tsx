@@ -7,6 +7,7 @@ import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 import { useBackButton } from '../hooks/useBackButton';
+import { geoUtils } from '../utils/geo'; // NEW IMPORT FOR GEOFENCING
 
 // NEW PROP: branchId determines which faces to download
 interface Props { onExit: () => void; branchId: string; }
@@ -304,11 +305,40 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             }
         }
 
+        // --- NEW GEOFENCE LOGIC FOR KIOSK ---
+        let currentLocation: { lat: number; lng: number } | undefined;
+        let isOutOfGeofence = false;
+
+        if (navigator.geolocation) {
+            try {
+                const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+                });
+                currentLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                
+                const { branches, baseLocation } = settingsRef.current;
+                const branch = branches?.find(b => b.id === branchId) || branches?.[0];
+                const targetLoc = branch?.location || baseLocation;
+                
+                if (targetLoc) {
+                    const dist = geoUtils.getDistanceInMeters(
+                        currentLocation.lat, currentLocation.lng,
+                        targetLoc.lat, targetLoc.lng
+                    );
+                    isOutOfGeofence = dist > (targetLoc.radius || 200); // Compare to zone radius
+                }
+            } catch (err) {
+                console.warn("Could not get location on Kiosk", err);
+            }
+        }
+
         const currentTimeline = existingRecord?.timeline || [];
         const newTimeline = [...currentTimeline, { 
             timestamp: now.toISOString(), 
             type: punchType, 
-            device: 'Kiosk' 
+            device: 'Kiosk',
+            location: currentLocation, // ADDED
+            isOutOfGeofence          // ADDED
         }];
 
         const { shifts, enableBreakTracking } = settingsRef.current;
@@ -334,6 +364,18 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
         const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking);
 
         await dbService.markAttendance(finalRecord);
+
+        // Alert Admin if Kiosk is roaming out of bounds
+        if (isOutOfGeofence) {
+            await dbService.addNotification({
+                tenantId: profile!.tenantId,
+                title: 'Geofence Violation Alert',
+                message: `${worker.name} punched ${punchType} via Kiosk outside the allowed factory radius.`,
+                type: 'WARNING',
+                createdAt: new Date().toISOString(),
+                read: false
+            });
+        }
         
         playSound('SUCCESS'); 
         setDetectedWorker({ worker, action: punchType });

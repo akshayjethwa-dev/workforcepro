@@ -1,19 +1,20 @@
 // src/screens/DashboardScreen.tsx
 import React, { useState, useEffect } from 'react';
 import { 
-  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin
+  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { AttendanceRecord, OrgSettings } from '../types/index';
+import { AIChat } from '../components/AIChat';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
 }
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
-  const { profile, limits } = useAuth(); 
+  const { profile, limits, user } = useAuth(); // ✅ Added 'user' from useAuth
   
   const [stats, setStats] = useState({ 
       total: 0, 
@@ -32,6 +33,9 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
   const [selectedDashboardBranch, setSelectedDashboardBranch] = useState<string>('ALL');
   const [showKioskModal, setShowKioskModal] = useState(false);
   const [selectedKioskBranch, setSelectedKioskBranch] = useState<string>('default');
+  
+  // AI Chat state
+  const [showAIChat, setShowAIChat] = useState(false);
 
   const refreshData = async () => {
     if (!profile?.tenantId) return;
@@ -69,8 +73,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               : null;
           const isCurrentlyIn = lastPunch?.type === 'IN';
 
-          // FIX: Dynamically recalculate "Late" status based on actual timeline,
-          // so if a supervisor updates the time to 9 AM, it will no longer show late!
           let dynamicallyCalculatedLate = false;
           const shift = settings.shifts.find(s => s.id === record.shiftId) || settings.shifts[0];
           const firstPunch = record.timeline?.find(p => p.type === 'IN');
@@ -168,6 +170,19 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       }
   };
 
+  // ✅ NEW: Handler for AI Chat button with auth check
+  const handleAIChatOpen = () => {
+    if (!user) {
+      alert('Please log in to use AI Assistant');
+      return;
+    }
+    if (!profile?.tenantId) {
+      alert('Profile not loaded. Please refresh the page.');
+      return;
+    }
+    setShowAIChat(true);
+  };
+
   const StatCard = ({ icon: Icon, value, label, subLabel, color, bg }: any) => (
     <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between h-32 relative overflow-hidden">
         <div className={`absolute top-0 right-0 p-2 rounded-bl-xl ${bg} bg-opacity-30`}>
@@ -207,6 +222,23 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                 </button>
             </div>
         </div>
+
+        {/* ✅ FIXED: AI Assistant Button with auth check + gradient fix */}
+        <button 
+  onClick={handleAIChatOpen}
+  className="w-full bg-linear-to-r from-purple-600 to-blue-600 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform"
+>
+          <div className="flex items-center space-x-3">
+            <div className="bg-white/20 p-2 rounded-lg">
+              <Bot size={24} className="text-white" />
+            </div>
+            <div className="text-left">
+              <p className="font-bold">AI Factory Assistant</p>
+              <p className="text-purple-100 text-xs">Ask anything about your factory</p>
+            </div>
+          </div>
+          <ChevronRight className="text-purple-200 group-hover:translate-x-1 transition-transform" />
+        </button>
 
         {limits?.kioskEnabled !== false ? (
             <button onClick={handleKioskLaunch} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
@@ -261,6 +293,32 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                    </div>
                </div>
             </div>
+        )}
+
+        {/* ✅ FIXED: AI Chat Modal with proper auth check */}
+        {showAIChat && user && profile?.tenantId && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl w-full max-w-2xl h-150 shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between p-4 border-b">
+                <div className="flex items-center gap-3">
+                  <Bot className="w-6 h-6 text-blue-600" />
+                  <h2 className="font-bold text-lg">AI Factory Assistant</h2>
+                </div>
+                <button 
+                  onClick={() => setShowAIChat(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <XCircle size={24} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <AIChat 
+                  tenantId={profile.tenantId} 
+                  language="english" 
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         <div className="grid grid-cols-2 gap-3">
@@ -340,9 +398,14 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                                     </span>
                                 </div>
                                 <div className="flex justify-between items-center mt-0.5">
-                                    <p className="text-[10px] text-gray-400 flex items-center">
+                                    <p className="text-[10px] text-gray-400 flex flex-wrap items-center gap-y-1">
                                         {isOut ? 'Checked Out' : 'Checked In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                                         {record.isLate && <span className="ml-2 text-red-500 font-bold">• LATE</span>}
+                                        {lastPunch?.isOutOfGeofence && (
+                                            <span className="ml-2 text-orange-600 font-bold flex items-center bg-orange-50 px-1.5 py-0.5 rounded" title="Punched outside factory radius">
+                                                <MapPin size={10} className="mr-0.5" /> OUT OF ZONE
+                                            </span>
+                                        )}
                                     </p>
                                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${badgeColor}`}>
                                         {badgeText}

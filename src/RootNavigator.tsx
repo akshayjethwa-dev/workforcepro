@@ -27,6 +27,9 @@ export const RootNavigator: React.FC = () => {
   
   // State to hold the worker currently being edited
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
+  
+  // NEW: State to hold the selected branch ID for the Kiosk
+  const [kioskBranchId, setKioskBranchId] = useState<string>('default');
 
   // --- GLOBAL BACK BUTTON INTERCEPTOR ---
   useBackButton(() => {
@@ -66,8 +69,9 @@ export const RootNavigator: React.FC = () => {
     return <LoginScreen onNavigateToRegister={() => setIsRegistering(true)} />;
   }
 
+  // FIX: Pass the branchId to the AttendanceKioskScreen
   if (currentScreen === 'ATTENDANCE_KIOSK') {
-    return <AttendanceKioskScreen onExit={() => setCurrentScreen('DASHBOARD')} />;
+    return <AttendanceKioskScreen onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
   }
 
   // Pass initialData if we are editing
@@ -87,9 +91,14 @@ export const RootNavigator: React.FC = () => {
     );
   }
 
+  const handleOpenKiosk = (branchId: string) => {
+      setKioskBranchId(branchId);
+      setCurrentScreen('ATTENDANCE_KIOSK');
+  };
+
   const renderMainScreen = () => {
     switch (currentScreen) {
-      case 'DASHBOARD': return <DashboardScreen onOpenKiosk={() => setCurrentScreen('ATTENDANCE_KIOSK')} />;
+      case 'DASHBOARD': return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
       case 'WORKERS': 
         return <WorkersScreen 
                   onAddWorker={() => {
@@ -110,7 +119,7 @@ export const RootNavigator: React.FC = () => {
       case 'SUPER_ADMIN_DASHBOARD': return <SuperAdminDashboard />;
       case 'REPORTS': return <ReportsScreen />;
       case 'BILLING': return <BillingScreen />;
-      default: return <DashboardScreen onOpenKiosk={() => setCurrentScreen('ATTENDANCE_KIOSK')} />;
+      default: return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
     }
   };
 
