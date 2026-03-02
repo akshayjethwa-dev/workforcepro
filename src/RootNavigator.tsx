@@ -1,3 +1,4 @@
+// src/RootNavigator.tsx
 import React, { useState } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { auth } from './lib/firebase';
@@ -12,45 +13,37 @@ import { AttendanceScreen } from './screens/AttendanceScreen';
 import { PayrollScreen } from './screens/PayrollScreen';
 import { DailyWageScreen } from './screens/DailyWageScreen';
 import { TeamScreen } from './screens/TeamScreen'; 
-import { ScreenName, Worker } from './types/index';
+import { ScreenName, Worker, KioskTerminal } from './types/index';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
 import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
-import { useBackButton } from './hooks/useBackButton'; // Added hook
+import { useBackButton } from './hooks/useBackButton';
 
 export const RootNavigator: React.FC = () => {
   const { user, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
   const [isRegistering, setIsRegistering] = useState(false);
-  
-  // State to hold the worker currently being edited
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
-  
-  // NEW: State to hold the selected branch ID for the Kiosk
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');
 
-  // --- GLOBAL BACK BUTTON INTERCEPTOR ---
+  // --- NEW: Check for Dedicated Kiosk Mode in LocalStorage ---
+  const [kioskConfig, setKioskConfig] = useState<KioskTerminal | null>(() => {
+    const saved = localStorage.getItem('kiosk_config');
+    return saved ? JSON.parse(saved) : null;
+  });
+
   useBackButton(() => {
-    // 1. If not logged in and on Register screen, go back to Login
+    if (kioskConfig) return true; // Disable back button completely in dedicated kiosk mode
     if (!user) {
-      if (isRegistering) {
-        setIsRegistering(false);
-        return true; // Handled
-      }
-      return false; // Let app exit if on Login
+      if (isRegistering) { setIsRegistering(false); return true; }
+      return false; 
     }
-
-    // 2. If logged in and NOT on Dashboard, go to Dashboard
     if (currentScreen !== 'DASHBOARD') {
-       // Kiosk and AddWorker handle their own specific back actions first,
-       // but if they aren't mounted, this catches the rest (like Settings, Payroll, etc.)
        setCurrentScreen('DASHBOARD');
-       return true; // Handled
+       return true; 
     }
-
-    // 3. If on Dashboard, let Android close the app natively
     return false;
   });
 
@@ -62,31 +55,50 @@ export const RootNavigator: React.FC = () => {
     );
   }
 
+  // --- DEDICATED KIOSK MODE RENDERING ---
+  if (kioskConfig) {
+    return (
+      <AttendanceKioskScreen 
+        branchId={kioskConfig.branchId} 
+        isDedicatedMode={true}
+        tenantId={kioskConfig.tenantId}
+        adminPin={kioskConfig.adminPin}
+        onExit={() => {
+           localStorage.removeItem('kiosk_config');
+           setKioskConfig(null);
+        }} 
+      />
+    );
+  }
+
+  // --- LOGIN / REGISTER SCREENS ---
   if (!user) {
     if (isRegistering) {
       return <RegisterScreen onNavigateToLogin={() => setIsRegistering(false)} />;
     }
-    return <LoginScreen onNavigateToRegister={() => setIsRegistering(true)} />;
+    return (
+      <LoginScreen 
+        onNavigateToRegister={() => setIsRegistering(true)} 
+        onKioskLogin={(config) => {
+           // THIS FIXES YOUR ERROR: We pass the function that saves the config and triggers the kiosk UI
+           localStorage.setItem('kiosk_config', JSON.stringify(config));
+           setKioskConfig(config);
+        }}
+      />
+    );
   }
 
-  // FIX: Pass the branchId to the AttendanceKioskScreen
+  // STANDARD IN-APP KIOSK MODE (Admin clicks from dashboard)
   if (currentScreen === 'ATTENDANCE_KIOSK') {
-    return <AttendanceKioskScreen onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
+    return <AttendanceKioskScreen isDedicatedMode={false} onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
   }
 
-  // Pass initialData if we are editing
   if (currentScreen === 'ADD_WORKER') {
     return (
       <AddWorkerScreen 
         initialData={workerToEdit}
-        onBack={() => {
-            setWorkerToEdit(undefined); // Clear edit state on back
-            setCurrentScreen('WORKERS');
-        }} 
-        onSuccess={() => {
-            setWorkerToEdit(undefined); // Clear edit state on success
-            setCurrentScreen('WORKERS');
-        }} 
+        onBack={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
+        onSuccess={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
       />
     );
   }
@@ -101,14 +113,8 @@ export const RootNavigator: React.FC = () => {
       case 'DASHBOARD': return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
       case 'WORKERS': 
         return <WorkersScreen 
-                  onAddWorker={() => {
-                      setWorkerToEdit(undefined); // Ensure we are in "Add" mode
-                      setCurrentScreen('ADD_WORKER');
-                  }}
-                  onEditWorker={(worker) => {
-                      setWorkerToEdit(worker); // Set "Edit" mode
-                      setCurrentScreen('ADD_WORKER');
-                  }} 
+                  onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
+                  onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
                />;
       case 'PAYROLL': return <PayrollScreen />;
       case 'ATTENDANCE': return <AttendanceScreen />;

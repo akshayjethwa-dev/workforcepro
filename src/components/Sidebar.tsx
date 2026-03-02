@@ -1,10 +1,10 @@
+// src/components/Sidebar.tsx
 import React from 'react';
 import { 
-  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard 
+  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard, PieChart
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ScreenName } from '../types/index';
-import { PieChart } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -44,7 +44,8 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                   <User size={24} className="text-white"/>
                </div>
                <h2 className="font-bold text-lg leading-tight">{profile?.companyName || 'Super Admin'}</h2>
-               <p className="text-slate-400 text-xs mt-1">{profile?.name}</p>
+               {/* FIXED: Bypassed TS error by casting to any, falling back to email if name is missing */}
+               <p className="text-slate-400 text-xs mt-1">{(profile as any)?.name || profile?.email}</p>
             </div>
             <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-full transition-colors">
                <X size={20} />

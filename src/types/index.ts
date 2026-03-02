@@ -4,6 +4,27 @@ export type Role =
   | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
   | 'WORKER';
 
+export type SaturdayOffType = 'NONE' | 'ALL' | 'ALTERNATE' | 'FIRST_THIRD' | 'SECOND_FOURTH';
+
+export interface WeeklyOffConfig {
+  defaultDays: number[]; // e.g., [0] for Sunday, [0, 6] for Sat/Sun
+  saturdayRule: SaturdayOffType;
+}
+
+export interface Holiday {
+  id: string;
+  date: string; // YYYY-MM-DD
+  name: string;
+  isPaid: boolean;
+}
+
+export interface LeavePolicy {
+  cl: number; // Casual Leaves
+  sl: number; // Sick Leaves
+  pl: number; // Privilege/Earned Leaves
+  allowNegativeBalance: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -53,6 +74,11 @@ export interface OrgSettings {
     capPfDeduction: boolean; // Cap at ₹15,000 basic
     dailyWagePfPercentage: number; // e.g., 50 or 100
   };
+  weeklyOffs?: WeeklyOffConfig;
+  holidays?: Holiday[];
+  enableSandwichRule?: boolean;
+  holidayPayMultiplier?: number; // e.g., 1.5 or 2.0
+  leavePolicy?: LeavePolicy;
 }
 
 export interface Punch {
@@ -104,6 +130,12 @@ export interface Worker {
   uan?: string;
   esicIp?: string;
   pan?: string;
+  weeklyOffOverride?: number[];
+  leaveBalances?: {
+    cl: number;
+    sl: number;
+    pl: number;
+  }; 
 }
 
 // --- ATTENDANCE ---
@@ -132,10 +164,8 @@ export interface AttendanceRecord {
   workerName: string;
   date: string;
   shiftId: string; 
-  
   timeline: Punch[]; 
-  
-  status: 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'ON_LEAVE';
+  status: 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'ON_LEAVE' | 'WEEKLY_OFF' | 'PUBLIC_HOLIDAY' | 'HOLIDAY_WORKED' | 'UNPAID_HOLIDAY';
   lateStatus: {
     isLate: boolean;
     lateByMins: number;
@@ -146,7 +176,11 @@ export interface AttendanceRecord {
     net: number; 
     overtime: number;
   };
-
+  leaveInfo?: {
+    type: 'CL' | 'SL' | 'PL' | 'LWP';
+    isPaid: boolean;
+    reason: string;
+  };
   inTime?: TimeRecord;
   outTime?: TimeRecord;
   calculatedHours?: AttendanceCalculations;
@@ -186,8 +220,14 @@ export interface MonthlyPayroll {
     presentDays: number;
     absentDays: number;
     halfDays: number;
+    weeklyOffs: number;
+    publicHolidays: number;
+    holidayWorkedDays: number;
+    payableDays: number;
     totalRegularHours: number;
     totalOvertimeHours: number;
+    paidLeaves: number;
+    unpaidLeaves: number;
   };
   earnings: {
     basic: number;
@@ -241,6 +281,16 @@ export interface PlanLimits {
   kioskEnabled: boolean;
   geofencingEnabled: boolean;
   multiBranchEnabled: boolean;
+}
+
+export interface KioskTerminal {
+  id: string;
+  tenantId: string;
+  branchId: string;
+  name: string;
+  pairingCode: string;
+  adminPin: string;
+  createdAt: string;
 }
 
 export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {

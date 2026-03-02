@@ -1,13 +1,14 @@
-import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance} from '../types/index';
+import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings } from '../types/index';
+import { attendanceLogic } from './attendanceLogic'; 
 
 export const wageService = {
 
-  // NEW: Helper to calculate currently earned wages mid-month (Used for Guardrail)
-  calculateCurrentEarnings: (worker: Worker, monthStr: string, attendanceRecords: AttendanceRecord[]) => {
+  // UPDATED: Now requires orgSettings to calculate correctly with holidays & leaves
+  calculateCurrentEarnings: (worker: Worker, monthStr: string, attendanceRecords: AttendanceRecord[], orgSettings: OrgSettings) => {
     const monthAttendance = attendanceRecords.filter(a => a.workerId === worker.id && a.date.startsWith(monthStr));
     let totalEarned = 0;
     monthAttendance.forEach(record => {
-      const dw = wageService.calculateDailyWage(worker, record);
+      const dw = wageService.calculateDailyWage(worker, record, orgSettings);
       totalEarned += dw.breakdown.total;
     });
     return totalEarned;
@@ -16,7 +17,7 @@ export const wageService = {
   /**
    * Calculate earnings for a single day
    */
-  calculateDailyWage: (worker: Worker, record: AttendanceRecord): DailyWageRecord => {
+  calculateDailyWage: (worker: Worker, record: AttendanceRecord, orgSettings: OrgSettings): DailyWageRecord => {
     // 1. Support both the NEW timeline 'hours' and OLD 'calculatedHours' for legacy records
     const netHours = record.hours?.net || record.calculatedHours?.netWorkingHours || 0;
     const otHours = record.hours?.overtime || record.calculatedHours?.overtimeHours || 0;
@@ -33,15 +34,24 @@ export const wageService = {
       dailyRate = config.amount / (config.workingDaysPerMonth || daysInMonth);
     }
 
-    // 3. Calculate Base Wage
+    // 3. Calculate Base Wage WITH HOLIDAY & LEAVE RULES
     let baseWage = 0;
-    if (record.status === 'PRESENT') {
-      baseWage = dailyRate;
+    if (record.status === 'PRESENT' || record.status === 'WEEKLY_OFF' || record.status === 'PUBLIC_HOLIDAY') {
+      baseWage = dailyRate; // Fully paid days
     } else if (record.status === 'HALF_DAY') {
       baseWage = dailyRate * 0.5;
+    } else if (record.status === 'HOLIDAY_WORKED') {
+      // Apply factory's holiday double-pay rule (defaults to 2.0x)
+      const multiplier = orgSettings?.holidayPayMultiplier ?? 2.0;
+      baseWage = dailyRate * multiplier; 
+    } else if (record.status === 'ON_LEAVE') {
+      // NEW LEAVE LOGIC: Pay full day ONLY if it's a Paid Leave (CL, SL, PL)
+      baseWage = record.leaveInfo?.isPaid ? dailyRate : 0;
+    } else if (record.status === 'ABSENT' || record.status === 'UNPAID_HOLIDAY') {
+      baseWage = 0; // Unpaid days
     }
 
-    // 4. Calculate Overtime (Using the new Custom Rate we added)
+    // 4. Calculate Overtime 
     let overtimeWage = 0;
     if (config.overtimeEligible && otHours > 0) {
       // Use their custom OT Rate if you set one, otherwise fallback to standard double rate (Rate/8 * 2)
@@ -51,7 +61,8 @@ export const wageService = {
 
     // 5. Calculate Allowances safely
     let totalAllowances = 0;
-    if (record.status === 'PRESENT' || record.status === 'HALF_DAY') {
+    // Allowances given if they showed up (Present, Half Day, or Holiday Worked)
+    if (['PRESENT', 'HALF_DAY', 'HOLIDAY_WORKED'].includes(record.status)) {
       totalAllowances += config.allowances?.travel || 0;
       totalAllowances += config.allowances?.food || 0;
       
@@ -91,50 +102,129 @@ export const wageService = {
   },
 
   /**
-   * Generate exact monthly payroll data
+   * Generate exact monthly payroll data - REWRITTEN FOR CALENDAR LOGIC & LEAVES
    */
   generateMonthlyPayroll: (
     worker: Worker, 
     month: string, 
     attendanceRecords: AttendanceRecord[],
-    advances: Advance[]
+    advances: Advance[],
+    orgSettings: OrgSettings
   ): MonthlyPayroll => {
     
-    // Filter attendance records for this exact month and worker
-    const monthAttendance = attendanceRecords.filter(a => a.workerId === worker.id && a.date.startsWith(month));
-    
-    let presentDays = 0;
-    let halfDays = 0; 
-    let absentDays = 0;
-    let totalRegularHours = 0;
-    let totalOvertimeHours = 0;
+    const [yearStr, monthStr] = month.split('-');
+    const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
+    const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
+
+    const dailyStatuses = new Map<number, string>();
+    const dailyRecords = new Map<number, AttendanceRecord>();
+
+    // Pass 1: Plot the calendar and establish base statuses
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${yearStr}-${monthStr}-${day.toString().padStart(2, '0')}`;
+        const record = attendanceRecords.find(a => a.date === dateStr && a.workerId === worker.id);
+        const isPubHol = orgSettings.holidays?.find(h => h.date === dateStr);
+        const isWeekOff = attendanceLogic.isWeeklyOff(dateStr, worker, orgSettings);
+
+        let status = 'ABSENT';
+        if (record && record.timeline && record.timeline.length > 0) {
+            // Worked on this day
+            status = (isPubHol || isWeekOff) ? 'HOLIDAY_WORKED' : record.status;
+            dailyRecords.set(day, { ...record, status: status as any });
+        } else {
+            // Did not Work on this day
+            if (record && record.status === 'ON_LEAVE') {
+                status = 'ON_LEAVE';
+                dailyRecords.set(day, record); // Keep record so we can check if it's Paid/Unpaid later
+            } else if (isPubHol) {
+                status = isPubHol.isPaid ? 'PUBLIC_HOLIDAY' : 'UNPAID_HOLIDAY';
+            } else if (isWeekOff) {
+                status = 'WEEKLY_OFF';
+            }
+        }
+        dailyStatuses.set(day, status);
+    }
+
+    // Pass 2: The Sandwich Rule (If enabled, strip pay for surrounded holidays)
+    if (orgSettings.enableSandwichRule) {
+        for (let day = 1; day <= daysInMonth; day++) {
+            const status = dailyStatuses.get(day);
+            if (status === 'WEEKLY_OFF' || status === 'PUBLIC_HOLIDAY') {
+                const prevDay = day > 1 ? dailyStatuses.get(day - 1) : null;
+                const nextDay = day < daysInMonth ? dailyStatuses.get(day + 1) : null;
+                
+                // Helper to check if a day is an unpaid absence
+                const isUnpaidAbsence = (dStatus: string | null, dRecord: AttendanceRecord | undefined) => {
+                    if (dStatus === 'ABSENT' || dStatus === 'UNPAID_HOLIDAY') return true;
+                    // LWP (Leave Without Pay) counts as an absence for Sandwich Rule purposes
+                    if (dStatus === 'ON_LEAVE' && dRecord?.leaveInfo?.isPaid === false) return true;
+                    return false;
+                };
+
+                const prevAbsent = isUnpaidAbsence(prevDay, dailyRecords.get(day - 1));
+                const nextAbsent = isUnpaidAbsence(nextDay, dailyRecords.get(day + 1));
+                
+                if (prevAbsent && nextAbsent) {
+                    dailyStatuses.set(day, 'UNPAID_HOLIDAY');
+                }
+            }
+        }
+    }
+
+    // Pass 3: Calculate Finances based on the final Map
+    let presentDays = 0, halfDays = 0, absentDays = 0;
+    let weeklyOffs = 0, publicHolidays = 0, holidayWorkedDays = 0;
+    let paidLeaves = 0, unpaidLeaves = 0; // NEW TRACKERS
     
     let totalBasic = 0;
     let totalOTPay = 0;
     let totalAllowances = 0;
+    let totalRegularHours = 0;
+    let totalOvertimeHours = 0;
 
-    monthAttendance.forEach(record => {
-      // Re-calculate the exact financial implication of the record
-      const dw = wageService.calculateDailyWage(worker, record);
-      
-      // FIX: Strictly align payroll counts with the Attendance Logic Engine
-      if (record.status === 'PRESENT') {
-          presentDays++;
-      } else if (record.status === 'HALF_DAY') {
-          halfDays++;
-      } else if (record.status === 'ABSENT') {
-          absentDays++;
-      }
+    for (let day = 1; day <= daysInMonth; day++) {
+        const status = dailyStatuses.get(day)!;
+        const dailyRate = worker.wageConfig.type === 'MONTHLY' ? worker.wageConfig.amount / totalWorkingDays : worker.wageConfig.amount;
+        
+        let dwBaseWage = 0, dwOTWage = 0, dwAllowances = 0;
 
-      totalBasic += dw.breakdown.baseWage;
-      totalOTPay += dw.breakdown.overtimeWage;
-      totalAllowances += dw.breakdown.allowances;
-      
-      totalRegularHours += dw.meta.hoursWorked - dw.meta.overtimeHours;
-      totalOvertimeHours += dw.meta.overtimeHours;
-    });
+        if (status === 'PRESENT') { presentDays++; dwBaseWage = dailyRate; } 
+        else if (status === 'HALF_DAY') { halfDays++; dwBaseWage = dailyRate * 0.5; } 
+        else if (status === 'ABSENT' || status === 'UNPAID_HOLIDAY') { absentDays++; } 
+        else if (status === 'WEEKLY_OFF') { weeklyOffs++; dwBaseWage = dailyRate; } 
+        else if (status === 'PUBLIC_HOLIDAY') { publicHolidays++; dwBaseWage = dailyRate; } 
+        else if (status === 'HOLIDAY_WORKED') { holidayWorkedDays++; dwBaseWage = dailyRate * (orgSettings.holidayPayMultiplier || 2.0); }
+        else if (status === 'ON_LEAVE') {
+            const lRec = dailyRecords.get(day);
+            if (lRec?.leaveInfo?.isPaid) {
+                paidLeaves++;
+                dwBaseWage = dailyRate;
+            } else {
+                unpaidLeaves++;
+                absentDays++; // Unpaid leave behaves like an absent day for aggregate logic
+                dwBaseWage = 0;
+            }
+        }
+
+        const record = dailyRecords.get(day);
+        if (record && record.timeline && record.timeline.length > 0) {
+            // Recalculate precisely using the engine if they worked
+            const dw = wageService.calculateDailyWage(worker, record, orgSettings);
+            dwBaseWage = dw.breakdown.baseWage; 
+            dwOTWage = dw.breakdown.overtimeWage;
+            dwAllowances = dw.breakdown.allowances;
+            totalRegularHours += dw.meta.hoursWorked - dw.meta.overtimeHours;
+            totalOvertimeHours += dw.meta.overtimeHours;
+        }
+
+        totalBasic += dwBaseWage;
+        totalOTPay += dwOTWage;
+        totalAllowances += dwAllowances;
+    }
 
     const gross = totalBasic + totalOTPay + totalAllowances;
+    // The exact total of days they are receiving pay for (now including Paid Leaves)
+    const payableDays = presentDays + (halfDays * 0.5) + weeklyOffs + publicHolidays + holidayWorkedDays + paidLeaves;
 
     // Deductions
     const monthAdvances = advances.filter(a => a.workerId === worker.id && a.date.startsWith(month) && a.status === 'APPROVED');
@@ -148,16 +238,7 @@ export const wageService = {
 
     const totalDeductions = advanceTotal;
 
-    // Dynamically calculate exact days for the selected month
-    const [yearStr, monthStr] = month.split('-');
-    const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
-    const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
-
-    // Ensure missing calendar days without records are marked as Absent
-    const missingDays = Math.max(0, totalWorkingDays - (presentDays + halfDays + absentDays));
-    const finalAbsentDays = absentDays + missingDays;
-
-    // NEW: Carry Forward Logic (If Advances taken exceed Gross Earned)
+    // Carry Forward Logic (If Advances taken exceed Gross Earned)
     const rawNetPayable = gross - totalDeductions;
     const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
     const finalNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
@@ -173,8 +254,14 @@ export const wageService = {
       attendanceSummary: {
         totalDays: totalWorkingDays,
         presentDays,
-        absentDays: finalAbsentDays,
+        absentDays,
         halfDays,
+        weeklyOffs,
+        publicHolidays,
+        holidayWorkedDays,
+        paidLeaves,      // NEW EXPORT
+        unpaidLeaves,    // NEW EXPORT
+        payableDays,
         totalRegularHours: parseFloat(totalRegularHours.toFixed(1)),
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))
       },

@@ -14,7 +14,6 @@ export const AttendanceScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Expanded View State
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -77,6 +76,34 @@ export const AttendanceScreen: React.FC = () => {
         const now = new Date();
 
         const existingRecord = attendanceMap[worker.id];
+
+        // --- FIXED: TS Error by extracting rawType before casting ---
+        if (type === 'IN' && existingRecord?.status === 'ON_LEAVE' && existingRecord.leaveInfo?.isPaid) {
+            const rawType = existingRecord.leaveInfo.type.toLowerCase();
+            
+            if (rawType !== 'lwp' && worker.leaveBalances) {
+                const lType = rawType as 'cl' | 'sl' | 'pl';
+                const currentBal = worker.leaveBalances[lType] ?? 0;
+                
+                // Refund 1 day back to the worker
+                const updatedBalances = { ...worker.leaveBalances, [lType]: currentBal + 1 };
+                await dbService.updateWorker(worker.id, { leaveBalances: updatedBalances });
+                
+                // Update local state so UI reflects the refund immediately
+                setWorkers(prev => prev.map(w => w.id === worker.id ? { ...w, leaveBalances: updatedBalances } : w));
+
+                await dbService.addNotification({
+                    tenantId: profile.tenantId, 
+                    title: "Leave Automatically Cancelled",
+                    message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
+                    type: 'INFO', 
+                    createdAt: new Date().toISOString(), 
+                    read: false
+                });
+            }
+        }
+        // ----------------------------------
+
         let currentTimeline = existingRecord?.timeline || [];
         
         const newPunch = {
@@ -106,12 +133,19 @@ export const AttendanceScreen: React.FC = () => {
         };
 
         baseRecord.timeline = newTimeline;
+        
+        // Clear any previous leave info since they actually punched in
+        if (baseRecord.leaveInfo) {
+            delete baseRecord.leaveInfo;
+        }
 
         const finalRecord = attendanceLogic.processDailyStatus(
             baseRecord, 
             shift, 
             lateCount, 
-            settings.enableBreakTracking
+            settings.enableBreakTracking,
+            worker,
+            settings
         );
 
         await dbService.markAttendance(finalRecord);
@@ -150,7 +184,7 @@ export const AttendanceScreen: React.FC = () => {
 
   const markOnLeave = async (worker: Worker) => {
       if (!profile?.tenantId) return;
-      if (!window.confirm(`Mark ${worker.name} as ON LEAVE?`)) return;
+      if (!window.confirm(`Mark ${worker.name} as ON LEAVE (Unpaid Quick Action)?`)) return;
 
       const todayDate = new Date().toISOString().split('T')[0];
       const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
@@ -161,11 +195,16 @@ export const AttendanceScreen: React.FC = () => {
           workerId: worker.id,
           workerName: worker.name,
           date: todayDate,
-          shiftId: worker.shiftId,
+          shiftId: worker.shiftId || 'default',
           timeline: [], 
           status: 'ON_LEAVE',
           lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
-          hours: { gross: 0, net: 0, overtime: 0 }
+          hours: { gross: 0, net: 0, overtime: 0 },
+          leaveInfo: {
+             type: 'LWP',
+             isPaid: false,
+             reason: 'Quick Action (Mobile)'
+          }
       };
 
       await dbService.markAttendance(leaveRecord);
@@ -216,8 +255,8 @@ export const AttendanceScreen: React.FC = () => {
             let statusColor = 'bg-gray-100 text-gray-500';
 
             if (isOnLeave) {
-                statusLabel = 'ON LEAVE';
-                statusColor = 'bg-blue-100 text-blue-700';
+                statusLabel = record?.leaveInfo?.isPaid ? 'PAID LEAVE' : 'ON LEAVE';
+                statusColor = record?.leaveInfo?.isPaid ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700';
             } else if (isInside) {
                 statusLabel = 'IN PROGRESS';
                 statusColor = 'bg-blue-50 text-blue-600 animate-pulse';
@@ -227,11 +266,19 @@ export const AttendanceScreen: React.FC = () => {
             } else if (record?.status === 'HALF_DAY') {
                 statusLabel = 'HALF DAY';
                 statusColor = 'bg-orange-100 text-orange-700';
+            } else if (record?.status === 'WEEKLY_OFF') {
+                statusLabel = 'WEEKLY OFF';
+                statusColor = 'bg-slate-200 text-slate-700';
+            } else if (record?.status === 'PUBLIC_HOLIDAY') {
+                statusLabel = 'HOLIDAY';
+                statusColor = 'bg-purple-100 text-purple-700';
+            } else if (record?.status === 'HOLIDAY_WORKED') {
+                statusLabel = 'HOLIDAY OT';
+                statusColor = 'bg-green-200 text-green-800 font-black';
             }
 
             return (
                 <div key={worker.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col transition-all">
-                    {/* Worker Header */}
                     <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center space-x-3">
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${isInside ? 'bg-green-500' : 'bg-gray-300'}`}>
@@ -248,10 +295,8 @@ export const AttendanceScreen: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* EXPANDABLE TIMELINE INFO */}
                     {record && !isOnLeave && sortedTimeline.length > 0 && (
                         <div className="bg-gray-50 p-3 rounded-lg text-xs mb-4">
-                           {/* Summary / Toggle Bar */}
                            <div 
                               className={`flex justify-between items-center text-gray-700 font-bold cursor-pointer ${isExpanded ? 'border-b border-gray-200 pb-2 mb-2' : ''}`}
                               onClick={() => toggleExpand(worker.id)}
@@ -265,7 +310,6 @@ export const AttendanceScreen: React.FC = () => {
                                </div>
                            </div>
 
-                           {/* Collapsed View (First & Last) */}
                            {!isExpanded ? (
                                <div className="flex justify-between items-center text-gray-500 mt-2">
                                    <div className="flex flex-col">
@@ -287,24 +331,23 @@ export const AttendanceScreen: React.FC = () => {
                                    </div>
                                </div>
                            ) : (
-                               /* Expanded View (Full Details) */
                                <div className="space-y-2 mt-3">
                                    {sortedTimeline.map((punch, idx) => {
                                        const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
                                        return (
                                            <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100">
                                                 <div className="flex items-center flex-wrap gap-1">
-    <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-    <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
-    {isRegulated && (
-        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
-    )}
-    {punch.isOutOfGeofence && (
-        <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" title="Outside Geofence">
-            <MapPin size={10} className="mr-0.5"/> Out of Zone
-        </span>
-    )}
-</div>
+                                                    <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                    <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
+                                                    {isRegulated && (
+                                                        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                    )}
+                                                    {punch.isOutOfGeofence && (
+                                                        <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" title="Outside Geofence">
+                                                            <MapPin size={10} className="mr-0.5"/> Out of Zone
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 <span className="font-mono font-bold text-gray-800">
                                                     {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                                                 </span>
@@ -316,11 +359,10 @@ export const AttendanceScreen: React.FC = () => {
                         </div>
                     )}
 
-                    {/* ACTION BUTTONS */}
                     <div className="grid grid-cols-5 gap-2 mt-auto">
                         <button 
                             onClick={() => handlePunch(worker, 'IN')}
-                            disabled={isInside || isOnLeave || actionLoading === worker.id}
+                            disabled={isInside || actionLoading === worker.id} 
                             className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
                                 isInside 
                                 ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
@@ -332,7 +374,7 @@ export const AttendanceScreen: React.FC = () => {
 
                         <button 
                             onClick={() => handlePunch(worker, 'OUT')}
-                            disabled={!isInside || isOnLeave || actionLoading === worker.id}
+                            disabled={!isInside || actionLoading === worker.id}
                             className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
                                 !isInside
                                 ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
@@ -345,7 +387,7 @@ export const AttendanceScreen: React.FC = () => {
                         <button 
                             onClick={() => markOnLeave(worker)}
                             className="col-span-1 flex items-center justify-center py-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 border border-transparent"
-                            title="Mark On Leave"
+                            title="Mark LWP (Quick Action)"
                         >
                             <Calendar size={16} />
                         </button>

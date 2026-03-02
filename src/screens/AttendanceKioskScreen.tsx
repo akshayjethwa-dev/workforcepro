@@ -1,18 +1,21 @@
-// src/screens/AttendanceKioskScreen.tsx
 import React, { useRef, useEffect, useState } from 'react';
-import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle } from 'lucide-react';
+import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle, ShieldAlert, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 import { useBackButton } from '../hooks/useBackButton';
-import { geoUtils } from '../utils/geo'; // NEW IMPORT FOR GEOFENCING
+import { geoUtils } from '../utils/geo';
 
-// NEW PROP: branchId determines which faces to download
-interface Props { onExit: () => void; branchId: string; }
+interface Props { 
+  onExit: () => void; 
+  branchId: string; 
+  isDedicatedMode: boolean;
+  tenantId?: string; // Provided if dedicated
+  adminPin?: string; // Provided if dedicated
+}
 
-// --- SOUND GENERATOR HELPER ---
 const playSound = (type: 'SUCCESS' | 'ERROR') => {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
@@ -47,16 +50,17 @@ const playSound = (type: 'SUCCESS' | 'ERROR') => {
   }
 };
 
-export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => {
+export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDedicatedMode, tenantId: propsTenantId, adminPin }) => {
   const { profile } = useAuth();
+  
+  const activeTenantId = isDedicatedMode ? propsTenantId : profile?.tenantId;
+
   const videoRef = useRef<HTMLVideoElement>(null);
   
-  // Refs for State 
   const processingRef = useRef(false); 
   const workersRef = useRef<Worker[]>([]);
   const settingsRef = useRef<OrgSettings>({ shifts: [], enableBreakTracking: false });
   
-  // Liveness States
   const [livenessState, setLivenessState] = useState<'SCANNING' | 'CHALLENGE'>('SCANNING');
   const targetWorkerRef = useRef<Worker | null>(null);
   const livenessTimerRef = useRef<number>(0);
@@ -65,38 +69,36 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
   const [feedback, setFeedback] = useState("Initializing System...");
   const [modelsLoaded, setModelsLoaded] = useState(false);
   
-  // UI States
   const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT'} | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
 
+  const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR'}[]>([]);
+  const [showExitPin, setShowExitPin] = useState(false);
+  const [enteredPin, setEnteredPin] = useState('');
+
   useBackButton(() => {
+    if (isDedicatedMode) return true; 
     onExit();
     return true; 
   });
 
-  // 1. INITIAL SETUP
   useEffect(() => {
     const init = async () => {
       try {
         console.log("Loading Face Models...");
         await faceService.loadModels();
         setModelsLoaded(true);
-        console.log("Models Loaded.");
 
-        if (profile?.tenantId) {
+        if (activeTenantId) {
             setFeedback("Loading Local Branch Faces...");
             const [w, settings] = await Promise.all([
-               dbService.getWorkers(profile.tenantId),
-               dbService.getOrgSettings(profile.tenantId)
+               dbService.getWorkers(activeTenantId),
+               dbService.getOrgSettings(activeTenantId)
             ]);
             
-            // --- OPTIMIZATION FILTER & FIREBASE FIX ---
-            // Safely handle missing/undefined branch IDs
             const targetBranch = branchId || 'default';
 
             const validWorkers = w.map(worker => {
-                // FIX: Firestore sometimes converts Float32Arrays into Objects {0: val, 1: val}. 
-                // We must convert it back to a standard Array for the .length check and AI matcher.
                 let fd = worker.faceDescriptor;
                 if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
                     fd = Object.values(fd) as number[];
@@ -113,7 +115,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             
             if (validWorkers.length === 0) {
                 setFeedback("No registered faces for this Branch.");
-                console.warn(`0 faces found. Total workers in DB: ${w.length}. Target Branch: ${targetBranch}`);
             } else {
                 setFeedback(`Ready. Loaded ${validWorkers.length} faces.`);
             }
@@ -125,7 +126,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
     };
     init();
 
-    // Start Camera
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } })
       .then(stream => { 
           if(videoRef.current) videoRef.current.srcObject = stream; 
@@ -135,17 +135,14 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
           setFeedback("Camera Blocked. Check Permissions.");
       });
       
-    // Cleanup
     return () => {
         processingRef.current = false;
     };
-  }, [profile, branchId]);
+  }, [activeTenantId, branchId]);
 
-  // 2. SCANNING LOOP
   useEffect(() => {
-    if (!modelsLoaded) return;
+    if (!modelsLoaded || showExitPin) return;
 
-    // Faster interval needed to catch quick blinks
     const scanInterval = setInterval(async () => {
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
            return;
@@ -155,7 +152,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
            const matchResult = await faceService.findMatchAndLiveness(videoRef.current, workersRef.current);
            
            if (!matchResult) {
-               // If person leaves frame, reset challenge
                if (livenessState === 'CHALLENGE') {
                    setLivenessState('SCANNING');
                    setFeedback("Look at Camera");
@@ -164,39 +160,29 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
                return;
            }
 
-           // --- STEP 1: IDENTITY MATCHED ---
            if (livenessState === 'SCANNING') {
                if (settingsRef.current?.strictLiveness) {
-                   // Start Liveness Challenge
                    setLivenessState('CHALLENGE');
                    targetWorkerRef.current = matchResult.worker;
                    livenessTimerRef.current = Date.now();
                    setFeedback(`Hi ${matchResult.worker.name.split(' ')[0]}, please BLINK to verify...`);
-                   playSound('SUCCESS'); // Soft ping to grab attention
+                   playSound('SUCCESS');
                } else {
-                   // Standard Punch (No Liveness logic)
                    await handlePunch(matchResult.worker);
                }
            } 
-           // --- STEP 2: LIVENESS CHALLENGE ACTIVE ---
            else if (livenessState === 'CHALLENGE' && targetWorkerRef.current) {
-               // Ensure the same person is still in the frame
                if (matchResult.worker.id === targetWorkerRef.current.id) {
-                   
-                   // Check for Blink
                    if (matchResult.hasBlinked) {
                        setFeedback("Liveness Verified!");
                        setLivenessState('SCANNING');
                        await handlePunch(matchResult.worker);
                        targetWorkerRef.current = null;
                    } 
-                   // Check for Timeout (3 seconds)
                    else if (Date.now() - livenessTimerRef.current > 3000) {
                        handleSpoofFailure(targetWorkerRef.current);
                    }
-
                } else {
-                   // A different person stepped into the frame
                    setLivenessState('SCANNING');
                    setFeedback("Look at Camera");
                }
@@ -206,13 +192,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
            console.error("Scan Loop Error", e);
            processingRef.current = false;
        }
-    }, 150); // Using 150ms to make sure we don't miss quick blinks
+    }, 150); 
 
     return () => clearInterval(scanInterval);
-  }, [modelsLoaded, livenessState]);
+  }, [modelsLoaded, livenessState, showExitPin]);
 
   const handleSpoofFailure = async (worker: Worker) => {
-    processingRef.current = true; // Pause scanning
+    processingRef.current = true;
     playSound('ERROR');
     
     const fails = (failedAttemptsRef.current[worker.id] || 0) + 1;
@@ -221,7 +207,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
     if (fails >= 3) {
         setFeedback("🚨 SPOOFING ATTEMPT LOGGED!");
         
-        // Capture Image of the spoofer
         let base64Image = "";
         if (videoRef.current) {
             const canvas = document.createElement('canvas');
@@ -230,14 +215,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 ctx.drawImage(videoRef.current, 0, 0);
-                base64Image = canvas.toDataURL('image/jpeg', 0.5); // compress slightly
+                base64Image = canvas.toDataURL('image/jpeg', 0.5); 
             }
         }
 
-        // Send Alert to Admin
-        if (profile?.tenantId) {
+        if (activeTenantId) {
             await dbService.addNotification({
-                tenantId: profile.tenantId,
+                tenantId: activeTenantId,
                 title: "⚠️ Security Alert: Liveness Failed",
                 message: `Multiple failed liveness checks for ${worker.name}. This may be a proxy punch attempt.`,
                 imageUrl: base64Image,
@@ -247,7 +231,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             });
         }
 
-        // Reset worker attempts after logging so they can try again later if it was a mistake
         failedAttemptsRef.current[worker.id] = 0;
 
         setTimeout(() => {
@@ -273,12 +256,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
 
     try {
         const today = new Date().toISOString().split('T')[0];
-        const recordId = `${profile!.tenantId}_${worker.id}_${today}`;
+        const recordId = `${activeTenantId}_${worker.id}_${today}`;
         
-        const existingDocs = await dbService.getTodayAttendance(profile!.tenantId); 
+        const existingDocs = await dbService.getTodayAttendance(activeTenantId!); 
         const existingRecord = existingDocs.find(r => r.id === recordId);
 
-        // FIX: Look at the LAST punch type instead of relying on array length mathematically
         let punchType: 'IN' | 'OUT' = 'IN';
         if (existingRecord?.timeline && existingRecord.timeline.length > 0) {
             const lastPunch = existingRecord.timeline[existingRecord.timeline.length - 1];
@@ -305,7 +287,34 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             }
         }
 
-        // --- NEW GEOFENCE LOGIC FOR KIOSK ---
+        // --- FIXED: TS Error by extracting rawType before casting ---
+        if (punchType === 'IN' && existingRecord?.status === 'ON_LEAVE' && existingRecord.leaveInfo?.isPaid) {
+            const rawType = existingRecord.leaveInfo.type.toLowerCase();
+            
+            if (rawType !== 'lwp' && worker.leaveBalances) {
+                const lType = rawType as 'cl' | 'sl' | 'pl';
+                const currentBal = worker.leaveBalances[lType] ?? 0;
+                
+                // Refund 1 day
+                await dbService.updateWorker(worker.id, {
+                    leaveBalances: {
+                        ...worker.leaveBalances,
+                        [lType]: currentBal + 1
+                    }
+                });
+                
+                await dbService.addNotification({
+                    tenantId: activeTenantId!, 
+                    title: "Leave Automatically Cancelled",
+                    message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
+                    type: 'INFO', 
+                    createdAt: new Date().toISOString(), 
+                    read: false
+                });
+            }
+        }
+        // ----------------------------------
+
         let currentLocation: { lat: number; lng: number } | undefined;
         let isOutOfGeofence = false;
 
@@ -325,7 +334,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
                         currentLocation.lat, currentLocation.lng,
                         targetLoc.lat, targetLoc.lng
                     );
-                    isOutOfGeofence = dist > (targetLoc.radius || 200); // Compare to zone radius
+                    isOutOfGeofence = dist > (targetLoc.radius || 200);
                 }
             } catch (err) {
                 console.warn("Could not get location on Kiosk", err);
@@ -337,8 +346,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             timestamp: now.toISOString(), 
             type: punchType, 
             device: 'Kiosk',
-            location: currentLocation, // ADDED
-            isOutOfGeofence          // ADDED
+            location: currentLocation,
+            isOutOfGeofence 
         }];
 
         const { shifts, enableBreakTracking } = settingsRef.current;
@@ -346,11 +355,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
         
         if (!shift) throw new Error("No Shift Configuration Found");
 
-        const lateCount = await dbService.getMonthlyLateCount(profile!.tenantId, worker.id);
+        const lateCount = await dbService.getMonthlyLateCount(activeTenantId!, worker.id);
 
         const baseRecord: AttendanceRecord = {
             id: recordId,
-            tenantId: profile!.tenantId,
+            tenantId: activeTenantId!,
             workerId: worker.id,
             workerName: worker.name,
             date: today,
@@ -361,14 +370,18 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking);
+        // Clear any previous leave info since they actually punched in
+        if (baseRecord.leaveInfo) {
+            delete baseRecord.leaveInfo;
+        }
+
+        const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking, worker, settingsRef.current);
 
         await dbService.markAttendance(finalRecord);
 
-        // Alert Admin if Kiosk is roaming out of bounds
         if (isOutOfGeofence) {
             await dbService.addNotification({
-                tenantId: profile!.tenantId,
+                tenantId: activeTenantId!,
                 title: 'Geofence Violation Alert',
                 message: `${worker.name} punched ${punchType} via Kiosk outside the allowed factory radius.`,
                 type: 'WARNING',
@@ -378,13 +391,16 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
         }
         
         playSound('SUCCESS'); 
+
+        setRecentPunches(prev => [{name: worker.name, type: punchType, time: new Date(), status: 'SUCCESS' as const}, ...prev].slice(0, 10));
+
         setDetectedWorker({ worker, action: punchType });
         setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
 
         setTimeout(() => {
             setDetectedWorker(null);
             processingRef.current = false; 
-            onExit(); 
+            if (!isDedicatedMode) onExit(); 
         }, 2000);
 
     } catch (e: any) {
@@ -396,18 +412,41 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center">
-       {/* Header */}
-       <div className="absolute top-0 w-full p-4 flex justify-between z-10">
-         <div className="bg-black/40 px-4 py-2 rounded-full text-white font-mono text-sm backdrop-blur-md border border-white/10">
-             {new Date().toLocaleTimeString()}
-         </div>
-         <button onClick={onExit} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
-      </div>
+  const submitExitPin = () => {
+    if (enteredPin === adminPin) {
+      onExit();
+    } else {
+      alert("Incorrect PIN");
+      setShowExitPin(false);
+      setEnteredPin('');
+      processingRef.current = false;
+    }
+  };
 
-      {/* Video Feed */}
-      <div className="relative w-full h-full">
+  return (
+    <div className="fixed inset-0 bg-black z-50 flex flex-col md:flex-row">
+       {isDedicatedMode && (
+          <button 
+            onClick={() => {
+              setShowExitPin(true);
+              processingRef.current = true; 
+            }}
+            className="absolute top-6 right-6 z-50 p-3 rounded-full bg-black/20 text-white/30 hover:bg-black/50 hover:text-white/80 transition-all backdrop-blur-md border border-white/5"
+          >
+            <Lock size={20} />
+          </button>
+       )}
+
+       {!isDedicatedMode && (
+         <div className="absolute top-0 w-full p-4 flex justify-between z-10">
+           <div className="bg-black/40 px-4 py-2 rounded-full text-white font-mono text-sm backdrop-blur-md">
+               {new Date().toLocaleTimeString()}
+           </div>
+           <button onClick={onExit} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
+         </div>
+       )}
+
+      <div className={`relative h-1/2 md:h-full bg-gray-900 border-b md:border-b-0 md:border-r border-white/10 ${isDedicatedMode ? 'w-full md:w-2/3' : 'w-full'}`}>
          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
          
          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -418,9 +457,54 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
                  {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place face within circle"}
              </p>
          </div>
+
+         <div className="absolute bottom-6 w-full text-center pointer-events-none z-10">
+           <div className={`backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border shadow-lg transition-all duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-900/80 border-purple-500' : 'bg-black/60 border-white/20'}`}>
+              {!modelsLoaded ? (
+                  <Loader2 className="animate-spin text-white mr-3" />
+              ) : livenessState === 'CHALLENGE' ? (
+                  <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
+              ) : (
+                  <ScanFace className="text-white mr-3 animate-pulse" />
+              )}
+              <p className="text-white text-xl font-bold tracking-wide">{feedback}</p>
+           </div>
+         </div>
       </div>
+
+      {isDedicatedMode && (
+         <div className="w-full md:w-1/3 h-1/2 md:h-full bg-gray-950 flex flex-col z-20">
+            <div className="p-6 border-b border-gray-800 bg-black">
+               <h2 className="text-xl font-bold text-white tracking-wide">Live Activity</h2>
+               <p className="text-gray-400 text-sm mt-1 flex items-center">
+                  <span className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                  System Active & Monitoring
+               </p>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+               {recentPunches.length === 0 ? (
+                  <div className="h-full flex flex-col justify-center items-center text-gray-500">
+                     <Clock size={48} className="mb-4 opacity-20"/>
+                     <p>Awaiting first scan...</p>
+                  </div>
+               ) : (
+                  recentPunches.map((punch, idx) => (
+                     <div key={idx} className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center animate-in slide-in-from-left-4 fade-in">
+                        <div className={`p-3 rounded-xl mr-4 ${punch.type === 'IN' ? 'bg-green-500/20 text-green-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                           {punch.type === 'IN' ? <LogIn size={20}/> : <LogOut size={20}/>}
+                        </div>
+                        <div className="flex-1">
+                           <h4 className="text-white font-bold">{punch.name}</h4>
+                           <p className="text-gray-400 text-xs">Punched {punch.type} • {punch.time.toLocaleTimeString()}</p>
+                        </div>
+                     </div>
+                  ))
+               )}
+            </div>
+         </div>
+      )}
       
-      {/* SUCCESS POPUP */}
       {detectedWorker && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 animate-in fade-in zoom-in duration-300 z-30">
               <div className="bg-white p-8 rounded-3xl text-center shadow-2xl max-w-sm w-full mx-4">
@@ -441,7 +525,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
           </div>
       )}
 
-      {/* ERROR POPUP */}
       {errorFeedback && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 animate-in fade-in z-30">
               <div className="bg-white p-6 rounded-2xl text-center shadow-xl max-w-xs mx-4 border-l-4 border-yellow-400">
@@ -451,20 +534,38 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId }) => 
               </div>
           </div>
       )}
-      
-      {/* STATUS BAR */}
-      <div className="absolute bottom-10 w-full text-center pointer-events-none z-10">
-         <div className={`backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border shadow-lg transition-all duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-900/80 border-purple-500' : 'bg-white/10 border-white/20'}`}>
-            {!modelsLoaded ? (
-                <Loader2 className="animate-spin text-white mr-3" />
-            ) : livenessState === 'CHALLENGE' ? (
-                <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
-            ) : (
-                <ScanFace className="text-white mr-3 animate-pulse" />
-            )}
-            <p className="text-white text-xl font-bold tracking-wide">{feedback}</p>
-         </div>
-      </div>
+
+      {showExitPin && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-50">
+             <div className="bg-white p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl animate-in zoom-in">
+                 <ShieldAlert size={40} className="text-red-500 mx-auto mb-4"/>
+                 <h3 className="text-xl font-bold mb-2">Exit Kiosk Mode</h3>
+                 <p className="text-sm text-gray-500 mb-6">Enter Admin PIN to close terminal</p>
+                 <input 
+                    type="password" 
+                    maxLength={4} 
+                    value={enteredPin} 
+                    onChange={(e)=>setEnteredPin(e.target.value.replace(/\D/g, ''))}
+                    className="w-full text-center text-3xl tracking-widest p-4 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
+                    autoFocus
+                 />
+                 <div className="flex space-x-3">
+                    <button 
+                      onClick={() => { setShowExitPin(false); processingRef.current = false; setEnteredPin(''); }} 
+                      className="flex-1 p-3 bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={submitExitPin} 
+                      className="flex-1 p-3 bg-red-600 text-white font-bold rounded-xl transition-colors hover:bg-red-700"
+                    >
+                      Unlock
+                    </button>
+                 </div>
+             </div>
+          </div>
+      )}
     </div>
   );
 };

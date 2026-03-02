@@ -180,6 +180,12 @@ export const dbService = {
     const defaultDepartments = ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
     const defaultBranch = { id: 'default', name: 'Main Branch' };
 
+    // NEW: Default Holiday setup
+    const defaultWeeklyOffs: OrgSettings['weeklyOffs'] = {
+      defaultDays: [0], // Default Sunday
+      saturdayRule: 'NONE'
+    };
+
     if (snap.exists()) {
       const data = snap.data();
       return {
@@ -188,10 +194,19 @@ export const dbService = {
         strictLiveness: data.strictLiveness ?? false,
         baseLocation: data.baseLocation,
         branches: data.branches?.length ? data.branches : [{ ...defaultBranch, location: data.baseLocation }],
-        departments: data.departments?.length ? data.departments : defaultDepartments
+        departments: data.departments?.length ? data.departments : defaultDepartments,
+        
+        // Map new fields securely
+        weeklyOffs: data.weeklyOffs || defaultWeeklyOffs,
+        holidays: data.holidays || [],
+        enableSandwichRule: data.enableSandwichRule ?? false,
+        holidayPayMultiplier: data.holidayPayMultiplier ?? 2.0
       };
     }
-    return { shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch], departments: defaultDepartments };
+    return { 
+      shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch], departments: defaultDepartments,
+      weeklyOffs: defaultWeeklyOffs, holidays: [], enableSandwichRule: false, holidayPayMultiplier: 2.0
+    };
   },
 
   saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
@@ -251,6 +266,29 @@ export const dbService = {
   updateTenant: async (tenantId: string, data: { name: string }) => {
     const tenantRef = doc(db, "tenants", tenantId);
     await updateDoc(tenantRef, data);
+  },
+
+  // --- KIOSK TERMINALS ---
+  getKioskTerminals: async (tenantId: string): Promise<any[]> => {
+    if (!tenantId) return [];
+    const q = query(collection(db, "kiosks"), where("tenantId", "==", tenantId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  },
+
+  addKioskTerminal: async (terminal: any) => {
+    await addDoc(collection(db, "kiosks"), terminal);
+  },
+
+  deleteKioskTerminal: async (id: string) => {
+    await deleteDoc(doc(db, "kiosks", id));
+  },
+
+  verifyKioskPairingCode: async (code: string): Promise<any | null> => {
+    const q = query(collection(db, "kiosks"), where("pairingCode", "==", code));
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) return null;
+    return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
   },
 
   // --- PAYROLL METHODS ---

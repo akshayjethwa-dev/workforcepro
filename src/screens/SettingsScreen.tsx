@@ -3,20 +3,19 @@ import React, { useState, useEffect } from 'react';
 import { 
   Save, Plus, Trash2, Clock, AlertCircle, CheckCircle, 
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
-  GitBranch, Layers, X, ScanFace
+  GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
-import { OrgSettings, ShiftConfig, Branch } from '../types/index';
+import { OrgSettings, ShiftConfig, Branch, KioskTerminal } from '../types/index';
 
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 export const SettingsScreen: React.FC = () => {
-  // PULL LIMITS FROM AUTH CONTEXT
   const { profile, limits } = useAuth();
   
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS'>('GENERAL');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES'>('GENERAL');
   
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [initialSettings, setInitialSettings] = useState<OrgSettings | null>(null);
@@ -26,9 +25,29 @@ export const SettingsScreen: React.FC = () => {
   
   const [newDept, setNewDept] = useState('');
   
+  // --- KIOSK TERMINALS STATE ---
+  const [terminals, setTerminals] = useState<KioskTerminal[]>([]);
+  const [newTerminalName, setNewTerminalName] = useState('');
+  const [newTerminalPin, setNewTerminalPin] = useState('');
+
+  // --- HOLIDAYS STATE ---
+  const [newHolidayName, setNewHolidayName] = useState('');
+  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayPaid, setNewHolidayPaid] = useState(true);
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+
+  const DAYS_OF_WEEK = [
+    { id: 1, label: 'Mon' },
+    { id: 2, label: 'Tue' },
+    { id: 3, label: 'Wed' },
+    { id: 4, label: 'Thu' },
+    { id: 5, label: 'Fri' },
+    { id: 6, label: 'Sat' },
+    { id: 0, label: 'Sun' }
+  ];
 
   useEffect(() => {
     if (profile) {
@@ -45,6 +64,8 @@ export const SettingsScreen: React.FC = () => {
            setSettings(data);
            setInitialSettings(data);
         }).finally(() => setLoading(false));
+
+        dbService.getKioskTerminals(profile.tenantId).then(setTerminals);
       } else {
         setLoading(false);
       }
@@ -54,6 +75,57 @@ export const SettingsScreen: React.FC = () => {
   const hasChanges = 
     JSON.stringify(settings) !== JSON.stringify(initialSettings) ||
     JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile);
+
+  // --- TERMINAL MANAGEMENT ---
+  const handleGenerateTerminal = async () => {
+    if (!profile?.tenantId || !newTerminalName || newTerminalPin.length !== 4) {
+       alert("Provide a terminal name and a 4-digit PIN."); 
+       return;
+    }
+    
+    setSaving(true);
+    try {
+      const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      const newKiosk = {
+         tenantId: profile.tenantId,
+         branchId: 'default',
+         name: newTerminalName,
+         pairingCode,
+         adminPin: newTerminalPin,
+         createdAt: new Date().toISOString()
+      };
+      
+      await dbService.addKioskTerminal(newKiosk);
+      setTerminals(await dbService.getKioskTerminals(profile.tenantId));
+      
+      setNewTerminalName('');
+      setNewTerminalPin('');
+      setMessage({ type: 'success', text: `Terminal paired! Code: ${pairingCode}`});
+    } catch (e) {
+      console.error(e);
+      setMessage({ type: 'error', text: 'Failed to generate terminal code.'});
+    } finally {
+      setSaving(false);
+      setTimeout(() => setMessage(null), 8000); 
+    }
+  };
+
+  const handleDeleteTerminal = async (id: string) => {
+    if (window.confirm("Revoke this terminal's access? The kiosk will no longer be able to punch workers.")) {
+      setSaving(true);
+      try {
+        await dbService.deleteKioskTerminal(id);
+        setTerminals(terminals.filter(t => t.id !== id));
+      } catch (e) {
+        console.error(e);
+        setMessage({ type: 'error', text: 'Failed to delete terminal.'});
+      } finally {
+        setSaving(false);
+        setTimeout(() => setMessage(null), 3000);
+      }
+    }
+  };
 
   // --- SHIFTS MANAGEMENT ---
   const addShift = () => {
@@ -169,6 +241,73 @@ export const SettingsScreen: React.FC = () => {
     setSettings({ ...settings, departments: settings.departments?.filter(d => d !== dept) });
   };
 
+  // --- HOLIDAY CALENDAR MANAGEMENT ---
+  const toggleWeeklyOff = (dayId: number) => {
+    if (!settings) return;
+    const currentDays = settings.weeklyOffs?.defaultDays || [0];
+    let newDays;
+    
+    if (currentDays.includes(dayId)) {
+        newDays = currentDays.filter(d => d !== dayId);
+    } else {
+        newDays = [...currentDays, dayId].sort((a,b) => a - b);
+    }
+
+    setSettings({
+        ...settings,
+        weeklyOffs: {
+            ...(settings.weeklyOffs || { saturdayRule: 'NONE' }),
+            defaultDays: newDays
+        }
+    });
+  };
+
+  const updateSaturdayRule = (rule: any) => {
+    if (!settings) return;
+    setSettings({
+        ...settings,
+        weeklyOffs: {
+            ...(settings.weeklyOffs || { defaultDays: [0] }),
+            saturdayRule: rule
+        }
+    });
+  };
+
+  const handleAddHoliday = (e: React.MouseEvent) => {
+    e.preventDefault(); 
+    if (!newHolidayName.trim() || !newHolidayDate) return;
+    
+    const newHoliday = {
+        id: `hol_${Date.now()}`,
+        name: newHolidayName.trim(),
+        date: newHolidayDate,
+        isPaid: newHolidayPaid
+    };
+    
+    setSettings(prevSettings => {
+        if (!prevSettings) return prevSettings;
+        const existingHolidays = prevSettings.holidays || [];
+        return {
+            ...prevSettings,
+            holidays: [...existingHolidays, newHoliday].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+        };
+    });
+    
+    setNewHolidayName('');
+    setNewHolidayDate('');
+    setNewHolidayPaid(true);
+  };
+
+  const removeHoliday = (id: string) => {
+    setSettings(prevSettings => {
+        if (!prevSettings) return prevSettings;
+        return {
+            ...prevSettings,
+            holidays: (prevSettings.holidays || []).filter(h => h.id !== id)
+        };
+    });
+  };
+
   // --- GLOBAL SAVE ---
   const handleSave = async () => {
     if (!profile) return;
@@ -180,7 +319,6 @@ export const SettingsScreen: React.FC = () => {
       }
 
       if (JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile)) {
-        // Fix: Use profile.uid directly (removed profile.id to fix TS error)
         const userId = profile.uid; 
         if (userId) {
             await updateDoc(doc(db, "users", userId), {
@@ -233,8 +371,11 @@ export const SettingsScreen: React.FC = () => {
         {[
           { id: 'GENERAL', label: 'General', icon: Building },
           { id: 'SHIFTS', label: 'Shifts', icon: Clock },
+          { id: 'CALENDAR', label: 'Holidays', icon: CalendarDays },
+          { id: 'LEAVES', label: 'Leave Policy', icon: Umbrella },
           { id: 'BRANCHES', label: 'Locations', icon: GitBranch },
-          { id: 'DEPARTMENTS', label: 'Departments', icon: Layers }
+          { id: 'DEPARTMENTS', label: 'Departments', icon: Layers },
+          { id: 'TERMINALS', label: 'Terminals', icon: ScanFace }
         ].map(tab => (
           <button 
             key={tab.id}
@@ -328,7 +469,6 @@ export const SettingsScreen: React.FC = () => {
                 </ul>
             </div>
 
-            {/* --- NEW: LIVENESS DETECTION TOGGLE --- */}
             <div className="flex items-center justify-between mb-4 pt-6 border-t border-slate-100">
               <div className="flex items-center space-x-3">
                 <div className="p-2 bg-purple-50 rounded-xl">
@@ -367,8 +507,312 @@ export const SettingsScreen: React.FC = () => {
                     </li>
                 </ul>
             </div>
-
           </div>
+
+          <div className="px-1 mb-3">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Statutory & Compliance</h3>
+          </div>
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Registration Number</label>
+                      <input 
+                          type="text" 
+                          className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                          value={settings?.compliance?.pfRegistrationNumber || ''} 
+                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {esicCode:'', capPfDeduction:true, dailyWagePfPercentage:100}), pfRegistrationNumber: e.target.value}} : null)} 
+                          placeholder="e.g. MH/BAN/0000000/000"
+                      />
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">ESIC Code</label>
+                      <input 
+                          type="text" 
+                          className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                          value={settings?.compliance?.esicCode || ''} 
+                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {pfRegistrationNumber:'', capPfDeduction:true, dailyWagePfPercentage:100}), esicCode: e.target.value}} : null)} 
+                          placeholder="17-digit ESIC Code"
+                      />
+                  </div>
+              </div>
+              
+              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-4">
+                  <div className="flex items-center justify-between">
+                      <div>
+                          <p className="text-sm font-bold text-slate-800">Cap PF Deduction at ₹15,000</p>
+                          <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the ₹15k wage ceiling.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                          <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={settings?.compliance?.capPfDeduction ?? true} 
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), capPfDeduction: e.target.checked}} : null)}
+                          />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                      </label>
+                  </div>
+                  
+                  <div className="pt-4 border-t border-slate-200">
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Daily Wage PF Calculation Method (%)</label>
+                      <div className="flex items-center space-x-3">
+                          <input 
+                              type="number" 
+                              max="100" min="1"
+                              className="w-24 p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                              value={settings?.compliance?.dailyWagePfPercentage || 100} 
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), dailyWagePfPercentage: Number(e.target.value)}} : null)} 
+                          />
+                          <p className="text-[10px] text-slate-500 leading-tight">
+                              % of the total daily gross wage to be considered as "Basic + DA" for PF calculations.
+                          </p>
+                      </div>
+                  </div>
+              </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================= LEAVES POLICY TAB ======================= */}
+      {activeTab === 'LEAVES' && (
+        <div className="animate-in fade-in duration-300 space-y-6 mb-8">
+            <div className="px-1 mb-3">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Annual Leave Balances</h3>
+            </div>
+            
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-6">
+                <p className="text-sm text-slate-500 font-medium">Define the default number of leaves granted to workers annually.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Casual Leaves (CL)</label>
+                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                            value={settings?.leavePolicy?.cl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), cl: Number(e.target.value)}} : null)} 
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Sick Leaves (SL)</label>
+                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                            value={settings?.leavePolicy?.sl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), sl: Number(e.target.value)}} : null)} 
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Privilege Leaves (PL)</label>
+                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                            value={settings?.leavePolicy?.pl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), pl: Number(e.target.value)}} : null)} 
+                        />
+                    </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
+                    <div>
+                        <p className="text-sm font-bold text-slate-800">Allow Negative Balances</p>
+                        <p className="text-[11px] text-slate-500 mt-1 max-w-sm">If toggled off, any leave applied when balance is 0 will automatically convert to Unpaid Leave (LWP).</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer ml-4">
+                        <input type="checkbox" className="sr-only peer" 
+                            checked={settings?.leavePolicy?.allowNegativeBalance ?? false} 
+                            onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0}), allowNegativeBalance: e.target.checked}} : null)}
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* ======================= HOLIDAY CALENDAR TAB ======================= */}
+      {activeTab === 'CALENDAR' && (
+        <div className="animate-in fade-in duration-300 space-y-8 mb-8">
+            
+            {/* WEEKLY OFFS */}
+            <section>
+                <div className="px-1 mb-3">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Weekly Offs</h3>
+                </div>
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6">
+                    <p className="text-sm font-bold text-slate-800 mb-4">Select default weekly off days</p>
+                    <div className="flex flex-wrap gap-3 mb-6">
+                        {DAYS_OF_WEEK.map((day) => {
+                            const isSelected = settings?.weeklyOffs?.defaultDays?.includes(day.id) ?? (day.id === 0);
+                            return (
+                                <button
+                                    key={day.id}
+                                    onClick={() => toggleWeeklyOff(day.id)}
+                                    className={`px-4 py-2.5 rounded-2xl text-sm font-bold transition-all border ${
+                                        isSelected 
+                                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' 
+                                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    {day.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {(settings?.weeklyOffs?.defaultDays?.includes(6) || false) && (
+                        <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl animate-in fade-in slide-in-from-top-2">
+                            <label className="text-[10px] font-black text-indigo-800 uppercase mb-2 block tracking-tighter">Saturday Working Rule</label>
+                            <select 
+                                className="w-full md:w-1/2 p-3 bg-white border border-indigo-200 rounded-xl text-sm font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                value={settings?.weeklyOffs?.saturdayRule || 'ALL'}
+                                onChange={(e) => updateSaturdayRule(e.target.value)}
+                            >
+                                <option value="ALL">All Saturdays are Off</option>
+                                <option value="ALTERNATE">Alternate Saturdays (2nd & 4th Off)</option>
+                                <option value="FIRST_THIRD">1st & 3rd Saturdays Off</option>
+                            </select>
+                        </div>
+                    )}
+                </div>
+            </section>
+
+            {/* SANDWICH RULE & HOLIDAY PAY */}
+            <section>
+                <div className="px-1 mb-3">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Payroll Rules</h3>
+                </div>
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-6">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-bold text-slate-800">Enable Sandwich Rule</p>
+                            <p className="text-[11px] text-slate-500 mt-1 max-w-sm">If a worker is absent on the day before AND the day after a holiday/weekly off, the holiday becomes unpaid.</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer ml-4">
+                            <input 
+                                type="checkbox" 
+                                className="sr-only peer" 
+                                checked={settings?.enableSandwichRule ?? false} 
+                                onChange={(e) => setSettings(s => s ? {...s, enableSandwichRule: e.target.checked} : null)}
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                        </label>
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-6">
+                        <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Holiday Pay Multiplier</label>
+                        <div className="flex items-center space-x-3">
+                            <div className="relative">
+                                <input 
+                                    type="number" 
+                                    step="0.5" min="1" max="5"
+                                    className="w-24 pl-3 pr-8 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800" 
+                                    value={settings?.holidayPayMultiplier || 2.0} 
+                                    onChange={(e) => setSettings(s => s ? {...s, holidayPayMultiplier: Number(e.target.value)} : null)} 
+                                />
+                                <span className="absolute right-3 top-3.5 text-xs font-bold text-slate-400">x</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 leading-tight max-w-xs">
+                                Rate applied when a worker physically checks in on a declared holiday or weekly off (e.g., 2.0x for double pay).
+                            </p>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            {/* PUBLIC HOLIDAYS */}
+            <section>
+                <div className="px-1 mb-3 flex justify-between items-end">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Public Holidays</h3>
+                </div>
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                    
+                    {/* NEW: Clean, Spacious Flex Layout */}
+                    <div className="p-6 bg-slate-50 border-b border-slate-100">
+                        <h4 className="text-sm font-black text-slate-800 mb-4 tracking-tight">Register New Holiday</h4>
+                        
+                        <div className="flex flex-col md:flex-row flex-wrap gap-4">
+                            <div className="flex-1 min-w-50">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Holiday Name</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="e.g. Diwali, Holi" 
+                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
+                                    value={newHolidayName}
+                                    onChange={(e) => setNewHolidayName(e.target.value)}
+                                />
+                            </div>
+
+                            <div className="w-full md:w-40">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Date</label>
+                                <input 
+                                    type="date" 
+                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
+                                    value={newHolidayDate}
+                                    onChange={(e) => setNewHolidayDate(e.target.value)}
+                                />
+                            </div>
+                            
+                            <div className="w-full md:w-40">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Pay Type</label>
+                                <select 
+                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm appearance-none"
+                                    value={newHolidayPaid ? 'PAID' : 'UNPAID'}
+                                    onChange={(e) => setNewHolidayPaid(e.target.value === 'PAID')}
+                                >
+                                    <option value="PAID">Paid (Full Wage)</option>
+                                    <option value="UNPAID">Unpaid</option>
+                                </select>
+                            </div>
+
+                            <div className="w-full md:w-28 flex items-end">
+                                <button 
+                                    type="button"
+                                    onClick={handleAddHoliday}
+                                    disabled={!newHolidayName.trim() || !newHolidayDate}
+                                    className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center shadow-md shadow-indigo-100"
+                                >
+                                    <Plus size={18} className="mr-1"/> Add
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* NEW: Clean Calendar Badges List */}
+                    <div className="p-2">
+                        {(settings?.holidays || []).length > 0 ? (
+                            <div className="divide-y divide-slate-50">
+                                {settings?.holidays?.map((holiday) => (
+                                    <div key={holiday.id} className="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 transition-colors">
+                                        <div className="flex items-center space-x-4">
+                                            {/* Beautiful Date Badge */}
+                                            <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden text-center min-w-16 flex flex-col">
+                                                <div className={`text-[10px] font-black uppercase py-1 tracking-widest ${holiday.isPaid ? 'bg-indigo-500 text-white' : 'bg-slate-400 text-white'}`}>
+                                                    {new Date(holiday.date).toLocaleDateString('en-US', { month: 'short' })}
+                                                </div>
+                                                <div className="text-xl font-black text-slate-800 py-1.5">
+                                                    {new Date(holiday.date).getDate()}
+                                                </div>
+                                            </div>
+                                            
+                                            <div>
+                                                <h4 className="font-bold text-slate-800 text-base leading-tight">{holiday.name}</h4>
+                                                <span className={`text-[9px] font-black tracking-widest uppercase px-2 py-0.5 rounded flex items-center w-max mt-1.5 ${holiday.isPaid ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
+                                                    {holiday.isPaid ? 'Paid Holiday' : 'Unpaid Holiday'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            type="button"
+                                            onClick={() => removeHoliday(holiday.id)}
+                                            className="text-slate-400 hover:text-red-500 bg-white hover:bg-red-50 p-2.5 rounded-xl border border-slate-100 hover:border-red-100 transition-all shadow-sm"
+                                        >
+                                            <Trash2 size={18}/>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="p-10 text-center text-slate-400">
+                                <CalendarDays size={48} className="mx-auto text-slate-200 mb-3" />
+                                <p className="text-sm font-medium">No public holidays registered.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </section>
         </div>
       )}
 
@@ -590,68 +1034,85 @@ export const SettingsScreen: React.FC = () => {
         </div>
       )}
 
-{/* --- COMPLIANCE SETTINGS SECTION --- */}
-<div className="px-1 mb-3 mt-8">
-    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Statutory & Compliance</h3>
-</div>
-<div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Registration Number</label>
-            <input 
-                type="text" 
-                className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                value={settings?.compliance?.pfRegistrationNumber || ''} 
-                onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {esicCode:'', capPfDeduction:true, dailyWagePfPercentage:100}), pfRegistrationNumber: e.target.value}} : null)} 
-                placeholder="e.g. MH/BAN/0000000/000"
-            />
-        </div>
-        <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">ESIC Code</label>
-            <input 
-                type="text" 
-                className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                value={settings?.compliance?.esicCode || ''} 
-                onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {pfRegistrationNumber:'', capPfDeduction:true, dailyWagePfPercentage:100}), esicCode: e.target.value}} : null)} 
-                placeholder="17-digit ESIC Code"
-            />
-        </div>
-    </div>
-    
-    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-4">
-        <div className="flex items-center justify-between">
-            <div>
-                <p className="text-sm font-bold text-slate-800">Cap PF Deduction at ₹15,000</p>
-                <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the ₹15k wage ceiling.</p>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                    type="checkbox" 
-                    className="sr-only peer" 
-                    checked={settings?.compliance?.capPfDeduction ?? true} 
-                    onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), capPfDeduction: e.target.checked}} : null)}
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-            </label>
-        </div>
-        
-        <div className="pt-4 border-t border-slate-200">
-            <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Daily Wage PF Calculation Method (%)</label>
-            <div className="flex items-center space-x-3">
-                <input 
-                    type="number" 
-                    max="100" min="1"
-                    className="w-24 p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                    value={settings?.compliance?.dailyWagePfPercentage || 100} 
-                    onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), dailyWagePfPercentage: Number(e.target.value)}} : null)} 
-                />
-                <p className="text-[10px] text-slate-500 leading-tight">
-                    % of the total daily gross wage to be considered as "Basic + DA" for PF calculations.
+      {/* ======================= TERMINALS TAB ======================= */}
+      {activeTab === 'TERMINALS' && (
+        <div className="animate-in fade-in duration-300">
+           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
+               <div className="mb-6">
+                   <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Register New Kiosk</h3>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">Generate a 6-digit pairing code to link a factory tablet</p>
+               </div>
+               
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Terminal Name</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g., Main Gate, Packaging Dept" 
+                        className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
+                        value={newTerminalName} 
+                        onChange={e => setNewTerminalName(e.target.value)} 
+                      />
+                  </div>
+                  
+                  <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Admin Exit PIN</label>
+                      <div className="relative">
+                          <input 
+                            type="text" 
+                            maxLength={4} 
+                            placeholder="4-digit PIN" 
+                            className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold tracking-widest focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
+                            value={newTerminalPin} 
+                            onChange={e => setNewTerminalPin(e.target.value.replace(/\D/g, ''))} 
+                          />
+                          <Lock className="absolute right-4 top-3.5 text-slate-400" size={16} />
+                      </div>
+                      <p className="text-[9px] text-slate-500 mt-1.5 font-medium leading-relaxed">
+                        Secret PIN required to unlock or exit the Kiosk Mode on the tablet.
+                      </p>
+                  </div>
+               </div>
+
+               <div className="flex justify-end pt-4 border-t border-slate-50">
+                  <button 
+                    onClick={handleGenerateTerminal} 
+                    disabled={saving || !newTerminalName || newTerminalPin.length !== 4}
+                    className="bg-purple-600 text-white px-8 py-3 font-bold rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-purple-200 w-full md:w-auto"
+                  >
+                    {saving ? <Loader2 className="animate-spin mr-2" size={18} /> : <ScanFace className="mr-2" size={18} />}
+                    {saving ? 'Generating...' : 'Generate Pairing Code'}
+                  </button>
+               </div>
+           </div>
+
+           <div className="space-y-4">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 px-1">Active Terminals</h3>
+              {terminals.map(terminal => (
+                 <div key={terminal.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex justify-between items-center">
+                    <div>
+                       <h4 className="font-bold text-slate-800">{terminal.name}</h4>
+                       <p className="text-xs text-slate-500 font-mono mt-1">
+                          Pairing Code: <span className="font-bold text-purple-600 tracking-widest text-sm">{terminal.pairingCode}</span>
+                       </p>
+                    </div>
+                    <button 
+                      onClick={() => handleDeleteTerminal(terminal.id)} 
+                      disabled={saving}
+                      className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition disabled:opacity-50"
+                    >
+                      <Trash2 size={20}/>
+                    </button>
+                 </div>
+              ))}
+              {terminals.length === 0 && (
+                <p className="text-center text-slate-400 text-xs py-8 bg-white rounded-3xl border border-dashed border-slate-200">
+                  No active terminals. Generate a code above to get started.
                 </p>
-            </div>
+              )}
+           </div>
         </div>
-    </div>
-</div>
+      )}
 
       {/* --- FLOATING SAVE ACTION BAR --- */}
       {hasChanges && (

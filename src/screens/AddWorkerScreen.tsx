@@ -7,7 +7,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
-import { Worker, ShiftConfig, Branch } from '../types/index';
+import { Worker, ShiftConfig, Branch, OrgSettings } from '../types/index';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
 import { useBackButton } from '../hooks/useBackButton'; 
@@ -22,7 +22,7 @@ const STEPS = [
   { id: 0, title: 'Personal', icon: User },
   { id: 1, title: 'Employment', icon: Briefcase },
   { id: 2, title: 'Wage Info', icon: IndianRupee },
-  { id: 3, title: 'Statutory', icon: Shield }, // NEW COMPLIANCE TAB
+  { id: 3, title: 'Statutory', icon: Shield },
   { id: 4, title: 'Face Scan', icon: Camera },
 ];
 
@@ -34,19 +34,33 @@ const FACE_ANGLES = [
   "Tilt Head Down"
 ];
 
+const DAYS_OF_WEEK = [
+  { id: 1, label: 'Monday' },
+  { id: 2, label: 'Tuesday' },
+  { id: 3, label: 'Wednesday' },
+  { id: 4, label: 'Thursday' },
+  { id: 5, label: 'Friday' },
+  { id: 6, label: 'Saturday' },
+  { id: 0, label: 'Sunday' }
+];
+
 export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialData }) => {
-  const { profile } = useAuth();
+  const { profile, limits } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
   
-  // Dynamic Dropdown States
   const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); 
   const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
   
+  // NEW: Store the full org settings to pre-fill the leave override
+  const [settings, setSettings] = useState<OrgSettings | null>(null);
+  
+  // State to track if we are overriding the leave policy (Defaults to OFF)
+  const [isLeaveOverride, setIsLeaveOverride] = useState(false);
+  
   const isEditing = !!initialData;
   
-  // Camera State
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
@@ -58,6 +72,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     joinedDate: new Date().toISOString().split('T')[0],
     shiftId: 'default',
     branchId: 'default',
+    weeklyOffOverride: undefined, 
+    leaveBalances: undefined, // Default to undefined to use factory policy
     wageConfig: {
       type: 'DAILY', amount: 0, overtimeEligible: false, 
       allowances: { travel: 0, food: 0, nightShift: 0 },
@@ -69,33 +85,32 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     status: 'ACTIVE'
   });
 
-  // --- MULTI-STEP BACK BUTTON LOGIC ---
   useBackButton(() => {
     if (currentStep > 0) {
       setCurrentStep(prev => prev - 1);
-      return true; // We handled it (stay in the wizard)
+      return true;
     } else {
       onBack();
-      return true; // We handled it (close the wizard, go back to Workers list)
+      return true; 
     }
   });
 
-  // --- FETCH SETTINGS (SHIFTS, BRANCHES, DEPARTMENTS) ---
   useEffect(() => {
     if (profile?.tenantId) {
-      dbService.getOrgSettings(profile.tenantId).then(settings => {
-        setAvailableShifts(settings.shifts);
+      dbService.getOrgSettings(profile.tenantId).then(orgSettings => {
+        setSettings(orgSettings); // Save settings to state for leave pre-filling
+        setAvailableShifts(orgSettings.shifts);
         
-        const branches = settings.branches?.length ? settings.branches : [{id: 'default', name: 'Main Branch'}];
+        const branches = orgSettings.branches?.length ? orgSettings.branches : [{id: 'default', name: 'Main Branch'}];
         setAvailableBranches(branches);
         
-        const depts = settings.departments?.length ? settings.departments : ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
+        const depts = orgSettings.departments?.length ? orgSettings.departments : ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
         setAvailableDepartments(depts);
         
         if (!isEditing) {
           setFormData(prev => ({ 
              ...prev, 
-             shiftId: settings.shifts.length > 0 ? settings.shifts[0].id : 'default',
+             shiftId: orgSettings.shifts.length > 0 ? orgSettings.shifts[0].id : 'default',
              branchId: branches[0].id,
              department: depts[0]
           }));
@@ -104,20 +119,24 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     }
   }, [profile, isEditing]);
 
-  // --- INIT FOR EDIT MODE ---
   useEffect(() => {
     if (initialData) {
         setFormData(initialData);
+        // STRICT CHECK: Only turn toggle ON if they actually have a custom saved policy
+        if (initialData.leaveBalances && Object.keys(initialData.leaveBalances).length > 0) {
+            setIsLeaveOverride(true);
+        } else {
+            setIsLeaveOverride(false);
+        }
+        
         if (initialData.faceDescriptor && initialData.faceDescriptor.length > 0) {
              setCapturedImages(["EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA"]);
         }
     }
   }, [initialData]);
 
-  // --- CAMERA LOGIC ---
   useEffect(() => {
     faceService.loadModels();
-    // Updated step to 4 for Face Scan
     if (currentStep === 4 && capturedImages[0] !== "EXISTING_DATA") {
       startCamera();
     } else {
@@ -160,7 +179,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       setCapturedImages([]); 
   };
 
-  // --- NEW: Helper to auto-calculate Monthly Gross ---
   const handleMonthlyWageChange = (field: 'basic' | 'hra' | 'others', value: string) => {
     const numVal = parseFloat(value) || 0;
     setFormData(prev => {
@@ -173,13 +191,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         wageConfig: {
           ...prev.wageConfig!,
           monthlyBreakdown: updatedBreakdown,
-          amount: newTotal // Auto-update the Gross Amount
+          amount: newTotal 
         }
       };
     });
   };
 
-  // --- STRICT VALIDATION RULES ---
   const validateStep = (step: number): boolean => {
     if (step === 0) {
       if (!formData.name?.trim()) { alert("Full Name is required."); return false; }
@@ -200,7 +217,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
          alert("Overtime Rate per hour is required because Overtime is enabled."); return false; 
       }
     }
-    // Step 3 (Statutory) is optional, so no strict validation blocks progressing
     return true;
   };
 
@@ -208,7 +224,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     if (validateStep(currentStep)) setCurrentStep(prev => prev + 1);
   };
 
-  // --- UPDATED SAVE LOGIC WITH FIREBASE STORAGE & VALIDATION ---
   const handleSave = async () => {
     if (capturedImages[0] !== "EXISTING_DATA" && capturedImages.length < 5) {
       alert("All 5 face scans are required to complete registration.");
@@ -257,6 +272,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         faceDescriptor: descriptor, 
         status: 'ACTIVE'
       };
+
+      // FIREBASE SAFETY: Remove undefined fields if the toggle is OFF
+      if (!isLeaveOverride) {
+          delete workerData.leaveBalances;
+      }
       
       if (isEditing && initialData?.id) {
           await dbService.updateWorker(initialData.id, workerData);
@@ -288,7 +308,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           <h1 className="text-lg font-bold ml-2 text-gray-800">{isEditing ? 'Edit Worker' : 'New Registration'}</h1>
         </div>
         <div className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
-          {/* Changed total steps to 5 */}
           Step {currentStep + 1}/5
         </div>
       </div>
@@ -370,7 +389,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </select>
               </div>
 
-              {/* DYNAMIC PRIMARY BRANCH */}
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Primary Branch *</label>
                 <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
@@ -381,7 +399,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </select>
               </div>
 
-              {/* DYNAMIC DEPARTMENT */}
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Department *</label>
                 <select className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
@@ -398,24 +415,104 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} placeholder="e.g. Helper, Operator" />
               </div>
               
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Shift Timing *</label>
-                <select 
-                  className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formData.shiftId} 
-                  onChange={e => setFormData({...formData, shiftId: e.target.value})}
-                >
-                  {availableShifts.length > 0 ? (
-                    availableShifts.map(shift => (
-                      <option key={shift.id} value={shift.id}>
-                        {shift.name} ({shift.startTime} - {shift.endTime})
-                      </option>
-                    ))
-                  ) : (
-                    <option value="default">General Shift (Loading...)</option>
-                  )}
-                </select>
+              <div className="grid grid-cols-2 gap-4">
+                 <div className="col-span-1">
+                   <label className="text-xs font-bold text-gray-500 uppercase">Shift Timing *</label>
+                   <select 
+                     className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                     value={formData.shiftId} 
+                     onChange={e => setFormData({...formData, shiftId: e.target.value})}
+                   >
+                     {availableShifts.length > 0 ? (
+                       availableShifts.map(shift => (
+                         <option key={shift.id} value={shift.id}>
+                           {shift.name} ({shift.startTime} - {shift.endTime})
+                         </option>
+                       ))
+                     ) : (
+                       <option value="default">General Shift (Loading...)</option>
+                     )}
+                   </select>
+                 </div>
+
+                 {/* Override Weekly Off Dropdown */}
+                 <div className="col-span-1">
+                   <label className="text-xs font-bold text-gray-500 uppercase">Weekly Off *</label>
+                   <select 
+                     className="w-full p-3 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                     value={formData.weeklyOffOverride ? formData.weeklyOffOverride[0] : 'default'} 
+                     onChange={e => {
+                         const val = e.target.value;
+                         setFormData({...formData, weeklyOffOverride: val === 'default' ? undefined : [parseInt(val)]});
+                     }}
+                   >
+                     <option value="default">Factory Default</option>
+                     {DAYS_OF_WEEK.map(day => (
+                         <option key={day.id} value={day.id}>{day.label}</option>
+                     ))}
+                   </select>
+                 </div>
               </div>
+
+              {/* NEW: Leave Policy Override Section */}
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-800 uppercase">Leave Policy Override</label>
+                    <p className="text-[10px] text-gray-500">Assign custom leave balances for this worker.</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={isLeaveOverride} 
+                      onChange={e => {
+                        const checked = e.target.checked;
+                        setIsLeaveOverride(checked);
+                        if (checked) {
+                          // PRE-FILL WITH FACTORY DEFAULTS
+                          setFormData({
+                            ...formData, 
+                            leaveBalances: {
+                                cl: settings?.leavePolicy?.cl || 0, 
+                                sl: settings?.leavePolicy?.sl || 0, 
+                                pl: settings?.leavePolicy?.pl || 0
+                            }
+                          });
+                        } else {
+                          // REVERT BACK TO FACTORY DEFAULTS (Clears override)
+                          setFormData({...formData, leaveBalances: undefined});
+                        }
+                      }} 
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                {isLeaveOverride && (
+                  <div className="grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-top-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Casual (CL)</label>
+                      <input type="number" min="0" className="w-full p-2 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                        value={formData.leaveBalances?.cl ?? 0}
+                        onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), cl: parseInt(e.target.value) || 0}})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Sick (SL)</label>
+                      <input type="number" min="0" className="w-full p-2 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                        value={formData.leaveBalances?.sl ?? 0}
+                        onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), sl: parseInt(e.target.value) || 0}})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Privilege (PL)</label>
+                      <input type="number" min="0" className="w-full p-2 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                        value={formData.leaveBalances?.pl ?? 0}
+                        onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), pl: parseInt(e.target.value) || 0}})} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
           </div>
         )}
@@ -431,8 +528,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     formData.wageConfig?.type === 'DAILY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
                  }`}
                >
-                  <Clock size={24} />
-                  <span className="font-bold text-sm">Daily Wages</span>
+                 <Clock size={24} />
+                 <span className="font-bold text-sm">Daily Wages</span>
                </div>
                <div 
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'MONTHLY'}}))}
@@ -440,8 +537,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     formData.wageConfig?.type === 'MONTHLY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
                  }`}
                >
-                  <Calendar size={24} />
-                  <span className="font-bold text-sm">Monthly Salary</span>
+                 <Calendar size={24} />
+                 <span className="font-bold text-sm">Monthly Salary</span>
                </div>
             </div>
 
@@ -552,7 +649,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           </div>
         )}
 
-        {/* STEP 4: STATUTORY (NEW) */}
+        {/* STEP 4: STATUTORY */}
         {currentStep === 3 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-lg font-bold text-gray-800 mb-2">Statutory Details (Optional)</h2>
@@ -656,7 +753,6 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       </div>
 
       {/* Footer Navigation */}
-      {/* Updated condition to < 4 to allow navigation buttons up to Face Scan */}
       {currentStep < 4 && (
         <div className="p-4 bg-white border-t border-gray-100 flex justify-between">
           <button onClick={() => currentStep > 0 ? setCurrentStep(c => c - 1) : onBack()} 

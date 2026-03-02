@@ -1,5 +1,5 @@
 // src/services/attendanceLogic.ts
-import { AttendanceRecord, ShiftConfig, Punch } from '../types/index';
+import { AttendanceRecord, ShiftConfig, Punch, Worker, OrgSettings } from '../types/index';
 
 export const attendanceLogic = {
   
@@ -42,23 +42,70 @@ export const attendanceLogic = {
   },
 
   /**
+   * Helper to evaluate if a specific date is a weekly off for a worker
+   */
+  isWeeklyOff: (dateStr: string, worker: Worker, settings: OrgSettings): boolean => {
+    const d = new Date(dateStr);
+    const dayOfWeek = d.getDay(); // 0 = Sunday, 6 = Saturday
+
+    // 1. Check Worker Profile Override (e.g., Security Guard gets Tuesday off)
+    if (worker.weeklyOffOverride && worker.weeklyOffOverride.length > 0) {
+      return worker.weeklyOffOverride.includes(dayOfWeek);
+    }
+
+    // 2. Fallback to Factory Org Default
+    const config = settings.weeklyOffs;
+    if (!config || !config.defaultDays) return dayOfWeek === 0;
+
+    if (config.defaultDays.includes(dayOfWeek)) {
+      if (dayOfWeek === 6 && config.saturdayRule) {
+        const occurrence = Math.ceil(d.getDate() / 7);
+        switch (config.saturdayRule) {
+          case 'NONE': return false;
+          case 'ALL': return true;
+          case 'ALTERNATE': return occurrence % 2 === 0; // 2nd & 4th
+          case 'FIRST_THIRD': return occurrence === 1 || occurrence === 3;
+          case 'SECOND_FOURTH': return occurrence === 2 || occurrence === 4;
+          default: return true;
+        }
+      }
+      return true;
+    }
+    return false;
+  },
+
+  /**
    * The Master Function: Decides Status based on Logic Rules
    */
   processDailyStatus: (
     record: AttendanceRecord, 
     shift: ShiftConfig, 
     lateCountThisMonth: number,
-    breakTrackingEnabled: boolean
+    breakTrackingEnabled: boolean,
+    worker: Worker,          // NEW 
+    orgSettings: OrgSettings // NEW
   ): AttendanceRecord => {
     
+    const dateStr = record.date;
+    const isPubHol = orgSettings.holidays?.find(h => h.date === dateStr);
+    const isWeekOff = attendanceLogic.isWeeklyOff(dateStr, worker, orgSettings);
+
     // 1. Get First Punch
     const firstPunch = record.timeline?.find(p => p.type === 'IN');
     
-    // FIX: If timeline is empty or no IN punch, fully reset the status
+    // FIX: If timeline is empty or no IN punch, fully reset the status considering holidays
     if (!firstPunch) {
+        let finalStatus: any = 'ABSENT';
+        
+        if (isPubHol) {
+            finalStatus = isPubHol.isPaid ? 'PUBLIC_HOLIDAY' : 'UNPAID_HOLIDAY';
+        } else if (isWeekOff) {
+            finalStatus = 'WEEKLY_OFF';
+        }
+
         return {
             ...record,
-            status: 'ABSENT',
+            status: finalStatus,
             lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
             hours: { gross: 0, net: 0, overtime: 0 }
         };
@@ -80,7 +127,7 @@ export const attendanceLogic = {
     const netHours = attendanceLogic.calculateHours(record.timeline, breakTrackingEnabled);
 
     // 4. Determine Status (ADVANCED LOGIC)
-    let status: 'PRESENT' | 'HALF_DAY' | 'ABSENT' | 'ON_LEAVE' = 'ABSENT';
+    let status: any = 'ABSENT';
 
     if (netHours < 4) {
         status = 'ABSENT'; 
@@ -96,13 +143,19 @@ export const attendanceLogic = {
         penaltyApplied = true;
     }
 
+    // --- NEW: BLUE COLLAR EDGE CASE (Worked on a Holiday/Sunday) ---
+    if ((isPubHol || isWeekOff) && netHours >= (shift.minHalfDayHours || 4)) {
+        status = 'HOLIDAY_WORKED';
+        penaltyApplied = false; // Waive late penalties on holidays since they showed up extra
+    }
+
     // 5. Calculate Exact Shift Duration safely
     const [endH, endM] = shift.endTime.split(':').map(Number);
     let shiftDurationMins = (endH * 60 + endM) - (shiftHour * 60 + shiftMin);
     if (shiftDurationMins < 0) shiftDurationMins += 24 * 60; // Handle overnight shifts safely
     const shiftDurationHours = shiftDurationMins / 60;
 
-    // --- NEW: CALCULATE OVERTIME WITH THRESHOLD ---
+    // --- CALCULATE OVERTIME WITH THRESHOLD ---
     const extraHours = Math.max(0, netHours - shiftDurationHours);
     const minOtThresholdHours = (shift.minOvertimeMins || 0) / 60;
     

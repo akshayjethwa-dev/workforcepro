@@ -3,7 +3,7 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, IndianRupee } from 'lucide-
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { DailyWageRecord, Worker, Advance } from '../types/index';
+import { DailyWageRecord, Worker, Advance, OrgSettings } from '../types/index';
 
 export const DailyWageScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -11,30 +11,32 @@ export const DailyWageScreen: React.FC = () => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
+  const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Default to current month to match other payroll features
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
 
   useEffect(() => {
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
-          const [fetchedWorkers, fetchedAttendance, fetchedAdvances] = await Promise.all([
+          const [fetchedWorkers, fetchedAttendance, fetchedAdvances, fetchedSettings] = await Promise.all([
             dbService.getWorkers(profile.tenantId),
             dbService.getAttendanceHistory(profile.tenantId),
-            dbService.getAdvances(profile.tenantId)
+            dbService.getAdvances(profile.tenantId),
+            dbService.getOrgSettings(profile.tenantId)
           ]);
           
           setWorkers(fetchedWorkers);
           setAdvances(fetchedAdvances);
+          setSettings(fetchedSettings);
 
-          // Calculate Wages on the fly based on Attendance
           const calculatedWages: DailyWageRecord[] = [];
           fetchedAttendance.forEach(record => {
              const worker = fetchedWorkers.find(w => w.id === record.workerId);
              if (worker) {
-                 calculatedWages.push(wageService.calculateDailyWage(worker, record));
+                 // UPDATED: Passed fetchedSettings to the calculation engine
+                 calculatedWages.push(wageService.calculateDailyWage(worker, record, fetchedSettings));
              }
           });
           
@@ -51,15 +53,12 @@ export const DailyWageScreen: React.FC = () => {
 
   if (loading) return <div className="p-8 text-center">Loading Wages...</div>;
 
-  // If a worker is selected, show their daily logs & ledger
   if (selectedWorkerId) {
     const worker = workers.find(w => w.id === selectedWorkerId);
     
-    // Filter by selected month
     const workerWages = dailyWages.filter(w => w.workerId === selectedWorkerId && w.date.startsWith(selectedMonth));
     const workerAdvances = advances.filter(a => a.workerId === selectedWorkerId && a.date.startsWith(selectedMonth));
     
-    // Sort by date desc
     workerWages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const totalGross = workerWages.reduce((acc, curr) => acc + curr.breakdown.total, 0);
@@ -86,7 +85,6 @@ export const DailyWageScreen: React.FC = () => {
           />
         </div>
 
-        {/* Summary Card */}
         <div className="bg-blue-600 rounded-xl p-4 text-white shadow-lg mb-6">
           <p className="text-blue-100 text-xs font-bold uppercase">Net Earnings ({new Date(selectedMonth).toLocaleString('default', { month: 'short' })})</p>
           <div className="flex items-end mt-1">
@@ -110,7 +108,6 @@ export const DailyWageScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Advances Ledger */}
         {workerAdvances.length > 0 && (
             <div className="bg-white p-4 rounded-xl shadow-sm border border-orange-100 mb-6">
                  <h3 className="font-bold text-gray-700 mb-3 text-sm flex items-center">
@@ -153,7 +150,6 @@ export const DailyWageScreen: React.FC = () => {
                  </div>
                </div>
                
-               {/* Mini breakdown */}
                <div className="flex gap-2 text-[10px] text-gray-400 bg-gray-50 p-2 rounded-lg mt-2">
                   <div className="flex-1 text-center">
                      <p>Base</p>
@@ -175,7 +171,6 @@ export const DailyWageScreen: React.FC = () => {
     );
   }
 
-  // List of all workers
   return (
     <div className="p-4 bg-gray-50 min-h-full pb-24">
       <div className="flex justify-between items-center mb-6">
@@ -193,7 +188,6 @@ export const DailyWageScreen: React.FC = () => {
 
       <div className="space-y-3">
         {workers.map(worker => {
-            // Filter both wages and advances by the selected month
             const workerGross = dailyWages
                 .filter(w => w.workerId === worker.id && w.date.startsWith(selectedMonth))
                 .reduce((acc, curr) => acc + curr.breakdown.total, 0);

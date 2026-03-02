@@ -3,7 +3,7 @@ import { Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save } from
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { Worker } from '../types/index';
+import { Worker, OrgSettings } from '../types/index';
 
 interface Props {
   onAddWorker: () => void;
@@ -13,6 +13,7 @@ interface Props {
 export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) => {
   const { profile, limits } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [settings, setSettings] = useState<OrgSettings | null>(null); // NEW: Hold OrgSettings
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   
@@ -20,7 +21,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // NEW: State for Advance (Kharchi) Modal
+  // State for Advance (Kharchi) Modal
   const [advanceModal, setAdvanceModal] = useState({
     isOpen: false,
     worker: null as Worker | null,
@@ -32,20 +33,24 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     isSaving: false
   });
 
-  const loadWorkers = async () => {
+  const loadWorkersAndSettings = async () => {
     if (profile?.tenantId) {
       try {
-        const data = await dbService.getWorkers(profile.tenantId);
-        setWorkers(data);
+        const [workersData, settingsData] = await Promise.all([
+            dbService.getWorkers(profile.tenantId),
+            dbService.getOrgSettings(profile.tenantId)
+        ]);
+        setWorkers(workersData);
+        setSettings(settingsData);
       } catch (error) {
-        console.error("Failed to load workers", error);
+        console.error("Failed to load data", error);
       } finally {
         setLoading(false);
       }
     }
   };
 
-  useEffect(() => { loadWorkers(); }, [profile]);
+  useEffect(() => { loadWorkersAndSettings(); }, [profile]);
 
   // Custom deletion logic handled via modal
   const confirmDelete = async () => {
@@ -74,16 +79,17 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     onAddWorker();
   };
 
-  // NEW: Quick Action Logic for Advances
+  // Quick Action Logic for Advances
   const handleOpenAdvance = async (worker: Worker) => {
-    if (!profile?.tenantId) return;
+    if (!profile?.tenantId || !settings) return;
     const currentMonth = new Date().toISOString().slice(0, 7);
     
     // Quick calc for guardrail
     const attendance = await dbService.getAttendanceHistory(profile.tenantId);
     const advances = await dbService.getAdvances(profile.tenantId);
     
-    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance);
+    // UPDATED: Now passing settings to calculateCurrentEarnings to accurately reflect holiday pay
+    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance, settings);
     const existingAdvances = advances
         .filter(a => a.workerId === worker.id && a.date.startsWith(currentMonth))
         .reduce((sum, a) => sum + a.amount, 0);
@@ -171,7 +177,6 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
               </div>
               
               <div className="flex space-x-2">
-                {/* NEW: Quick Advance Button */}
                 <button 
                     onClick={() => handleOpenAdvance(worker)}
                     className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
@@ -208,7 +213,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
         </div>
       )}
 
-      {/* NEW: Advance (Kharchi) Modal */}
+      {/* Advance (Kharchi) Modal */}
       {advanceModal.isOpen && advanceModal.worker && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl overflow-hidden">

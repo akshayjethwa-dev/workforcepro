@@ -3,7 +3,7 @@ import { IndianRupee, FileText, Download, CheckCircle, Clock } from 'lucide-reac
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { MonthlyPayroll, Worker, AttendanceRecord, Advance } from '../types/index';
+import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings } from '../types/index';
 import { Payslip } from '../components/Payslip';
 
 export const PayrollScreen: React.FC = () => {
@@ -15,6 +15,7 @@ export const PayrollScreen: React.FC = () => {
   
   const [savedPayrolls, setSavedPayrolls] = useState<MonthlyPayroll[]>([]); 
   const [siteAddress, setSiteAddress] = useState<string>(''); 
+  const [settings, setSettings] = useState<OrgSettings | null>(null);
   
   const [loading, setLoading] = useState(true);
   
@@ -39,6 +40,7 @@ export const PayrollScreen: React.FC = () => {
 
         setWorkers(fetchedWorkers);
         setAdvances(fetchedAdvances);
+        setSettings(fetchedSettings);
         setSiteAddress(fetchedSettings.baseLocation?.address || '');
         setSavedPayrolls(fetchedPayrolls);
         setAttendanceHistory(fetchedAttendance);
@@ -53,25 +55,23 @@ export const PayrollScreen: React.FC = () => {
     loadData();
   }, [profile, currentMonthStr]);
 
-  // Generate Payroll Data
   const payrolls = useMemo(() => {
-    if (workers.length === 0) return [];
+    if (workers.length === 0 || !settings) return [];
     
     return workers.map(worker => {
         const savedPayroll = savedPayrolls.find(p => p.workerId === worker.id);
         if (savedPayroll) return savedPayroll;
 
-        return wageService.generateMonthlyPayroll(worker, currentMonthStr, attendanceHistory, advances);
+        // UPDATED: Pass settings to generation logic
+        return wageService.generateMonthlyPayroll(worker, currentMonthStr, attendanceHistory, advances, settings);
     });
-  }, [workers, attendanceHistory, advances, currentMonthStr, savedPayrolls]);
+  }, [workers, attendanceHistory, advances, currentMonthStr, savedPayrolls, settings]);
 
-  // Handler for marking a salary as paid
   const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
     e.stopPropagation(); 
     
     if (window.confirm(`Mark ₹${payroll.netPayable} as paid to ${payroll.workerName}?`)) {
       try {
-        // NEW: Carry-Forward Logic
         if (payroll.carriedForwardAdvance && payroll.carriedForwardAdvance > 0) {
             const [year, month] = currentMonthStr.split('-');
             let nextMonth = parseInt(month) + 1;
@@ -124,7 +124,6 @@ export const PayrollScreen: React.FC = () => {
         <p className="text-gray-500 text-sm">For {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</p>
       </div>
 
-      {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
             <p className="text-xs text-gray-500 uppercase font-bold">Pending Payout</p>
@@ -136,7 +135,6 @@ export const PayrollScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Payroll List */}
       <div className="space-y-3">
         {payrolls.map(payroll => (
             <div key={payroll.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -178,7 +176,6 @@ export const PayrollScreen: React.FC = () => {
                     </div>
                     
                     <div className="mt-3 flex items-center justify-between">
-                        {/* NEW: Updated List View Summary for Clear Ledger Layout */}
                         <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
                             <span className="font-medium">Earned: ₹{payroll.earnings.gross}</span>
                             <span className="text-red-500 font-bold">Less: -₹{payroll.deductions.advances}</span>
@@ -203,7 +200,6 @@ export const PayrollScreen: React.FC = () => {
         )}
       </div>
 
-      {/* Payslip Modal */}
       {selectedPayroll && (
         <Payslip 
             data={selectedPayroll} 
