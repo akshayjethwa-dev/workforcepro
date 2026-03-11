@@ -203,15 +203,9 @@ export const ReportsScreen: React.FC = () => {
                 '0',                                        // 17. Arrear EPF ER Share
                 '0',                                        // 18. Arrear EPS
                 worker.fatherName || worker.name,           // 19. Father/Husband Name
-<<<<<<< HEAD
                 worker.gender === 'FEMALE' || worker.gender === 'Female' ? 'F' : 'M',    // 20. Relationship (M/F)
                 worker.dateOfBirth || '',                   // 21. Date of Birth
                 worker.gender === 'FEMALE' || worker.gender === 'Female' ? 'F' : 'M',    // 22. Gender
-=======
-                worker.gender === 'FEMALE' ? 'F' : 'M',    // 20. Relationship (M/F)
-                worker.dateOfBirth || '',                   // 21. Date of Birth
-                worker.gender || 'M',                       // 22. Gender
->>>>>>> a342bd5ac7ea77c91cdc1c2760b1d5607acb48b8
                 worker.dateOfJoining || '',                 // 23. Date of Joining
                 worker.dateOfExit || '',                    // 24. Date of Exit
                 ''                                          // 25. Reason for Leaving
@@ -410,11 +404,7 @@ export const ReportsScreen: React.FC = () => {
       </div>
 
       {/* STATUTORY COMPLIANCE SECTION */}
-<<<<<<< HEAD
       <div className="bg-linear-to-br from-indigo-50 via-purple-50 to-pink-50 p-6 rounded-xl shadow-lg border border-indigo-200 mb-6">
-=======
-      <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-6 rounded-xl shadow-lg border border-indigo-200 mb-6">
->>>>>>> a342bd5ac7ea77c91cdc1c2760b1d5607acb48b8
           <div className="flex items-start gap-3 mb-4">
               <div className="bg-indigo-600 p-2 rounded-lg">
                   <Shield size={24} className="text-white"/>

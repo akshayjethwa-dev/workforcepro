@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore'; // Added updateDoc
 import { UserProfile, SubscriptionTier, PlanLimits, PLAN_CONFIG } from '../types/index';
 
 interface AuthContextType {
@@ -28,7 +28,7 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [tenantPlan, setTenantPlan] = useState<SubscriptionTier>('STARTER');
+  const [tenantPlan, setTenantPlan] = useState<SubscriptionTier>('FREE'); // Default to FREE
   const [limits, setLimits] = useState<PlanLimits | null>(null);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,10 +47,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           // FETCH TENANT SUBSCRIPTION INFO
           if (userData.tenantId) {
-             const tenantSnap = await getDoc(doc(db, 'tenants', userData.tenantId));
+             const tenantRef = doc(db, 'tenants', userData.tenantId);
+             const tenantSnap = await getDoc(tenantRef);
+             
              if (tenantSnap.exists()) {
                  const tenantData = tenantSnap.data();
-                 let currentPlan = (tenantData.plan as SubscriptionTier) || 'STARTER';
+                 let currentPlan = (tenantData.plan as SubscriptionTier) || 'FREE';
                  let daysLeft = null;
 
                  // Check Trial Status
@@ -68,8 +70,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                      daysLeft = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
                      if (daysLeft <= 0) {
-                         currentPlan = 'STARTER'; // Trial Expired! Auto-downgrade.
+                         currentPlan = 'FREE'; // Auto-downgrade to FREE
                          daysLeft = 0;
+                         
+                         // Update Firestore so the downgrade is permanent
+                         try {
+                           await updateDoc(tenantRef, { plan: 'FREE' });
+                         } catch (error) {
+                           console.error("Failed to auto-downgrade plan in DB:", error);
+                         }
                      }
                  }
 
@@ -81,7 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } else {
         setProfile(null);
-        setTenantPlan('STARTER');
+        setTenantPlan('FREE');
         setLimits(null);
         setTrialDaysLeft(null);
       }

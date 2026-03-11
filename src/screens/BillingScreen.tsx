@@ -1,16 +1,19 @@
 // src/screens/BillingScreen.tsx
 import React, { useState } from 'react';
-import { Check, X, QrCode, MessageCircle } from 'lucide-react';
+import { Check, X, ShieldCheck, ExternalLink, MessageCircle, Info } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export const BillingScreen: React.FC = () => {
-  // Pull profile to get companyName and tenantId for the WhatsApp message
   const { profile, tenantPlan, trialDaysLeft } = useAuth();
-  const [showQR, setShowQR] = useState<{show: boolean, planName: string, price: string}>({show: false, planName: '', price: ''});
+  
+  // State for the Razorpay Link Modal
+  const [showPaymentModal, setShowPaymentModal] = useState<{show: boolean, planName: string, price: string}>({show: false, planName: '', price: ''});
 
-  const adminPhone = "918460852903"; // Replace with your actual WhatsApp business number
+  const adminPhone = "918460852903"; // Your WhatsApp business number
+  
+  // REPLACE THIS WITH YOUR ACTUAL RAZORPAY PAYMENT LINK
+  const RAZORPAY_PAYMENT_LINK = "https://rzp.io/l/YOUR_LINK_HERE"; 
 
-  // Shared organization details to append to WhatsApp messages
   const orgDetails = `
 ---
 *Organization Details:*
@@ -18,39 +21,31 @@ Name: ${profile?.companyName || 'Not Set'}
 Org ID: ${profile?.tenantId || 'Unknown'}
 Current Plan: ${tenantPlan}`;
 
-  // WhatsApp Message for Enterprise Contact Us
   const enterpriseMsg = `Hi, I am interested in upgrading to the *Enterprise Plan* for WorkForcePro. Could we discuss custom pricing and features?${orgDetails}`;
   const whatsappEnterpriseUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(enterpriseMsg)}`;
 
-  // WhatsApp Message for Starter/Pro QR Payment
-  const paymentMsg = `Hi, I just paid ₹${showQR.price} for the *${showQR.planName} Plan* on WorkForcePro. Here is my screenshot.${orgDetails}`;
+  const paymentMsg = `Hi, I just paid ₹${showPaymentModal.price} for the *${showPaymentModal.planName} Plan* via Razorpay. Here is my receipt/screenshot.${orgDetails}`;
   const whatsappPaymentUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(paymentMsg)}`;
 
   const handleUpgradeClick = (planName: string, price: string) => {
-    setShowQR({ show: true, planName, price });
+    setShowPaymentModal({ show: true, planName, price });
   };
 
   const PlanCard = ({ 
-    title, price, desc, features, isCurrent, currentLabel, isPopular, buttonText, onUpgrade 
+    title, price, desc, features, isCurrent, currentLabel, isPopular, buttonText, onUpgrade, strikePrice 
   }: { 
-    title: string, price: string, desc: string, features: string[], isCurrent: boolean, currentLabel?: string, isPopular?: boolean, buttonText?: string, onUpgrade?: () => void 
+    title: string, price: string, desc: string, features: string[], isCurrent: boolean, currentLabel?: string, isPopular?: boolean, buttonText?: string, onUpgrade?: () => void, strikePrice?: string 
   }) => (
     <div className={`relative bg-white rounded-2xl p-6 border-2 ${isCurrent ? 'border-green-500 shadow-green-100' : isPopular ? 'border-indigo-500 shadow-indigo-100' : 'border-gray-100'} shadow-lg flex flex-col`}>
-      {isPopular && !isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Most Popular</div>}
-      
+      {isPopular && !isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Early Bird Offer</div>}
       {isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">{currentLabel || 'Current Plan'}</div>}
       
       <h3 className="text-xl font-bold text-gray-800">{title}</h3>
       
       <div className="mt-2 flex items-baseline text-gray-900">
-        {price === 'Custom' ? (
-             <span className="text-3xl font-black tracking-tight">Custom</span>
-        ) : (
-             <>
-                <span className="text-3xl font-black tracking-tight">₹{price}</span>
-                <span className="text-sm text-gray-500 ml-1 font-medium">/month</span>
-             </>
-        )}
+        <span className="text-3xl font-black tracking-tight">₹{price}</span>
+        {strikePrice && <span className="text-lg text-gray-400 line-through ml-2 font-semibold">₹{strikePrice}</span>}
+        <span className="text-sm text-gray-500 ml-1 font-medium">{price === '0' ? '/forever' : '/month'}</span>
       </div>
       
       <p className="text-xs text-gray-500 mt-2">{desc}</p>
@@ -66,11 +61,14 @@ Current Plan: ${tenantPlan}`;
 
       <div className="mt-8">
         {isCurrent ? (
-            <button disabled className="w-full bg-green-50 text-green-700 py-3 rounded-xl font-bold text-sm">
-                {currentLabel || 'Active'}
+            <button disabled className="w-full bg-green-50 text-green-700 py-3 rounded-xl font-bold text-sm flex justify-center items-center">
+                <ShieldCheck size={18} className="mr-2"/> {currentLabel || 'Active'}
             </button>
         ) : (
-            <button onClick={onUpgrade} className={`w-full py-3 rounded-xl font-bold text-sm transition-all ${isPopular ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg' : 'bg-gray-900 text-white hover:bg-black'}`}>
+            <button 
+                onClick={onUpgrade} 
+                className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex justify-center items-center ${isPopular ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg' : 'bg-gray-900 text-white hover:bg-black'}`}
+            >
                 {buttonText || `Upgrade to ${title}`}
             </button>
         )}
@@ -82,87 +80,110 @@ Current Plan: ${tenantPlan}`;
     <div className="p-4 bg-gray-50 min-h-full pb-24">
       <div className="mb-6">
         <h2 className="text-2xl font-black text-slate-900">Subscription & Billing</h2>
+        
         {tenantPlan === 'TRIAL' && trialDaysLeft !== null && (
-            <p className="text-indigo-600 font-bold text-sm mt-1 bg-indigo-50 inline-block px-3 py-1 rounded-full border border-indigo-100">
-                {trialDaysLeft} Days left in Free Trial
-            </p>
+            <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
+                <div>
+                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} Days left in Free Trial</p>
+                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Agency' features unlocked.</p>
+                </div>
+            </div>
+        )}
+        {tenantPlan === 'FREE' && trialDaysLeft === 0 && (
+             <div className="mt-2 bg-red-50 border border-red-200 p-3 rounded-xl flex items-center justify-between">
+                 <div>
+                     <p className="text-red-800 font-bold text-sm">Trial Expired</p>
+                     <p className="text-red-600 text-xs mt-0.5">Your account has been moved to the Free plan. Upgrade to restore premium features.</p>
+                 </div>
+             </div>
         )}
       </div>
 
       <div className="space-y-6">
         <PlanCard 
-            title="Starter" 
-            price="299" 
-            desc="Basic manual attendance for small workshops."
-            features={["Up to 25 Workers", "1 Manager Seat", "1 General Shift", "Manual Attendance Entry", "Basic Payroll Reports"]}
-            isCurrent={tenantPlan === 'STARTER'}
-            onUpgrade={() => handleUpgradeClick('Starter', '299')}
+            title="Micro-Team (Free)" 
+            price="0" 
+            desc="Perfect for independent contractors testing the waters."
+            features={["Up to 15 Workers", "1 Active Site / Manager", "Manual Attendance Entry", "Basic Daily Wages", "Standard Payroll Summaries"]}
+            isCurrent={tenantPlan === 'FREE'}
+            currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
+            buttonText="Start for Free"
+            onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
         />
         <PlanCard 
-            title="Pro" 
+            title="Site Manager" 
             price="999" 
-            desc="Full automation and AI features for growing factories."
-            features={["Up to 100 Workers", "5 Manager Seats", "5 Shift Profiles", "AI Face Scan Kiosk", "Geofencing & GPS Validation", "Automated Overtime Rules"]}
-            isCurrent={tenantPlan === 'PRO' || tenantPlan === 'TRIAL'}
-            currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
+            strikePrice="1999"
+            desc="Full automation for growing businesses. (50% Off for first 100 users)"
+            features={["Up to 50 Workers", "Up to 3 Active Sites", "Face Recognition Kiosk Mode", "Offline Sync & Geotagging", "Downloadable Payslips & Reports", "Advance & Loan Tracking"]}
+            isCurrent={tenantPlan === 'STARTER'}
             isPopular={true}
-            onUpgrade={() => handleUpgradeClick('Pro', '999')}
+            onUpgrade={() => handleUpgradeClick('Site Manager', '499')}
         />
         <PlanCard 
-            title="Enterprise" 
-            price="Custom" 
-            desc="Multi-site management for large scale operations."
-            features={["Up to 250 Workers", "Unlimited Managers", "Unlimited Shifts", "Multi-Branch Support (Coming Soon)", "Priority WhatsApp Support"]}
-            isCurrent={tenantPlan === 'ENTERPRISE'}
-            buttonText="Contact Us"
-            onUpgrade={() => window.open(whatsappEnterpriseUrl, '_blank')}
+            title="Agency / Enterprise" 
+            price="4999" 
+            desc="Multi-site control for large construction firms & MSMEs."
+            features={["Up to 200 Workers", "Unlimited Sites & Managers", "Multi-site Unified Dashboard", "Bulk Data Import/Export", "Custom Shift & Overtime Rules", "Priority WhatsApp Support"]}
+            isCurrent={tenantPlan === 'PRO' || tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
+            currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
+            onUpgrade={() => handleUpgradeClick('Agency / Enterprise', '2499')}
         />
       </div>
 
-      {/* MANUAL PAYMENT QR MODAL */}
-      {showQR.show && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+      {/* RAZORPAY LINK MODAL */}
+      {showPaymentModal.show && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
             <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
-                <button onClick={() => setShowQR({show:false, planName:'', price:''})} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full text-gray-500 hover:bg-gray-200 transition-colors">
+                <button onClick={() => setShowPaymentModal({show:false, planName:'', price:''})} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full text-gray-500 hover:bg-gray-200 transition-colors">
                     <X size={18} />
                 </button>
                 
                 <div className="text-center mb-6 mt-2">
-                    <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                        <QrCode className="text-indigo-600" size={24}/>
+                    <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <ShieldCheck className="text-blue-600" size={24}/>
                     </div>
-                    <h3 className="text-xl font-bold text-gray-900">Upgrade to {showQR.planName}</h3>
-                    <p className="text-gray-500 text-sm mt-1">Amount to pay: <strong className="text-gray-900 font-black">₹{showQR.price}</strong></p>
+                    <h3 className="text-xl font-bold text-gray-900">Upgrade to {showPaymentModal.planName}</h3>
+                    <p className="text-gray-500 text-sm mt-1">Amount to pay: <strong className="text-gray-900 font-black">₹{showPaymentModal.price}</strong></p>
                 </div>
 
-                {/* --- REPLACE THE SRC BELOW WITH YOUR ACTUAL QR CODE IMAGE URL --- */}
-                <div className="bg-gray-50 p-4 rounded-2xl border-2 border-dashed border-gray-200 flex justify-center items-center mb-6">
-                    <img 
-                      src="https://upload.wikimedia.org/wikipedia/commons/d/d0/QR_code_for_mobile_English_Wikipedia.svg" 
-                      alt="Payment QR" 
-                      className="w-48 h-48 rounded-xl shadow-sm mix-blend-multiply"
-                    />
-                </div>
-                
-                <div className="text-center text-sm font-bold text-gray-600 mb-6 font-mono bg-gray-100 py-2 rounded-lg">
-                    UPI ID: yourname@upi
-                </div>
+                <div className="space-y-4">
+                    {/* INFO BANNER REGARDING AAPA CAPITAL */}
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex items-start">
+                        <Info className="text-indigo-600 mt-0.5 mr-2 shrink-0" size={18} />
+                        <p className="text-xs text-indigo-900 leading-relaxed">
+                            <strong>Note:</strong> WorkForcePro is proudly developed and run by <strong>Aapa Capital Private Limited</strong>. Your payment will be securely processed under this company name on the Razorpay checkout page.
+                        </p>
+                    </div>
 
-                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-xs text-blue-800 font-medium text-left space-y-2 mb-6 leading-relaxed">
-                    <p>1. Scan the QR code using GPay, PhonePe, or Paytm.</p>
-                    <p>2. Send ₹{showQR.price} exactly.</p>
-                    <p>3. Take a screenshot of the successful payment.</p>
-                    <p>4. Send the screenshot to our WhatsApp support to activate your plan instantly.</p>
-                </div>
+                    {/* Step 1: Open Razorpay Link */}
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Step 1</p>
+                        <p className="text-sm text-gray-700 mb-3">Click below to pay securely via Razorpay. An invoice will be sent to your email.</p>
+                        <a 
+                            href={RAZORPAY_PAYMENT_LINK}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="w-full bg-[#3395FF] hover:bg-[#2083ef] text-white py-3 rounded-lg font-bold flex items-center justify-center transition-colors shadow-md"
+                        >
+                            Pay ₹{showPaymentModal.price} Securely <ExternalLink size={16} className="ml-2" />
+                        </a>
+                    </div>
 
-                <a 
-                    href={whatsappPaymentUrl} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="w-full bg-[#25D366] hover:bg-[#1ebd5a] text-white py-3.5 rounded-xl font-bold flex items-center justify-center transition-colors shadow-lg shadow-green-500/30"
-                >
-                    <MessageCircle size={18} className="mr-2" /> Send on WhatsApp
-                </a>
+                    {/* Step 2: Confirm on WhatsApp */}
+                    <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                        <p className="text-xs text-green-700 font-bold uppercase tracking-wider mb-2">Step 2</p>
+                        <p className="text-sm text-green-800 mb-3">After successful payment, send us your receipt screenshot to activate your plan.</p>
+                        <a 
+                            href={whatsappPaymentUrl} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="w-full bg-[#25D366] hover:bg-[#1ebd5a] text-white py-3 rounded-lg font-bold flex items-center justify-center transition-colors shadow-md shadow-green-500/20"
+                        >
+                            <MessageCircle size={18} className="mr-2" /> Send Receipt
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
       )}
