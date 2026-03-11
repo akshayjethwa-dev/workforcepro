@@ -1,7 +1,7 @@
 // src/components/Sidebar.tsx
 import React from 'react';
 import { 
-  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard, PieChart
+  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard, PieChart, IdCard
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ScreenName } from '../types/index';
@@ -80,6 +80,7 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                  Management
                </div>
                <MenuItem icon={Users} label="Workers Directory" screen="WORKERS" />
+               <MenuItem icon={IdCard} label="Digital ID Cards" screen="ID_CARDS" />
                <MenuItem icon={History} label="Worker History" screen="WORKER_HISTORY" />
                <MenuItem icon={FileText} label="Payroll Reports" screen="PAYROLL" />
                <MenuItem icon={PieChart} label="Factory Reports" screen="REPORTS" />

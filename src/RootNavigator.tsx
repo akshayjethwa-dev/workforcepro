@@ -19,6 +19,7 @@ import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
 import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
+import { IdCardsScreen } from './screens/IdCardsScreen';
 import { useBackButton } from './hooks/useBackButton';
 
 export const RootNavigator: React.FC = () => {
@@ -116,6 +117,7 @@ export const RootNavigator: React.FC = () => {
                   onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
                   onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
                />;
+      case 'ID_CARDS': return <IdCardsScreen />;
       case 'PAYROLL': return <PayrollScreen />;
       case 'ATTENDANCE': return <AttendanceScreen />;
       case 'DAILY_LOGS': return <DailyWageScreen />;

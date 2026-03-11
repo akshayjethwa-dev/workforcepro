@@ -69,10 +69,13 @@ export interface OrgSettings {
   branches?: Branch[]; // NEW: Multi-branch support
   departments?: string[]; // NEW: Dynamic departments
   compliance?: {
-    pfRegistrationNumber: string;
-    esicCode: string;
-    capPfDeduction: boolean; // Cap at ₹15,000 basic
-    dailyWagePfPercentage: number; // e.g., 50 or 100
+    pfRegistrationNumber?: string;
+    esicCode?: string;
+    capPfDeduction?: boolean; // Cap at ₹15,000 basic
+    dailyWagePfPercentage?: number; // e.g., 50 or 100
+    pfContributionRate?: number; // 12% default
+    epsContributionRate?: number; // 8.33% default
+    epfWageCeiling?: number; // 15000 default
   };
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
@@ -116,7 +119,7 @@ export interface Worker {
   phone: string;
   aadhar?: string;
   dob: string;
-  gender: 'Male' | 'Female' | 'Other';
+  gender: 'Male' | 'Female' | 'Other' | 'MALE' | 'FEMALE'; // Added uppercase variants for compliance
   category: 'Daily Wage' | 'Monthly' | 'Contract' | 'Permanent';
   department: string;
   designation: string;
@@ -127,9 +130,16 @@ export interface Worker {
   photoUrl?: string;
   faceDescriptor?: number[];
   status: 'ACTIVE' | 'INACTIVE';
-  uan?: string;
-  esicIp?: string;
-  pan?: string;
+  
+  // STATUTORY COMPLIANCE FIELDS (for EPFO & ESIC)
+  uan?: string; // UAN (Universal Account Number) - 12 digits for EPFO
+  esicIp?: string; // ESIC IP Number - 10 digits
+  pan?: string; // PAN Card
+  fatherName?: string; // Father's/Husband's Name (required for EPFO ECR)
+  dateOfBirth?: string; // DD/MM/YYYY or DD-MM-YYYY format (required for EPFO ECR)
+  dateOfJoining?: string; // DD/MM/YYYY or DD-MM-YYYY format (required for EPFO ECR)
+  dateOfExit?: string; // DD/MM/YYYY or DD-MM-YYYY format (optional, for ESIC if left employment)
+  
   weeklyOffOverride?: number[];
   leaveBalances?: {
     cl: number;
@@ -300,4 +310,4 @@ export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   ENTERPRISE: { maxWorkers: 250, maxManagers: 9999, maxShifts: 9999, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' ;
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' ;

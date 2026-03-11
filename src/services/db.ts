@@ -1,3 +1,4 @@
+// src/services/db.ts
 import { 
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
@@ -57,13 +58,24 @@ export const dbService = {
   },
 
   addWorker: async (worker: Omit<Worker, 'id'>) => {
-    const docRef = await addDoc(getWorkersRef(), worker);
+    // NEW: Ensure timestamps are added when creating
+    const workerData = {
+      ...worker,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const docRef = await addDoc(getWorkersRef(), workerData);
     return docRef.id;
   },
 
   updateWorker: async (workerId: string, data: Partial<Worker>) => {
     const docRef = doc(db, "workers", workerId);
-    await updateDoc(docRef, data);
+    // NEW: Automatically update the updatedAt timestamp
+    const updateData = {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+    await updateDoc(docRef, updateData);
   },
 
   deleteWorker: async (tenantId: string, workerId: string) => {
@@ -143,8 +155,6 @@ export const dbService = {
   },
 
   markAttendance: async (record: AttendanceRecord) => {
-    // Firebase persistentLocalCache automatically handles offline queueing.
-    // If there is no internet, this write gets saved locally and synced when online.
     const recordId = `${record.tenantId}_${record.workerId}_${record.date}`;
     const finalRecord = { ...record, id: recordId };
     
@@ -179,11 +189,20 @@ export const dbService = {
     }];
     const defaultDepartments = ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
     const defaultBranch = { id: 'default', name: 'Main Branch' };
-
-    // NEW: Default Holiday setup
     const defaultWeeklyOffs: OrgSettings['weeklyOffs'] = {
       defaultDays: [0], // Default Sunday
       saturdayRule: 'NONE'
+    };
+    
+    // NEW: Default compliance configuration ensuring the settings screen doesn't crash
+    const defaultCompliance = {
+      pfRegistrationNumber: '',
+      esicCode: '',
+      capPfDeduction: true,
+      dailyWagePfPercentage: 100,
+      pfContributionRate: 12,
+      epsContributionRate: 8.33,
+      epfWageCeiling: 15000
     };
 
     if (snap.exists()) {
@@ -195,22 +214,28 @@ export const dbService = {
         baseLocation: data.baseLocation,
         branches: data.branches?.length ? data.branches : [{ ...defaultBranch, location: data.baseLocation }],
         departments: data.departments?.length ? data.departments : defaultDepartments,
-        
-        // Map new fields securely
         weeklyOffs: data.weeklyOffs || defaultWeeklyOffs,
         holidays: data.holidays || [],
         enableSandwichRule: data.enableSandwichRule ?? false,
-        holidayPayMultiplier: data.holidayPayMultiplier ?? 2.0
+        holidayPayMultiplier: data.holidayPayMultiplier ?? 2.0,
+        // NEW: Load existing compliance or merge with defaults
+        compliance: { ...defaultCompliance, ...(data.compliance || {}) }
       };
     }
     return { 
       shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch], departments: defaultDepartments,
-      weeklyOffs: defaultWeeklyOffs, holidays: [], enableSandwichRule: false, holidayPayMultiplier: 2.0
+      weeklyOffs: defaultWeeklyOffs, holidays: [], enableSandwichRule: false, holidayPayMultiplier: 2.0,
+      compliance: defaultCompliance
     };
   },
 
   saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
-    await setDoc(doc(db, "settings", tenantId), settings, { merge: true });
+    // Ensure we also save an updatedAt timestamp on the settings
+    const settingsData = {
+      ...settings,
+      updatedAt: new Date().toISOString()
+    };
+    await setDoc(doc(db, "settings", tenantId), settingsData, { merge: true });
   },
 
   getShifts: async (tenantId: string): Promise<ShiftConfig[]> => {

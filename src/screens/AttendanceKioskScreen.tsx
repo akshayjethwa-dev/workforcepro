@@ -1,5 +1,7 @@
+// src/screens/AttendanceKioskScreen.tsx
 import React, { useRef, useEffect, useState } from 'react';
-import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle, ShieldAlert, Lock } from 'lucide-react';
+import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle, ShieldAlert, Lock, QrCode } from 'lucide-react';
+import jsQR from 'jsqr';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
@@ -12,8 +14,8 @@ interface Props {
   onExit: () => void; 
   branchId: string; 
   isDedicatedMode: boolean;
-  tenantId?: string; // Provided if dedicated
-  adminPin?: string; // Provided if dedicated
+  tenantId?: string; 
+  adminPin?: string; 
 }
 
 const playSound = (type: 'SUCCESS' | 'ERROR') => {
@@ -110,13 +112,15 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                  (worker.branchId || 'default') === targetBranch
             );
             
-            workersRef.current = validWorkers;
+            // We still load all workers to reference for QR code scanning
+            // QR codes can work even if a face wasn't registered properly
+            workersRef.current = w.filter(worker => (worker.branchId || 'default') === targetBranch);
             settingsRef.current = settings; 
             
-            if (validWorkers.length === 0) {
-                setFeedback("No registered faces for this Branch.");
+            if (workersRef.current.length === 0) {
+                setFeedback("No active workers for this Branch.");
             } else {
-                setFeedback(`Ready. Loaded ${validWorkers.length} faces.`);
+                setFeedback(`Ready. Loaded ${workersRef.current.length} workers.`);
             }
         }
       } catch (e) {
@@ -149,12 +153,40 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
        }
 
        try {
-           const matchResult = await faceService.findMatchAndLiveness(videoRef.current, workersRef.current);
+           // --- 1. QR CODE SCANNING FALLBACK (Runs first, extremely fast) ---
+           const canvas = document.createElement('canvas');
+           canvas.width = videoRef.current.videoWidth;
+           canvas.height = videoRef.current.videoHeight;
+           const ctx = canvas.getContext('2d');
+           
+           if (ctx) {
+               ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+               
+               // Attempt to read a QR code from the frame
+               const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                   inversionAttempts: "dontInvert",
+               });
+
+               if (code && code.data) {
+                   const matchedWorker = workersRef.current.find(w => w.id === code.data);
+                   if (matchedWorker) {
+                       console.log("QR Code Matched:", matchedWorker.name);
+                       setLivenessState('SCANNING'); 
+                       targetWorkerRef.current = null;
+                       await handlePunch(matchedWorker, 'QR Badge');
+                       return; // Exit this tick, skipping face detection
+                   }
+               }
+           }
+
+           // --- 2. STANDARD FACE DETECTION & LIVENESS ---
+           const matchResult = await faceService.findMatchAndLiveness(videoRef.current, workersRef.current.filter(w => w.faceDescriptor));
            
            if (!matchResult) {
                if (livenessState === 'CHALLENGE') {
                    setLivenessState('SCANNING');
-                   setFeedback("Look at Camera");
+                   setFeedback("Place Face or QR in circle");
                    targetWorkerRef.current = null;
                }
                return;
@@ -168,7 +200,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                    setFeedback(`Hi ${matchResult.worker.name.split(' ')[0]}, please BLINK to verify...`);
                    playSound('SUCCESS');
                } else {
-                   await handlePunch(matchResult.worker);
+                   await handlePunch(matchResult.worker, 'Face Scan');
                }
            } 
            else if (livenessState === 'CHALLENGE' && targetWorkerRef.current) {
@@ -176,7 +208,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                    if (matchResult.hasBlinked) {
                        setFeedback("Liveness Verified!");
                        setLivenessState('SCANNING');
-                       await handlePunch(matchResult.worker);
+                       await handlePunch(matchResult.worker, 'Face Scan');
                        targetWorkerRef.current = null;
                    } 
                    else if (Date.now() - livenessTimerRef.current > 3000) {
@@ -184,7 +216,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                    }
                } else {
                    setLivenessState('SCANNING');
-                   setFeedback("Look at Camera");
+                   setFeedback("Place Face or QR in circle");
                }
            }
 
@@ -235,7 +267,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
         setTimeout(() => {
             setLivenessState('SCANNING');
-            setFeedback("Look at Camera");
+            setFeedback("Place Face or QR in circle");
             processingRef.current = false;
             targetWorkerRef.current = null;
         }, 3000);
@@ -243,14 +275,14 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         setFeedback("Verification Failed. Please blink clearly.");
         setTimeout(() => {
             setLivenessState('SCANNING');
-            setFeedback("Look at Camera");
+            setFeedback("Place Face or QR in circle");
             processingRef.current = false;
             targetWorkerRef.current = null;
         }, 2000);
     }
   };
 
-  const handlePunch = async (worker: Worker) => {
+  const handlePunch = async (worker: Worker, method: 'Face Scan' | 'QR Badge') => {
     processingRef.current = true;
     setFeedback(`Identifying ${worker.name}...`);
 
@@ -280,14 +312,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                 
                 setTimeout(() => { 
                     setErrorFeedback(null); 
-                    setFeedback("Look at Camera"); 
+                    setFeedback("Place Face or QR in circle"); 
                     processingRef.current = false; 
                 }, 2000);
                 return;
             }
         }
 
-        // --- FIXED: TS Error by extracting rawType before casting ---
         if (punchType === 'IN' && existingRecord?.status === 'ON_LEAVE' && existingRecord.leaveInfo?.isPaid) {
             const rawType = existingRecord.leaveInfo.type.toLowerCase();
             
@@ -295,7 +326,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                 const lType = rawType as 'cl' | 'sl' | 'pl';
                 const currentBal = worker.leaveBalances[lType] ?? 0;
                 
-                // Refund 1 day
                 await dbService.updateWorker(worker.id, {
                     leaveBalances: {
                         ...worker.leaveBalances,
@@ -313,7 +343,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                 });
             }
         }
-        // ----------------------------------
 
         let currentLocation: { lat: number; lng: number } | undefined;
         let isOutOfGeofence = false;
@@ -345,7 +374,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         const newTimeline = [...currentTimeline, { 
             timestamp: now.toISOString(), 
             type: punchType, 
-            device: 'Kiosk',
+            device: `Kiosk (${method})`,
             location: currentLocation,
             isOutOfGeofence 
         }];
@@ -370,7 +399,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        // Clear any previous leave info since they actually punched in
         if (baseRecord.leaveInfo) {
             delete baseRecord.leaveInfo;
         }
@@ -408,7 +436,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         playSound('ERROR'); 
         setFeedback("System Error: " + (e.message || "Unknown"));
         processingRef.current = false;
-        setTimeout(() => setFeedback("Look at Camera"), 2000);
+        setTimeout(() => setFeedback("Place Face or QR in circle"), 2000);
     }
   };
 
@@ -454,7 +482,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                  <div className="w-64 h-64 border-2 border-dashed border-white/50 rounded-full opacity-50"></div>
              </div>
              <p className={`absolute mt-80 text-white/90 text-sm font-bold px-4 py-2 rounded-full backdrop-blur-sm shadow-lg transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-600' : 'bg-black/40'}`}>
-                 {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place face within circle"}
+                 {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place Face or QR in circle"}
              </p>
          </div>
 
@@ -465,7 +493,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
               ) : livenessState === 'CHALLENGE' ? (
                   <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
               ) : (
-                  <ScanFace className="text-white mr-3 animate-pulse" />
+                  <div className="flex items-center mr-3 animate-pulse space-x-2 text-white">
+                      <ScanFace size={24} />
+                      <span className="text-white/50 text-sm font-light">/</span>
+                      <QrCode size={24} />
+                  </div>
               )}
               <p className="text-white text-xl font-bold tracking-wide">{feedback}</p>
            </div>

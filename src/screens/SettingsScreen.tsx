@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Save, Plus, Trash2, Clock, AlertCircle, CheckCircle, 
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
-  GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella
+  GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
@@ -520,8 +520,8 @@ export const SettingsScreen: React.FC = () => {
                           type="text" 
                           className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
                           value={settings?.compliance?.pfRegistrationNumber || ''} 
-                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {esicCode:'', capPfDeduction:true, dailyWagePfPercentage:100}), pfRegistrationNumber: e.target.value}} : null)} 
-                          placeholder="e.g. MH/BAN/0000000/000"
+                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfRegistrationNumber: e.target.value}} : null)} 
+                          placeholder="e.g. DLCPM1234567000"
                       />
                   </div>
                   <div>
@@ -530,7 +530,7 @@ export const SettingsScreen: React.FC = () => {
                           type="text" 
                           className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
                           value={settings?.compliance?.esicCode || ''} 
-                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {pfRegistrationNumber:'', capPfDeduction:true, dailyWagePfPercentage:100}), esicCode: e.target.value}} : null)} 
+                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), esicCode: e.target.value}} : null)} 
                           placeholder="17-digit ESIC Code"
                       />
                   </div>
@@ -539,8 +539,8 @@ export const SettingsScreen: React.FC = () => {
               <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-4">
                   <div className="flex items-center justify-between">
                       <div>
-                          <p className="text-sm font-bold text-slate-800">Cap PF Deduction at ₹15,000</p>
-                          <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the ₹15k wage ceiling.</p>
+                          <p className="text-sm font-bold text-slate-800">Cap PF Deduction at Wage Ceiling</p>
+                          <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the configured ceiling amount.</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                           <input 
@@ -567,6 +567,49 @@ export const SettingsScreen: React.FC = () => {
                               % of the total daily gross wage to be considered as "Basic + DA" for PF calculations.
                           </p>
                       </div>
+                  </div>
+
+                  {/* NEW ADVANCED STATUTORY SETTINGS */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200">
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Rate (%)</label>
+                          <input 
+                              type="number" step="0.01" min="0" max="100"
+                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={settings?.compliance?.pfContributionRate || 12}
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfContributionRate: parseFloat(e.target.value)}} : null)}
+                          />
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPS Rate (%)</label>
+                          <input 
+                              type="number" step="0.01" min="0" max="100"
+                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={settings?.compliance?.epsContributionRate || 8.33}
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epsContributionRate: parseFloat(e.target.value)}} : null)}
+                          />
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPF Wage Ceiling (₹)</label>
+                          <input 
+                              type="number" min="0"
+                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={settings?.compliance?.epfWageCeiling || 15000}
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epfWageCeiling: parseFloat(e.target.value)}} : null)}
+                          />
+                      </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mt-4">
+                      <p className="text-xs font-bold text-amber-800 mb-2 flex items-center">
+                          📋 Current Statutory Rates Reference
+                      </p>
+                      <ul className="text-xs text-amber-700 space-y-1 ml-4 list-disc">
+                          <li>EPF: 12% (Employee) + 12% (Employer)</li>
+                          <li>EPS: 8.33% (deducted from Employer's 12% share)</li>
+                          <li>EPF Ceiling: ₹15,000 per month</li>
+                          <li>ESIC: 0.75% (EE) + 3.25% (ER) | Max: ₹21,000/month</li>
+                      </ul>
                   </div>
               </div>
           </div>
