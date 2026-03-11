@@ -6,13 +6,12 @@ import { useAuth } from '../contexts/AuthContext';
 export const BillingScreen: React.FC = () => {
   const { profile, tenantPlan, trialDaysLeft } = useAuth();
   
-  // State for the Razorpay Link Modal
   const [showPaymentModal, setShowPaymentModal] = useState<{show: boolean, planName: string, price: string}>({show: false, planName: '', price: ''});
 
   const adminPhone = "918460852903"; // Your WhatsApp business number
   
-  // REPLACE THIS WITH YOUR ACTUAL RAZORPAY PAYMENT LINK
-  const RAZORPAY_PAYMENT_LINK = "https://rzp.io/l/YOUR_LINK_HERE"; 
+  // YOUR ACTUAL RAZORPAY PAYMENT LINK
+  const RAZORPAY_PAYMENT_LINK = "https://razorpay.me/@aapacapitalprivatelimited"; 
 
   const orgDetails = `
 ---
@@ -37,7 +36,7 @@ Current Plan: ${tenantPlan}`;
     title: string, price: string, desc: string, features: string[], isCurrent: boolean, currentLabel?: string, isPopular?: boolean, buttonText?: string, onUpgrade?: () => void, strikePrice?: string 
   }) => (
     <div className={`relative bg-white rounded-2xl p-6 border-2 ${isCurrent ? 'border-green-500 shadow-green-100' : isPopular ? 'border-indigo-500 shadow-indigo-100' : 'border-gray-100'} shadow-lg flex flex-col`}>
-      {isPopular && !isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Early Bird Offer</div>}
+      {isPopular && !isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Most Popular</div>}
       {isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">{currentLabel || 'Current Plan'}</div>}
       
       <h3 className="text-xl font-bold text-gray-800">{title}</h3>
@@ -85,7 +84,7 @@ Current Plan: ${tenantPlan}`;
             <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
                 <div>
                     <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} Days left in Free Trial</p>
-                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Agency' features unlocked.</p>
+                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Enterprise' features unlocked.</p>
                 </div>
             </div>
         )}
@@ -104,7 +103,7 @@ Current Plan: ${tenantPlan}`;
             title="Micro-Team (Free)" 
             price="0" 
             desc="Perfect for independent contractors testing the waters."
-            features={["Up to 15 Workers", "1 Active Site / Manager", "Manual Attendance Entry", "Basic Daily Wages", "Standard Payroll Summaries"]}
+            features={["Up to 15 Workers", "1 Active Site", "Manual Attendance Entry", "Basic Daily Wages"]}
             isCurrent={tenantPlan === 'FREE'}
             currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
             buttonText="Start for Free"
@@ -114,20 +113,30 @@ Current Plan: ${tenantPlan}`;
             title="Site Manager" 
             price="999" 
             strikePrice="1999"
-            desc="Full automation for growing businesses. (50% Off for first 100 users)"
-            features={["Up to 50 Workers", "Up to 3 Active Sites", "Face Recognition Kiosk Mode", "Offline Sync & Geotagging", "Downloadable Payslips & Reports", "Advance & Loan Tracking"]}
+            desc="Basic automation for single-site businesses."
+            features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Geofencing & Offline Sync", "Payslips & Allowances"]}
             isCurrent={tenantPlan === 'STARTER'}
-            isPopular={true}
-            onUpgrade={() => handleUpgradeClick('Site Manager', '499')}
+            onUpgrade={() => handleUpgradeClick('Site Manager', '999')}
         />
         <PlanCard 
-            title="Agency / Enterprise" 
+            title="Agency (Pro Plan)" 
+            price="2499"
+            strikePrice="3999"
+            desc="Multi-site control with strict HR rules and anti-spoofing."
+            features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
+            isCurrent={tenantPlan === 'PRO'}
+            isPopular={true}
+            onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '2499')}
+        />
+        <PlanCard 
+            title="Enterprise" 
             price="4999" 
-            desc="Multi-site control for large construction firms & MSMEs."
-            features={["Up to 200 Workers", "Unlimited Sites & Managers", "Multi-site Unified Dashboard", "Bulk Data Import/Export", "Custom Shift & Overtime Rules", "Priority WhatsApp Support"]}
-            isCurrent={tenantPlan === 'PRO' || tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
+            strikePrice="6999"
+            desc="For large factories requiring full statutory compliance."
+            features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
+            isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
             currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
-            onUpgrade={() => handleUpgradeClick('Agency / Enterprise', '2499')}
+            onUpgrade={() => handleUpgradeClick('Enterprise Plan', '4999')}
         />
       </div>
 

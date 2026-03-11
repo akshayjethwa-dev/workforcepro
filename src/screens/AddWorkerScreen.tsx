@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, 
-  Camera, CheckCircle, Loader2, Clock, Calendar, Shield, AlertCircle
+  Camera, CheckCircle, Loader2, Clock, Calendar, Shield, AlertCircle, Lock
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
@@ -627,23 +627,25 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 )}
             </div>
 
-            <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-2">
-              <h3 className="text-sm font-bold text-gray-700 mb-3">Daily Allowances (Optional)</h3>
-              <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase">Travel</label>
-                    <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
-                      value={formData.wageConfig?.allowances?.travel || ''}
-                      onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, travel: parseFloat(e.target.value)}}})} />
+            {limits?.allowancesAndDeductionsEnabled && (
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-2">
+                  <h3 className="text-sm font-bold text-gray-700 mb-3">Daily Allowances (Optional)</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Travel</label>
+                        <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
+                          value={formData.wageConfig?.allowances?.travel || ''}
+                          onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, travel: parseFloat(e.target.value)}}})} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Food</label>
+                        <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
+                          value={formData.wageConfig?.allowances?.food || ''}
+                          onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, food: parseFloat(e.target.value)}}})} />
+                      </div>
                   </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase">Food</label>
-                    <input type="number" className="w-full p-2 mt-1 border border-gray-200 rounded-lg text-sm bg-white" placeholder="₹ 0"
-                      value={formData.wageConfig?.allowances?.food || ''}
-                      onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, food: parseFloat(e.target.value)}}})} />
-                  </div>
-              </div>
-            </div>
+                </div>
+            )}
           </div>
         )}
 
@@ -656,64 +658,79 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               </div>
               <h2 className="text-lg font-bold text-gray-800">Statutory Compliance</h2>
             </div>
-            <p className="text-xs text-gray-500 mb-4">Required for EPFO ECR & ESIC Return generation</p>
+            
+            {limits?.statutoryComplianceEnabled ? (
+                <>
+                    <p className="text-xs text-gray-500 mb-4">Required for EPFO ECR & ESIC Return generation</p>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase">UAN (PF Number)</label>
+                          <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                            maxLength={12} value={formData.uan || ''} onChange={e => setFormData({...formData, uan: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UAN" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase">ESIC IP Number</label>
+                          <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                            maxLength={17} value={formData.esicIp || ''} onChange={e => setFormData({...formData, esicIp: e.target.value.replace(/\D/g, '')})} placeholder="10-17 digits" />
+                        </div>
+                      </div>
 
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase">UAN (PF Number)</label>
-                  <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                    maxLength={12} value={formData.uan || ''} onChange={e => setFormData({...formData, uan: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UAN" />
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase">PAN Number</label>
+                        <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase"
+                          maxLength={10} value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value.toUpperCase()})} placeholder="e.g. ABCDE1234F" />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase">Father's/Husband's Name <span className="text-[10px] lowercase">(for EPFO)</span></label>
+                        <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                          value={formData.fatherName || ''} onChange={e => setFormData({...formData, fatherName: e.target.value})} placeholder="Enter full name" />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase">Date of Birth <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
+                          <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                            maxLength={10} value={formData.dateOfBirth || ''} onChange={e => setFormData({...formData, dateOfBirth: e.target.value})} placeholder="15/08/1990" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 uppercase">Date of Joining <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
+                          <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                            maxLength={10} value={formData.dateOfJoining || ''} onChange={e => setFormData({...formData, dateOfJoining: e.target.value})} placeholder="01/01/2024" />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase">Date of Exit <span className="text-[10px] lowercase">(optional)</span></label>
+                        <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                          maxLength={10} value={formData.dateOfExit || ''} onChange={e => setFormData({...formData, dateOfExit: e.target.value})} placeholder="31/12/2024" />
+                      </div>
+
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mt-2">
+                        <p className="text-xs text-blue-800 font-bold mb-2 flex items-center">
+                          💡 Quick Info for Statutory
+                        </p>
+                        <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+                          <li>UAN: Required for EPFO ECR generation.</li>
+                          <li>ESIC IP: Required if gross salary ≤ ₹21,000.</li>
+                          <li>Dates must strictly be in DD/MM/YYYY format for exports.</li>
+                        </ul>
+                      </div>
+                    </div>
+                </>
+            ) : (
+                <div className="bg-gray-100 rounded-2xl shadow-inner border border-gray-200 p-8 text-center mt-6">
+                    <Lock className="text-gray-400 mx-auto mb-3" size={32} />
+                    <h3 className="font-bold text-gray-800 mb-2">Enterprise Feature</h3>
+                    <p className="text-xs text-gray-500 mb-6">
+                        Tracking UAN, ESIC, PF details, and ECR reporting requires the Enterprise Compliance module.
+                    </p>
+                    <button onClick={handleNext} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-md">
+                        Skip to Face Scan
+                    </button>
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase">ESIC IP Number</label>
-                  <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                    maxLength={17} value={formData.esicIp || ''} onChange={e => setFormData({...formData, esicIp: e.target.value.replace(/\D/g, '')})} placeholder="10-17 digits" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">PAN Number</label>
-                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase"
-                  maxLength={10} value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value.toUpperCase()})} placeholder="e.g. ABCDE1234F" />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Father's/Husband's Name <span className="text-[10px] lowercase">(for EPFO)</span></label>
-                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                  value={formData.fatherName || ''} onChange={e => setFormData({...formData, fatherName: e.target.value})} placeholder="Enter full name" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase">Date of Birth <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
-                  <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                    maxLength={10} value={formData.dateOfBirth || ''} onChange={e => setFormData({...formData, dateOfBirth: e.target.value})} placeholder="15/08/1990" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase">Date of Joining <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
-                  <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                    maxLength={10} value={formData.dateOfJoining || ''} onChange={e => setFormData({...formData, dateOfJoining: e.target.value})} placeholder="01/01/2024" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Date of Exit <span className="text-[10px] lowercase">(optional)</span></label>
-                <input className="w-full p-3 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                  maxLength={10} value={formData.dateOfExit || ''} onChange={e => setFormData({...formData, dateOfExit: e.target.value})} placeholder="31/12/2024" />
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mt-2">
-                <p className="text-xs text-blue-800 font-bold mb-2 flex items-center">
-                  💡 Quick Info for Statutory
-                </p>
-                <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
-                  <li>UAN: Required for EPFO ECR generation.</li>
-                  <li>ESIC IP: Required if gross salary ≤ ₹21,000.</li>
-                  <li>Dates must strictly be in DD/MM/YYYY format for exports.</li>
-                </ul>
-              </div>
-            </div>
+            )}
           </div>
         )}
 

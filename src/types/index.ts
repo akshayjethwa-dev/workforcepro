@@ -291,6 +291,11 @@ export interface PlanLimits {
   kioskEnabled: boolean;
   geofencingEnabled: boolean;
   multiBranchEnabled: boolean;
+  livenessDetectionEnabled: boolean; 
+  advancedLeavesEnabled: boolean; 
+  allowancesAndDeductionsEnabled: boolean; 
+  statutoryComplianceEnabled: boolean; 
+  bulkImportEnabled: boolean;
 }
 
 export interface KioskTerminal {
@@ -304,11 +309,31 @@ export interface KioskTerminal {
 }
 
 export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
-  FREE: { maxWorkers: 15, maxManagers: 1, maxShifts: 1, kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false },
-  TRIAL: { maxWorkers: 200, maxManagers: 5, maxShifts: 5, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true },
-  STARTER: { maxWorkers: 50, maxManagers: 3, maxShifts: 3, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false },
-  PRO: { maxWorkers: 200, maxManagers: 10, maxShifts: 10, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true },
-  ENTERPRISE: { maxWorkers: 9999, maxManagers: 9999, maxShifts: 9999, kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true }
+  FREE: { 
+    maxWorkers: 15, maxManagers: 1, maxShifts: 1, 
+    kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false,
+    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: false, statutoryComplianceEnabled: false, bulkImportEnabled: false
+  },
+  TRIAL: { 
+    maxWorkers: 9999, maxManagers: 9999, maxShifts: 9999, 
+    kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true
+  },
+  STARTER: { 
+    maxWorkers: 50, maxManagers: 3, maxShifts: 3, 
+    kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false,
+    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false
+  },
+  PRO: { 
+    maxWorkers: 200, maxManagers: 10, maxShifts: 10, 
+    kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false
+  },
+  ENTERPRISE: { 
+    maxWorkers: 9999, maxManagers: 9999, maxShifts: 9999, 
+    kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true
+  }
 };
 
 export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' ;

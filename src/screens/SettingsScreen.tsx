@@ -480,139 +480,162 @@ export const SettingsScreen: React.FC = () => {
                 </div>
               </div>
               
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                    type="checkbox" 
-                    className="sr-only peer" 
-                    checked={settings?.strictLiveness || false} 
-                    onChange={(e) => setSettings(s => s ? {...s, strictLiveness: e.target.checked} : null)}
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-              </label>
+              {limits?.livenessDetectionEnabled ? (
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={settings?.strictLiveness || false} 
+                        onChange={(e) => setSettings(s => s ? {...s, strictLiveness: e.target.checked} : null)}
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                  </label>
+              ) : (
+                  <span className="bg-purple-100 text-purple-800 text-[10px] px-2 py-1 rounded font-black tracking-wide uppercase">Pro Feature</span>
+              )}
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
-                <div className="flex items-center text-slate-600 mb-2">
-                    <Info size={14} className="mr-2 text-purple-500" />
-                    <span className="text-xs font-bold">What does this do?</span>
+            {limits?.livenessDetectionEnabled ? (
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <div className="flex items-center text-slate-600 mb-2">
+                        <Info size={14} className="mr-2 text-purple-500" />
+                        <span className="text-xs font-bold">What does this do?</span>
+                    </div>
+                    <ul className="space-y-2">
+                        <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
+                            <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
+                            Requires workers to physically blink when facing the Kiosk.
+                        </li>
+                        <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
+                            <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
+                            Prevents "Proxy Punching" via printed photos or phone screens. Logs 3 failed attempts to Admin Notifications.
+                        </li>
+                    </ul>
                 </div>
-                <ul className="space-y-2">
-                    <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
-                        <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
-                        Requires workers to physically blink when facing the Kiosk.
-                    </li>
-                    <li className="text-[11px] text-slate-500 font-medium flex items-start leading-normal">
-                        <div className="w-1.5 h-1.5 bg-purple-400 rounded-full mt-1 mr-2 shrink-0" />
-                        Prevents "Proxy Punching" via printed photos or phone screens. Logs 3 failed attempts to Admin Notifications.
-                    </li>
-                </ul>
-            </div>
+            ) : (
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 opacity-70">
+                    <p className="text-xs text-slate-500">Requires workers to physically blink when facing the Kiosk. Upgrade to Pro to unlock anti-spoofing.</p>
+                </div>
+            )}
           </div>
 
           <div className="px-1 mb-3">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Statutory & Compliance</h3>
           </div>
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                  <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Registration Number</label>
-                      <input 
-                          type="text" 
-                          className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                          value={settings?.compliance?.pfRegistrationNumber || ''} 
-                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfRegistrationNumber: e.target.value}} : null)} 
-                          placeholder="e.g. DLCPM1234567000"
-                      />
-                  </div>
-                  <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">ESIC Code</label>
-                      <input 
-                          type="text" 
-                          className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                          value={settings?.compliance?.esicCode || ''} 
-                          onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), esicCode: e.target.value}} : null)} 
-                          placeholder="17-digit ESIC Code"
-                      />
-                  </div>
-              </div>
-              
-              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-4">
-                  <div className="flex items-center justify-between">
+          
+          {limits?.statutoryComplianceEnabled ? (
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                       <div>
-                          <p className="text-sm font-bold text-slate-800">Cap PF Deduction at Wage Ceiling</p>
-                          <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the configured ceiling amount.</p>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Registration Number</label>
                           <input 
-                              type="checkbox" 
-                              className="sr-only peer" 
-                              checked={settings?.compliance?.capPfDeduction ?? true} 
-                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), capPfDeduction: e.target.checked}} : null)}
+                              type="text" 
+                              className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                              value={settings?.compliance?.pfRegistrationNumber || ''} 
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfRegistrationNumber: e.target.value}} : null)} 
+                              placeholder="e.g. DLCPM1234567000"
                           />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                      </label>
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">ESIC Code</label>
+                          <input 
+                              type="text" 
+                              className="w-full p-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                              value={settings?.compliance?.esicCode || ''} 
+                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), esicCode: e.target.value}} : null)} 
+                              placeholder="17-digit ESIC Code"
+                          />
+                      </div>
                   </div>
                   
-                  <div className="pt-4 border-t border-slate-200">
-                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Daily Wage PF Calculation Method (%)</label>
-                      <div className="flex items-center space-x-3">
-                          <input 
-                              type="number" 
-                              max="100" min="1"
-                              className="w-24 p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                              value={settings?.compliance?.dailyWagePfPercentage || 100} 
-                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), dailyWagePfPercentage: Number(e.target.value)}} : null)} 
-                          />
-                          <p className="text-[10px] text-slate-500 leading-tight">
-                              % of the total daily gross wage to be considered as "Basic + DA" for PF calculations.
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-4">
+                      <div className="flex items-center justify-between">
+                          <div>
+                              <p className="text-sm font-bold text-slate-800">Cap PF Deduction at Wage Ceiling</p>
+                              <p className="text-[10px] text-slate-500">Limits employer & employee PF contribution to the configured ceiling amount.</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                              <input 
+                                  type="checkbox" 
+                                  className="sr-only peer" 
+                                  checked={settings?.compliance?.capPfDeduction ?? true} 
+                                  onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), capPfDeduction: e.target.checked}} : null)}
+                              />
+                              <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                          </label>
+                      </div>
+                      
+                      <div className="pt-4 border-t border-slate-200">
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Daily Wage PF Calculation Method (%)</label>
+                          <div className="flex items-center space-x-3">
+                              <input 
+                                  type="number" 
+                                  max="100" min="1"
+                                  className="w-24 p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                  value={settings?.compliance?.dailyWagePfPercentage || 100} 
+                                  onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), dailyWagePfPercentage: Number(e.target.value)}} : null)} 
+                              />
+                              <p className="text-[10px] text-slate-500 leading-tight">
+                                  % of the total daily gross wage to be considered as "Basic + DA" for PF calculations.
+                              </p>
+                          </div>
+                      </div>
+
+                      {/* NEW ADVANCED STATUTORY SETTINGS */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200">
+                          <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Rate (%)</label>
+                              <input 
+                                  type="number" step="0.01" min="0" max="100"
+                                  className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={settings?.compliance?.pfContributionRate || 12}
+                                  onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfContributionRate: parseFloat(e.target.value)}} : null)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPS Rate (%)</label>
+                              <input 
+                                  type="number" step="0.01" min="0" max="100"
+                                  className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={settings?.compliance?.epsContributionRate || 8.33}
+                                  onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epsContributionRate: parseFloat(e.target.value)}} : null)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPF Wage Ceiling (₹)</label>
+                              <input 
+                                  type="number" min="0"
+                                  className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={settings?.compliance?.epfWageCeiling || 15000}
+                                  onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epfWageCeiling: parseFloat(e.target.value)}} : null)}
+                              />
+                          </div>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mt-4">
+                          <p className="text-xs font-bold text-amber-800 mb-2 flex items-center">
+                              📋 Current Statutory Rates Reference
                           </p>
+                          <ul className="text-xs text-amber-700 space-y-1 ml-4 list-disc">
+                              <li>EPF: 12% (Employee) + 12% (Employer)</li>
+                              <li>EPS: 8.33% (deducted from Employer's 12% share)</li>
+                              <li>EPF Ceiling: ₹15,000 per month</li>
+                              <li>ESIC: 0.75% (EE) + 3.25% (ER) | Max: ₹21,000/month</li>
+                          </ul>
                       </div>
-                  </div>
-
-                  {/* NEW ADVANCED STATUTORY SETTINGS */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200">
-                      <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">PF Rate (%)</label>
-                          <input 
-                              type="number" step="0.01" min="0" max="100"
-                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-                              value={settings?.compliance?.pfContributionRate || 12}
-                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), pfContributionRate: parseFloat(e.target.value)}} : null)}
-                          />
-                      </div>
-                      <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPS Rate (%)</label>
-                          <input 
-                              type="number" step="0.01" min="0" max="100"
-                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-                              value={settings?.compliance?.epsContributionRate || 8.33}
-                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epsContributionRate: parseFloat(e.target.value)}} : null)}
-                          />
-                      </div>
-                      <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">EPF Wage Ceiling (₹)</label>
-                          <input 
-                              type="number" min="0"
-                              className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-                              value={settings?.compliance?.epfWageCeiling || 15000}
-                              onChange={(e) => setSettings(s => s ? {...s, compliance: {...(s.compliance || {} as any), epfWageCeiling: parseFloat(e.target.value)}} : null)}
-                          />
-                      </div>
-                  </div>
-
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mt-4">
-                      <p className="text-xs font-bold text-amber-800 mb-2 flex items-center">
-                          📋 Current Statutory Rates Reference
-                      </p>
-                      <ul className="text-xs text-amber-700 space-y-1 ml-4 list-disc">
-                          <li>EPF: 12% (Employee) + 12% (Employer)</li>
-                          <li>EPS: 8.33% (deducted from Employer's 12% share)</li>
-                          <li>EPF Ceiling: ₹15,000 per month</li>
-                          <li>ESIC: 0.75% (EE) + 3.25% (ER) | Max: ₹21,000/month</li>
-                      </ul>
                   </div>
               </div>
-          </div>
+          ) : (
+              <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 mb-8 opacity-70">
+                  <div className="flex items-center mb-2">
+                      <Lock className="text-gray-500 mr-2" size={18} />
+                      <h3 className="font-bold text-gray-800">Compliance Module Locked</h3>
+                  </div>
+                  <p className="text-xs text-gray-600">
+                      Automated PF, EPS, ESIC calculations, and EPF wage ceiling enforcement are available on the Enterprise plan.
+                  </p>
+              </div>
+          )}
         </div>
       )}
 
@@ -623,44 +646,56 @@ export const SettingsScreen: React.FC = () => {
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Annual Leave Balances</h3>
             </div>
             
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-6">
-                <p className="text-sm text-slate-500 font-medium">Define the default number of leaves granted to workers annually.</p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Casual Leaves (CL)</label>
-                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                            value={settings?.leavePolicy?.cl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), cl: Number(e.target.value)}} : null)} 
-                        />
+            {limits?.advancedLeavesEnabled ? (
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-6">
+                    <p className="text-sm text-slate-500 font-medium">Define the default number of leaves granted to workers annually.</p>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Casual Leaves (CL)</label>
+                            <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                value={settings?.leavePolicy?.cl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), cl: Number(e.target.value)}} : null)} 
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Sick Leaves (SL)</label>
+                            <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                value={settings?.leavePolicy?.sl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), sl: Number(e.target.value)}} : null)} 
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Privilege Leaves (PL)</label>
+                            <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
+                                value={settings?.leavePolicy?.pl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), pl: Number(e.target.value)}} : null)} 
+                            />
+                        </div>
                     </div>
-                    <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Sick Leaves (SL)</label>
-                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                            value={settings?.leavePolicy?.sl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), sl: Number(e.target.value)}} : null)} 
-                        />
-                    </div>
-                    <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Privilege Leaves (PL)</label>
-                        <input type="number" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none" 
-                            value={settings?.leavePolicy?.pl || 0} onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0, allowNegativeBalance: false}), pl: Number(e.target.value)}} : null)} 
-                        />
-                    </div>
-                </div>
 
-                <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
-                    <div>
-                        <p className="text-sm font-bold text-slate-800">Allow Negative Balances</p>
-                        <p className="text-[11px] text-slate-500 mt-1 max-w-sm">If toggled off, any leave applied when balance is 0 will automatically convert to Unpaid Leave (LWP).</p>
+                    <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-bold text-slate-800">Allow Negative Balances</p>
+                            <p className="text-[11px] text-slate-500 mt-1 max-w-sm">If toggled off, any leave applied when balance is 0 will automatically convert to Unpaid Leave (LWP).</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer ml-4">
+                            <input type="checkbox" className="sr-only peer" 
+                                checked={settings?.leavePolicy?.allowNegativeBalance ?? false} 
+                                onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0}), allowNegativeBalance: e.target.checked}} : null)}
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                        </label>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer ml-4">
-                        <input type="checkbox" className="sr-only peer" 
-                            checked={settings?.leavePolicy?.allowNegativeBalance ?? false} 
-                            onChange={(e) => setSettings(s => s ? {...s, leavePolicy: {...(s.leavePolicy || {cl:0, sl:0, pl:0}), allowNegativeBalance: e.target.checked}} : null)}
-                        />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                    </label>
                 </div>
-            </div>
+            ) : (
+                <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 opacity-70">
+                    <div className="flex items-center mb-2">
+                        <Lock className="text-gray-500 mr-2" size={18} />
+                        <h3 className="font-bold text-gray-800">Advanced Leaves Locked</h3>
+                    </div>
+                    <p className="text-xs text-gray-600">
+                        Tracking structured paid leaves (CL/SL/PL) and negative balances requires the Pro Plan.
+                    </p>
+                </div>
+            )}
         </div>
       )}
 
