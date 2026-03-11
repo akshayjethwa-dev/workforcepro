@@ -1,7 +1,7 @@
 {
   "name": "workforce",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,11 +13,9 @@
     "@vladmandic/human": "^3.3.6",
     "face-api.js": "^0.22.2",
     "firebase": "^12.9.0",
-    "jsqr": "^1.4.0",
     "lucide-react": "^0.564.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-qr-code": "^2.0.18",
     "recharts": "^3.7.0",
     "xlsx": "^0.18.5"
   },

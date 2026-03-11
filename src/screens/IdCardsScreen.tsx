@@ -67,10 +67,10 @@ export const IdCardsScreen: React.FC = () => {
           
           {/* THE ACTUAL ID CARD (Wrapped in a special print-section class) */}
           <div className="print-section">
-            <div className="id-card-print w-[280px] bg-white rounded-2xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col relative">
+            <div className="id-card-print w-70 bg-white rounded-2xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col relative">
               
               {/* Header */}
-              <div className="h-28 bg-gradient-to-br from-indigo-700 via-indigo-600 to-blue-500 flex flex-col items-center justify-start pt-6 px-4 text-center">
+              <div className="h-28 bg-linear-to-br from-indigo-700 via-indigo-600 to-blue-500 flex flex-col items-center justify-start pt-6 px-4 text-center">
                 <div className="flex items-center text-white/90 mb-1">
                    <Building2 size={14} className="mr-1.5" />
                    <span className="text-[10px] font-bold tracking-widest uppercase">Factory Access</span>
@@ -218,7 +218,7 @@ export const IdCardsScreen: React.FC = () => {
             className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center cursor-pointer active:scale-[0.98] active:bg-slate-50 transition-all hover:border-indigo-100 hover:shadow-md"
           >
             {/* Small Avatar */}
-            <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 flex-shrink-0 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center">
               {worker.photoUrl ? (
                 <img src={worker.photoUrl} alt={worker.name} className="w-full h-full object-cover" />
               ) : (
@@ -237,7 +237,7 @@ export const IdCardsScreen: React.FC = () => {
             </div>
 
             {/* Chevron */}
-            <div className="ml-3 w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center flex-shrink-0">
+            <div className="ml-3 w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
                <ChevronRight size={18} className="text-slate-400" />
             </div>
           </div>
