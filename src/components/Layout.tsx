@@ -1,11 +1,10 @@
 // src/components/Layout.tsx
 import React, { useState, useEffect } from 'react';
-import { Home, Users, CalendarCheck, IndianRupee, Menu, Bell, X } from 'lucide-react'; 
+import { Home, Users, CalendarCheck, IndianRupee, Menu, Bell, X, Zap } from 'lucide-react'; 
 import { ScreenName, AppNotification } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
 import { Sidebar } from './Sidebar';
 import { dbService } from '../services/db';
-import { Zap } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -15,16 +14,21 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavigate, onLogout }) => {
-  const { profile } = useAuth();
+  // Pull impersonation variables alongside existing ones
+  const { profile, tenantPlan, trialDaysLeft, isImpersonating, stopImpersonating } = useAuth();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   
+  // Determine if the current user is a Super Admin
+  const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
+
   useEffect(() => {
-    if (profile?.tenantId) {
+    // Only fetch notifications if they have a tenantId AND are not a Super Admin
+    if (profile?.tenantId && !isSuperAdmin) {
       dbService.getNotifications(profile.tenantId).then(setNotifications);
     }
-  }, [profile, showNotifications]); // Refresh when dropdown opens
+  }, [profile, showNotifications, isSuperAdmin]); // Refresh when dropdown opens
 
   if (currentScreen === 'LOGIN') {
     return <div className="min-h-screen bg-gray-50">{children}</div>;
@@ -39,15 +43,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
     }
   };
 
-  // MODIFIED: Now permanently deletes from the database
   const handleClearAll = async () => {
     if (!profile?.tenantId) return;
     
-    // Clear UI immediately for a responsive feel
     setNotifications([]);
     
     try {
-      // Permanently delete from Firebase
       await dbService.deleteAllNotifications(profile.tenantId);
     } catch (error) {
       console.error("Failed to clear notifications from database", error);
@@ -79,15 +80,33 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onLogout={onLogout}
       />
 
-      {/* --- NEW: TRIAL BANNER --- */}
-      {useAuth().tenantPlan === 'TRIAL' && useAuth().trialDaysLeft !== null && (
+      {/* --- NEW: IMPERSONATION WARNING BANNER --- */}
+      {isImpersonating && (
+        <div className="bg-red-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between z-50">
+            <div className="flex items-center">
+                ⚠️ Impersonating: {profile?.companyName}
+            </div>
+            <button 
+                onClick={async () => {
+                   await stopImpersonating();
+                   onNavigate('SUPER_ADMIN_DASHBOARD');
+                }}
+                className="bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider hover:bg-white/30 transition-colors"
+            >
+                Exit
+            </button>
+        </div>
+      )}
+
+      {/* --- TRIAL BANNER (Hidden for Super Admins and during Impersonation) --- */}
+      {tenantPlan === 'TRIAL' && trialDaysLeft !== null && !isSuperAdmin && !isImpersonating && (
         <div 
             onClick={() => onNavigate('BILLING')}
             className="bg-indigo-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20"
         >
             <div className="flex items-center">
                 <Zap size={14} className="mr-1.5 text-yellow-300 fill-current"/>
-                {useAuth().trialDaysLeft} Days left in Free Trial.
+                {trialDaysLeft} Days left in Free Trial.
             </div>
             <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Upgrade</span>
         </div>
@@ -103,24 +122,27 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
             <div className="ml-2">
               <h1 className="text-lg font-bold tracking-tight">WorkForce</h1>
               <p className="text-blue-100 text-[10px] uppercase tracking-wide">
-                {profile?.companyName || 'Factory Admin'}
+                {/* Dynamically change header text for Super Admin */}
+                {isSuperAdmin ? 'System Administrator' : (profile?.companyName || 'Factory Admin')}
               </p>
             </div>
           </div>
 
-          {/* Notifications Bell */}
-          <button 
-            onClick={() => setShowNotifications(!showNotifications)} 
-            className="p-2 relative hover:bg-blue-700 rounded-full transition-colors"
-          >
-            <Bell size={20} />
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-blue-600 rounded-full"></span>
-            )}
-          </button>
+          {/* Notifications Bell (Hidden for Super Admin) */}
+          {!isSuperAdmin && (
+            <button 
+              onClick={() => setShowNotifications(!showNotifications)} 
+              className="p-2 relative hover:bg-blue-700 rounded-full transition-colors"
+            >
+              <Bell size={20} />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 border-2 border-blue-600 rounded-full"></span>
+              )}
+            </button>
+          )}
 
-          {/* Notifications Dropdown */}
-          {showNotifications && (
+          {/* Notifications Dropdown (Hidden for Super Admin) */}
+          {showNotifications && !isSuperAdmin && (
             <div className="absolute top-12 right-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden z-50 text-gray-800">
               
               <div className="flex justify-between items-center p-3 border-b border-gray-100 bg-gray-50">
@@ -165,18 +187,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto pb-20 scroll-smooth">
+      {/* Adjust padding dynamically depending on if the bottom nav is rendered */}
+      <main className={`flex-1 overflow-y-auto ${isSuperAdmin ? 'pb-6' : 'pb-20'} scroll-smooth`}>
         {children}
       </main>
 
-      <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-safe z-30">
-        <div className="flex justify-around items-center h-16">
-          <NavItem screen="DASHBOARD" icon={Home} label="Home" />
-          <NavItem screen="WORKERS" icon={Users} label="Workers" />
-          <NavItem screen="ATTENDANCE" icon={CalendarCheck} label="Scan" />
-          <NavItem screen="PAYROLL" icon={IndianRupee} label="Payroll" />
-        </div>
-      </nav>
+      {/* Bottom Navigation (Hidden for Super Admin) */}
+      {!isSuperAdmin && (
+        <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-safe z-30">
+          <div className="flex justify-around items-center h-16">
+            <NavItem screen="DASHBOARD" icon={Home} label="Home" />
+            <NavItem screen="WORKERS" icon={Users} label="Workers" />
+            <NavItem screen="ATTENDANCE" icon={CalendarCheck} label="Scan" />
+            <NavItem screen="PAYROLL" icon={IndianRupee} label="Payroll" />
+          </div>
+        </nav>
+      )}
     </div>
   );
 };

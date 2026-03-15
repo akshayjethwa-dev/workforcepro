@@ -1,5 +1,5 @@
 // src/RootNavigator.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { auth } from './lib/firebase';
 import { Layout } from './components/Layout';
@@ -23,26 +23,38 @@ import { IdCardsScreen } from './screens/IdCardsScreen';
 import { useBackButton } from './hooks/useBackButton';
 
 export const RootNavigator: React.FC = () => {
-  const { user, loading } = useAuth();
+  // Added 'profile' here
+  const { user, profile, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');
 
-  // --- NEW: Check for Dedicated Kiosk Mode in LocalStorage ---
   const [kioskConfig, setKioskConfig] = useState<KioskTerminal | null>(() => {
     const saved = localStorage.getItem('kiosk_config');
     return saved ? JSON.parse(saved) : null;
   });
 
+  // --- NEW: Redirect Super Admin on Login ---
+  useEffect(() => {
+    // If user is logged in, profile is loaded, they are a super admin, and are sitting on the default dashboard
+    if (user && profile && profile.role === 'SUPER_ADMIN' && currentScreen === 'DASHBOARD') {
+      setCurrentScreen('SUPER_ADMIN_DASHBOARD');
+    }
+  }, [user, profile, currentScreen]);
+
   useBackButton(() => {
-    if (kioskConfig) return true; // Disable back button completely in dedicated kiosk mode
+    if (kioskConfig) return true; 
     if (!user) {
       if (isRegistering) { setIsRegistering(false); return true; }
       return false; 
     }
-    if (currentScreen !== 'DASHBOARD') {
-       setCurrentScreen('DASHBOARD');
+    
+    // Allow super admin to default back to their dashboard, not the regular one
+    const defaultScreen = profile?.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN_DASHBOARD' : 'DASHBOARD';
+    
+    if (currentScreen !== defaultScreen) {
+       setCurrentScreen(defaultScreen);
        return true; 
     }
     return false;
@@ -56,7 +68,6 @@ export const RootNavigator: React.FC = () => {
     );
   }
 
-  // --- DEDICATED KIOSK MODE RENDERING ---
   if (kioskConfig) {
     return (
       <AttendanceKioskScreen 
@@ -72,7 +83,6 @@ export const RootNavigator: React.FC = () => {
     );
   }
 
-  // --- LOGIN / REGISTER SCREENS ---
   if (!user) {
     if (isRegistering) {
       return <RegisterScreen onNavigateToLogin={() => setIsRegistering(false)} />;
@@ -81,7 +91,6 @@ export const RootNavigator: React.FC = () => {
       <LoginScreen 
         onNavigateToRegister={() => setIsRegistering(true)} 
         onKioskLogin={(config) => {
-           // THIS FIXES YOUR ERROR: We pass the function that saves the config and triggers the kiosk UI
            localStorage.setItem('kiosk_config', JSON.stringify(config));
            setKioskConfig(config);
         }}
@@ -89,7 +98,6 @@ export const RootNavigator: React.FC = () => {
     );
   }
 
-  // STANDARD IN-APP KIOSK MODE (Admin clicks from dashboard)
   if (currentScreen === 'ATTENDANCE_KIOSK') {
     return <AttendanceKioskScreen isDedicatedMode={false} onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
   }
@@ -124,10 +132,19 @@ export const RootNavigator: React.FC = () => {
       case 'TEAM': return <TeamScreen />;
       case 'SETTINGS': return <SettingsScreen />;
       case 'WORKER_HISTORY': return <WorkerHistoryScreen />;
-      case 'SUPER_ADMIN_DASHBOARD': return <SuperAdminDashboard />;
+      
+      // --- NEW: Route Protection ---
+      case 'SUPER_ADMIN_DASHBOARD': 
+        return profile?.role === 'SUPER_ADMIN' 
+          ? <SuperAdminDashboard /> 
+          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />; // Fallback if regular user tries to access
+
       case 'REPORTS': return <ReportsScreen />;
       case 'BILLING': return <BillingScreen />;
-      default: return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
+      default: 
+        return profile?.role === 'SUPER_ADMIN' 
+          ? <SuperAdminDashboard /> 
+          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
     }
   };
 

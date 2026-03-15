@@ -1,3 +1,4 @@
+// src/types/index.ts
 export type Role = 
   | 'SUPER_ADMIN'   // You (SaaS Owner)
   | 'FACTORY_OWNER' // Tenant Admin
@@ -41,6 +42,7 @@ export interface TenantProfile {
   shifts: ShiftConfig[]; // Array of configured shifts
   plan: SubscriptionTier;
   trialEndsAt?: string; // ISO string
+  overrides?: Partial<PlanLimits>; // NEW: Custom Feature Toggles
 }
 
 export interface ShiftConfig {
@@ -308,7 +310,7 @@ export interface KioskTerminal {
   createdAt: string;
 }
 
-export const PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
+export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   FREE: { 
     maxWorkers: 15, maxManagers: 1, maxShifts: 1, 
     kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false,

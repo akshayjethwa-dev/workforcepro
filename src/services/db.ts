@@ -3,7 +3,8 @@ import {
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll } from "../types/index";
+// ADDED DEFAULT_PLAN_CONFIG to the imports
+import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, DEFAULT_PLAN_CONFIG } from "../types/index";
 
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
@@ -12,6 +13,30 @@ const getNotificationsRef = () => collection(db, "notifications");
 export const dbService = {
   
   // --- SUPER ADMIN METHODS ---
+
+  // NEW: Fetch Global Plans from Firestore
+  getGlobalPlanConfig: async (): Promise<Record<SubscriptionTier, PlanLimits>> => {
+    try {
+      const docRef = doc(db, "system_settings", "plan_config");
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        return snap.data() as Record<SubscriptionTier, PlanLimits>;
+      }
+      // If no config exists yet, return the hardcoded defaults
+      return DEFAULT_PLAN_CONFIG;
+    } catch (error) {
+      console.error("Failed to fetch global plans, falling back to default", error);
+      return DEFAULT_PLAN_CONFIG;
+    }
+  },
+
+  // NEW: Save Global Plans to Firestore
+  updateGlobalPlanConfig: async (config: Record<SubscriptionTier, PlanLimits>) => {
+    const docRef = doc(db, "system_settings", "plan_config");
+    // merge: true ensures we don't accidentally wipe out other settings if we expand this document later
+    await setDoc(docRef, config, { merge: true });
+  },
+
   getAllTenants: async () => {
     try {
       const q = query(collection(db, 'users'), where('role', '==', 'FACTORY_OWNER'));
@@ -22,12 +47,25 @@ export const dbService = {
         const workersQ = query(collection(db, "workers"), where("tenantId", "==", data.tenantId));
         const workersSnap = await getDocs(workersQ);
         
+        // NEW: Fetch the actual plan and overrides from the tenant's document
+        let plan = 'FREE';
+        let overrides = {};
+        if (data.tenantId) {
+            const tenantDoc = await getDoc(doc(db, 'tenants', data.tenantId));
+            if (tenantDoc.exists()) {
+                plan = tenantDoc.data().plan || 'FREE';
+                overrides = tenantDoc.data().overrides || {}; // NEW: Fetch overrides
+            }
+        }
+        
         return {
           id: docSnap.id,
           ...data,
           workerCount: workersSnap.size,
           isActive: data.isActive !== false, 
-          joinedAt: data.createdAt || new Date().toISOString()
+          joinedAt: data.createdAt || new Date().toISOString(),
+          plan: plan, // Append plan to the returned object
+          overrides: overrides // NEW: Append overrides to the returned object
         };
       }));
       
@@ -49,6 +87,18 @@ export const dbService = {
     return true;
   },
 
+  // Update Tenant Plan in the database
+  updateTenantPlan: async (tenantId: string, plan: SubscriptionTier) => {
+    const tenantRef = doc(db, 'tenants', tenantId);
+    await updateDoc(tenantRef, { plan });
+  },
+
+  // NEW: Update Custom Overrides
+  updateTenantOverrides: async (tenantId: string, overrides: Partial<PlanLimits>) => {
+    const tenantRef = doc(db, 'tenants', tenantId);
+    await updateDoc(tenantRef, { overrides });
+  },
+
   // --- WORKER MANAGEMENT ---
   getWorkers: async (tenantId: string): Promise<Worker[]> => {
     if (!tenantId) return [];
@@ -58,7 +108,6 @@ export const dbService = {
   },
 
   addWorker: async (worker: Omit<Worker, 'id'>) => {
-    // NEW: Ensure timestamps are added when creating
     const workerData = {
       ...worker,
       createdAt: new Date().toISOString(),
@@ -70,7 +119,6 @@ export const dbService = {
 
   updateWorker: async (workerId: string, data: Partial<Worker>) => {
     const docRef = doc(db, "workers", workerId);
-    // NEW: Automatically update the updatedAt timestamp
     const updateData = {
       ...data,
       updatedAt: new Date().toISOString(),
@@ -190,11 +238,10 @@ export const dbService = {
     const defaultDepartments = ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
     const defaultBranch = { id: 'default', name: 'Main Branch' };
     const defaultWeeklyOffs: OrgSettings['weeklyOffs'] = {
-      defaultDays: [0], // Default Sunday
+      defaultDays: [0], 
       saturdayRule: 'NONE'
     };
     
-    // NEW: Default compliance configuration ensuring the settings screen doesn't crash
     const defaultCompliance = {
       pfRegistrationNumber: '',
       esicCode: '',
@@ -218,7 +265,6 @@ export const dbService = {
         holidays: data.holidays || [],
         enableSandwichRule: data.enableSandwichRule ?? false,
         holidayPayMultiplier: data.holidayPayMultiplier ?? 2.0,
-        // NEW: Load existing compliance or merge with defaults
         compliance: { ...defaultCompliance, ...(data.compliance || {}) }
       };
     }
@@ -230,7 +276,6 @@ export const dbService = {
   },
 
   saveOrgSettings: async (tenantId: string, settings: OrgSettings) => {
-    // Ensure we also save an updatedAt timestamp on the settings
     const settingsData = {
       ...settings,
       updatedAt: new Date().toISOString()
