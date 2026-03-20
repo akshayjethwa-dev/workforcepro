@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee, MapPin, Umbrella, Loader2 } from 'lucide-react';
+import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee, MapPin, Umbrella, Loader2, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
@@ -7,7 +7,7 @@ import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, Punch, OrgSettings, Advance } from '../types/index';
 
 export const WorkerHistoryScreen: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, limits } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
@@ -419,9 +419,16 @@ export const WorkerHistoryScreen: React.FC = () => {
                      <Calendar className="mr-2 text-indigo-500" size={16}/> Leave Balances
                   </h3>
                   <button
-                    onClick={() => setLeaveModal({ ...leaveModal, isOpen: true })}
-                    className="text-[10px] sm:text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 font-bold px-3 py-1.5 rounded-lg transition-colors"
+                    onClick={() => {
+                       if (!limits?.advancedLeavesEnabled) {
+                           alert("Recording custom leaves (CL/SL/PL) is a premium feature. Upgrade to Pro to track leave balances.");
+                           return;
+                       }
+                       setLeaveModal({ ...leaveModal, isOpen: true });
+                    }}
+                    className="text-[10px] sm:text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center"
                   >
+                    {!limits?.advancedLeavesEnabled && <Lock size={12} className="mr-1" />}
                     + Record Leave
                   </button>
                </div>
@@ -525,10 +532,17 @@ export const WorkerHistoryScreen: React.FC = () => {
                                     
                                     {(profile?.role === 'FACTORY_OWNER' || profile?.role === 'SUPERVISOR') && (
                                       <button 
-                                        onClick={() => openRegulationModal(log.date, log.record)}
+                                        onClick={() => {
+                                            if (!limits?.regulatePunchEnabled) {
+                                                alert("Manually regulating and overriding punches is a premium feature. Please upgrade your plan.");
+                                                return;
+                                            }
+                                            openRegulationModal(log.date, log.record);
+                                        }}
                                         className="mt-2 text-[10px] font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded flex items-center transition-colors"
                                       >
-                                        <Edit size={10} className="mr-1" /> Regulate
+                                        {!limits?.regulatePunchEnabled ? <Lock size={10} className="mr-1" /> : <Edit size={10} className="mr-1" />}
+                                        Regulate
                                       </button>
                                     )}
                                 </div>

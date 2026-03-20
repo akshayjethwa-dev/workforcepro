@@ -34,26 +34,25 @@ export interface UserProfile {
   companyName?: string;
 }
 
-// NEW: Stores factory settings
 export interface TenantProfile {
   id: string;
   name: string;
   ownerId: string;
-  shifts: ShiftConfig[]; // Array of configured shifts
+  shifts: ShiftConfig[]; 
   plan: SubscriptionTier;
-  trialEndsAt?: string; // ISO string
-  overrides?: Partial<PlanLimits>; // NEW: Custom Feature Toggles
+  trialEndsAt?: string; 
+  overrides?: Partial<PlanLimits>; 
 }
 
 export interface ShiftConfig {
   id: string;
-  name: string;      // e.g. "General Shift"
-  startTime: string; // "09:00"
-  endTime: string;   // "18:00"
-  gracePeriodMins: number; // 15
-  maxGraceAllowed: number; // 3 (times per month)
-  breakDurationMins: number; // 60 (deducted if they don't punch out, optional)
-  minHalfDayHours: number; // 4 (if worked less than this, mark absent/half day)
+  name: string;      
+  startTime: string; 
+  endTime: string;   
+  gracePeriodMins: number; 
+  maxGraceAllowed: number; 
+  breakDurationMins: number; 
+  minHalfDayHours: number; 
   minOvertimeMins: number;
 }
 
@@ -65,40 +64,39 @@ export interface Branch {
 
 export interface OrgSettings {
   shifts: ShiftConfig[];
-  enableBreakTracking: boolean; // Toggle for "Advanced Logic"
+  enableBreakTracking: boolean; 
   strictLiveness?: boolean;
-  baseLocation?: { lat: number; lng: number; radius: number; address?: string }; // Legacy
-  branches?: Branch[]; // NEW: Multi-branch support
-  departments?: string[]; // NEW: Dynamic departments
+  baseLocation?: { lat: number; lng: number; radius: number; address?: string }; 
+  branches?: Branch[]; 
+  departments?: string[]; 
   compliance?: {
     pfRegistrationNumber?: string;
     esicCode?: string;
-    capPfDeduction?: boolean; // Cap at ₹15,000 basic
-    dailyWagePfPercentage?: number; // e.g., 50 or 100
-    pfContributionRate?: number; // 12% default
-    epsContributionRate?: number; // 8.33% default
-    epfWageCeiling?: number; // 15000 default
+    capPfDeduction?: boolean; 
+    dailyWagePfPercentage?: number; 
+    pfContributionRate?: number; 
+    epsContributionRate?: number; 
+    epfWageCeiling?: number; 
   };
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
   enableSandwichRule?: boolean;
-  holidayPayMultiplier?: number; // e.g., 1.5 or 2.0
+  holidayPayMultiplier?: number; 
   leavePolicy?: LeavePolicy;
 }
 
 export interface Punch {
-  timestamp: string; // ISO String
+  timestamp: string; 
   type: 'IN' | 'OUT';
   device: string;
   location?: { lat: number; lng: number };
   isOutOfGeofence?: boolean;
 }
 
-// --- WORKER & WAGE CONFIG ---
 export interface WageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
-  basicPercentage?: number; // e.g., 50% of monthly amount is Basic+DA
+  basicPercentage?: number; 
   monthlyBreakdown?: {
     basic: number;
     hra: number;
@@ -121,27 +119,24 @@ export interface Worker {
   phone: string;
   aadhar?: string;
   dob: string;
-  gender: 'Male' | 'Female' | 'Other' | 'MALE' | 'FEMALE'; // Added uppercase variants for compliance
+  gender: 'Male' | 'Female' | 'Other' | 'MALE' | 'FEMALE'; 
   category: 'Daily Wage' | 'Monthly' | 'Contract' | 'Permanent';
   department: string;
   designation: string;
   joinedDate: string;
   shiftId: string;
-  branchId?: string; // NEW: Assigned Branch
+  branchId?: string; 
   wageConfig: WageConfig;
   photoUrl?: string;
   faceDescriptor?: number[];
   status: 'ACTIVE' | 'INACTIVE';
-  
-  // STATUTORY COMPLIANCE FIELDS (for EPFO & ESIC)
-  uan?: string; // UAN (Universal Account Number) - 12 digits for EPFO
-  esicIp?: string; // ESIC IP Number - 10 digits
-  pan?: string; // PAN Card
-  fatherName?: string; // Father's/Husband's Name (required for EPFO ECR)
-  dateOfBirth?: string; // DD/MM/YYYY or DD-MM-YYYY format (required for EPFO ECR)
-  dateOfJoining?: string; // DD/MM/YYYY or DD-MM-YYYY format (required for EPFO ECR)
-  dateOfExit?: string; // DD/MM/YYYY or DD-MM-YYYY format (optional, for ESIC if left employment)
-  
+  uan?: string; 
+  esicIp?: string; 
+  pan?: string; 
+  fatherName?: string; 
+  dateOfBirth?: string; 
+  dateOfJoining?: string; 
+  dateOfExit?: string; 
   weeklyOffOverride?: number[];
   leaveBalances?: {
     cl: number;
@@ -150,7 +145,6 @@ export interface Worker {
   }; 
 }
 
-// --- ATTENDANCE ---
 export interface TimeRecord {
   timestamp: string;
   geoLocation: { lat: number; lng: number };
@@ -198,7 +192,6 @@ export interface AttendanceRecord {
   calculatedHours?: AttendanceCalculations;
 }
 
-// --- PAYROLL & WAGE RECORDS ---
 export interface DailyWageRecord {
   id: string;
   tenantId: string;
@@ -298,6 +291,10 @@ export interface PlanLimits {
   allowancesAndDeductionsEnabled: boolean; 
   statutoryComplianceEnabled: boolean; 
   bulkImportEnabled: boolean;
+  idCardEnabled: boolean; // NEW
+  payslipEnabled: boolean; // NEW
+  regulatePunchEnabled: boolean; // NEW
+  publicHolidaysEnabled: boolean;
 }
 
 export interface KioskTerminal {
@@ -312,29 +309,34 @@ export interface KioskTerminal {
 
 export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   FREE: { 
-    maxWorkers: 15, maxManagers: 1, maxShifts: 1, 
+    maxWorkers: 15, maxManagers: 0, maxShifts: 1, // Max managers 0 for Free
     kioskEnabled: false, geofencingEnabled: false, multiBranchEnabled: false,
-    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: false, statutoryComplianceEnabled: false, bulkImportEnabled: false
+    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: false, statutoryComplianceEnabled: false, bulkImportEnabled: false,
+    idCardEnabled: false, payslipEnabled: false, regulatePunchEnabled: false, publicHolidaysEnabled: false
   },
   TRIAL: { 
     maxWorkers: 9999, maxManagers: 9999, maxShifts: 9999, 
     kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
-    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true,
+    idCardEnabled: true, payslipEnabled: true, regulatePunchEnabled: true, publicHolidaysEnabled: true,
   },
   STARTER: { 
     maxWorkers: 50, maxManagers: 3, maxShifts: 3, 
     kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: false,
-    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false
+    livenessDetectionEnabled: false, advancedLeavesEnabled: false, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false,
+    idCardEnabled: true, payslipEnabled: true, regulatePunchEnabled: true, publicHolidaysEnabled: true,
   },
   PRO: { 
     maxWorkers: 200, maxManagers: 10, maxShifts: 10, 
     kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
-    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: false, bulkImportEnabled: false,
+    idCardEnabled: true, payslipEnabled: true, regulatePunchEnabled: true, publicHolidaysEnabled: true,
   },
   ENTERPRISE: { 
     maxWorkers: 9999, maxManagers: 9999, maxShifts: 9999, 
     kioskEnabled: true, geofencingEnabled: true, multiBranchEnabled: true,
-    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true
+    livenessDetectionEnabled: true, advancedLeavesEnabled: true, allowancesAndDeductionsEnabled: true, statutoryComplianceEnabled: true, bulkImportEnabled: true,
+    idCardEnabled: true, payslipEnabled: true, regulatePunchEnabled: true, publicHolidaysEnabled: true,
   }
 };
 

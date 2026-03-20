@@ -1,10 +1,10 @@
+// src/screens/TeamScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Shield, Trash2, AlertTriangle, Lock } from 'lucide-react';
+import { UserPlus, Shield, Trash2, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 
 export const TeamScreen: React.FC = () => {
-  // PULL LIMITS FROM AUTH CONTEXT
   const { profile, limits } = useAuth();
   const [team, setTeam] = useState<any[]>([]);
   const [email, setEmail] = useState('');
@@ -20,10 +20,23 @@ export const TeamScreen: React.FC = () => {
 
   useEffect(() => { loadTeam(); }, [profile]);
 
+  if (limits?.maxManagers === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full min-h-screen bg-slate-50 p-6">
+        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 text-center max-w-md w-full">
+          <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+             <Lock className="text-blue-600" size={28} />
+          </div>
+          <h2 className="text-xl font-black text-slate-800 mb-2">Team Management Locked</h2>
+          <p className="text-sm text-slate-500 mb-6">Adding additional supervisors or managers is not supported on the Free Plan. Only the Factory Owner has access. Upgrade to invite your team.</p>
+        </div>
+      </div>
+    );
+  }
+
   const handleInvite = async () => {
     if (!email || !name) return alert("Please enter Name and Email");
     
-    // --- NEW: CHECK TEAM MANAGER LIMITS ---
     if (limits && team.length >= limits.maxManagers) {
         return alert(`Your current plan allows a maximum of ${limits.maxManagers} manager(s). Please upgrade to add more team members.`);
     }
@@ -42,8 +55,7 @@ export const TeamScreen: React.FC = () => {
   };
 
   const handleRemove = async (member: any) => {
-      const message = `Are you sure you want to remove ${member.name}?\n\nIf you remove them, the person CANNOT login and will lose all access to your factory data immediately.`;
-      
+      const message = `Are you sure you want to remove ${member.name}?`;
       if(!window.confirm(message)) return;
       
       try {
@@ -87,7 +99,6 @@ export const TeamScreen: React.FC = () => {
         )}
       </div>
 
-      {/* Team List */}
       <h3 className="font-bold text-gray-700 mb-3 text-sm uppercase tracking-wider">Active Managers</h3>
       <div className="space-y-3">
         {team.length === 0 ? (

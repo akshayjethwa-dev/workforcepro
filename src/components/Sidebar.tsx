@@ -14,7 +14,7 @@ interface Props {
 }
 
 export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout }) => {
-  const { profile } = useAuth();
+  const { profile, limits } = useAuth(); // Added limits
   const isOwner = profile?.role === 'FACTORY_OWNER';
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
 
@@ -80,7 +80,9 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                  Management
                </div>
                <MenuItem icon={Users} label="Workers Directory" screen="WORKERS" />
-               <MenuItem icon={IdCard} label="Digital ID Cards" screen="ID_CARDS" />
+               {limits?.idCardEnabled && (
+                 <MenuItem icon={IdCard} label="Digital ID Cards" screen="ID_CARDS" />
+               )}
                <MenuItem icon={History} label="Worker History" screen="WORKER_HISTORY" />
                <MenuItem icon={FileText} label="Payroll Reports" screen="PAYROLL" />
                <MenuItem icon={PieChart} label="Factory Reports" screen="REPORTS" />

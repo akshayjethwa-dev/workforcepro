@@ -111,32 +111,32 @@ Current Plan: ${tenantPlan}`;
         />
         <PlanCard 
             title="Site Manager" 
-            price="999" 
-            strikePrice="1999"
+            price="1999" 
+            strikePrice="2999"
             desc="Basic automation for single-site businesses."
-            features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Geofencing & Offline Sync", "Payslips & Allowances"]}
+            features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Manage Public Holidays" ,"Geofencing & Offline Sync", "Payslips & Allowances"]}
             isCurrent={tenantPlan === 'STARTER'}
-            onUpgrade={() => handleUpgradeClick('Site Manager', '999')}
+            onUpgrade={() => handleUpgradeClick('Site Manager', '1999')}
         />
         <PlanCard 
             title="Agency (Pro Plan)" 
-            price="2499"
-            strikePrice="3999"
+            price="3999"
+            strikePrice="5299"
             desc="Multi-site control with strict HR rules and anti-spoofing."
-            features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
+            features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Digital ID Cards" ,"Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
             isCurrent={tenantPlan === 'PRO'}
             isPopular={true}
-            onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '2499')}
+            onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '3999')}
         />
         <PlanCard 
             title="Enterprise" 
-            price="4999" 
-            strikePrice="6999"
+            price="7999" 
+            strikePrice="9999"
             desc="For large factories requiring full statutory compliance."
             features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
             isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
             currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
-            onUpgrade={() => handleUpgradeClick('Enterprise Plan', '4999')}
+            onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
         />
       </div>
 

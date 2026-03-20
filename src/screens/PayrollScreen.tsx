@@ -7,7 +7,8 @@ import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings } from '
 import { Payslip } from '../components/Payslip';
 
 export const PayrollScreen: React.FC = () => {
-  const { profile } = useAuth();
+  // FIXED: Added 'limits' to the useAuth destructuring
+  const { profile, limits } = useAuth();
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
@@ -139,7 +140,13 @@ export const PayrollScreen: React.FC = () => {
         {payrolls.map(payroll => (
             <div key={payroll.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <div 
-                    onClick={() => setSelectedPayroll(payroll)}
+                    onClick={() => {
+                        if (!limits?.payslipEnabled) {
+                            alert("Generating Detailed Payslips is a premium feature. Please upgrade your plan to unlock.");
+                            return;
+                        }
+                        setSelectedPayroll(payroll);
+                    }}
                     className="p-4 active:bg-gray-50 cursor-pointer transition-colors"
                 >
                     <div className="flex justify-between items-start mb-2">

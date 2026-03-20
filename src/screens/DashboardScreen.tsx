@@ -14,7 +14,7 @@ interface Props {
 }
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
-  const { profile, limits, user } = useAuth(); // ✅ Added 'user' from useAuth
+  const { profile, limits, user } = useAuth();
   
   const [stats, setStats] = useState({ 
       total: 0, 
@@ -170,7 +170,6 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
       }
   };
 
-  // ✅ NEW: Handler for AI Chat button with auth check
   const handleAIChatOpen = () => {
     if (!user) {
       alert('Please log in to use AI Assistant');
@@ -223,11 +222,11 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
         </div>
 
-        {/* ✅ FIXED: AI Assistant Button with auth check + gradient fix */}
+        {/* // TEMPORARILY HIDDEN AI ASSISTANT BUTTON
         <button 
-  onClick={handleAIChatOpen}
-  className="w-full bg-linear-to-r from-purple-600 to-blue-600 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform"
->
+          onClick={handleAIChatOpen}
+          className="w-full bg-linear-to-r from-purple-600 to-blue-600 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform"
+        >
           <div className="flex items-center space-x-3">
             <div className="bg-white/20 p-2 rounded-lg">
               <Bot size={24} className="text-white" />
@@ -238,7 +237,8 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
           </div>
           <ChevronRight className="text-purple-200 group-hover:translate-x-1 transition-transform" />
-        </button>
+        </button> 
+        */}
 
         {limits?.kioskEnabled !== false ? (
             <button onClick={handleKioskLaunch} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
@@ -295,7 +295,7 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
             </div>
         )}
 
-        {/* ✅ FIXED: AI Chat Modal with proper auth check */}
+        {/* // TEMPORARILY HIDDEN AI CHAT MODAL
         {showAIChat && user && profile?.tenantId && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl w-full max-w-2xl h-150 shadow-2xl flex flex-col">
@@ -319,7 +319,8 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
               </div>
             </div>
           </div>
-        )}
+        )} 
+        */}
 
         <div className="grid grid-cols-2 gap-3">
             <StatCard 

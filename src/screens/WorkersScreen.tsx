@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
@@ -13,7 +13,7 @@ interface Props {
 export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) => {
   const { profile, limits } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [settings, setSettings] = useState<OrgSettings | null>(null); // NEW: Hold OrgSettings
+  const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   
@@ -58,9 +58,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     setIsDeleting(true);
     
     try {
-      // Pass BOTH the tenantId and the workerId to satisfy Firestore Security Rules
       await dbService.deleteWorker(profile.tenantId, workerToDelete.id);
-      
       setWorkers(prev => prev.filter(w => w.id !== workerToDelete.id)); 
       setWorkerToDelete(null);
     } catch (e) {
@@ -81,15 +79,16 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
 
   // Quick Action Logic for Advances
   const handleOpenAdvance = async (worker: Worker) => {
-    if (!profile?.tenantId || !settings) return;
+    if (!limits?.allowancesAndDeductionsEnabled) {
+        alert("Advance/Kharchi tracking is a premium feature. Please upgrade your plan to record worker advances.");
+        return;
+    }
     const currentMonth = new Date().toISOString().slice(0, 7);
     
-    // Quick calc for guardrail
-    const attendance = await dbService.getAttendanceHistory(profile.tenantId);
-    const advances = await dbService.getAdvances(profile.tenantId);
+    const attendance = await dbService.getAttendanceHistory(profile.tenantId!);
+    const advances = await dbService.getAdvances(profile.tenantId!);
     
-    // UPDATED: Now passing settings to calculateCurrentEarnings to accurately reflect holiday pay
-    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance, settings);
+    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance, settings!);
     const existingAdvances = advances
         .filter(a => a.workerId === worker.id && a.date.startsWith(currentMonth))
         .reduce((sum, a) => sum + a.amount, 0);
@@ -159,48 +158,65 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
         </div>
       ) : (
-        <div className="space-y-3 pb-24">
+        <div className="space-y-4 pb-24">
           {filteredWorkers.map(worker => (
-            <div key={worker.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
-              <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center overflow-hidden border border-gray-200 relative">
-                 {worker.photoUrl ? (
-                    <img src={worker.photoUrl} alt="" className="w-full h-full object-cover" />
-                 ) : (
-                    <span className="text-xl font-bold text-gray-500">{worker.name.charAt(0)}</span>
-                 )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-gray-800 truncate">{worker.name}</h3>
-                <div className="flex items-center space-x-2 mt-1">
-                   <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-medium">{worker.designation || 'Worker'}</span>
+            <div key={worker.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+              
+              {/* TOP ROW: Worker Info + Edit/Delete Actions */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center overflow-hidden border border-gray-200 relative shrink-0">
+                     {worker.photoUrl ? (
+                        <img src={worker.photoUrl} alt="" className="w-full h-full object-cover" />
+                     ) : (
+                        <span className="text-xl font-bold text-gray-500">{worker.name.charAt(0)}</span>
+                     )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-gray-800 truncate">{worker.name}</h3>
+                    <div className="flex items-center space-x-2 mt-1">
+                       <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-medium">{worker.designation || 'Worker'}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex space-x-1 shrink-0">
+                  <button 
+                      onClick={() => onEditWorker(worker)}
+                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                  >
+                      <Edit2 size={18} />
+                  </button>
+                  
+                  {profile?.role === 'FACTORY_OWNER' && (
+                      <button 
+                          onClick={() => setWorkerToDelete(worker)}
+                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                      >
+                          <Trash2 size={18} />
+                      </button>
+                  )}
                 </div>
               </div>
-              
-              <div className="flex space-x-2">
+
+              {/* BOTTOM ROW: Mobile Friendly Advance Button */}
+              <div className="mt-4 pt-3 border-t border-gray-50">
                 <button 
                     onClick={() => handleOpenAdvance(worker)}
-                    className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-full transition-colors"
-                    title="Give Advance"
+                    className={`w-full flex justify-center items-center py-2.5 rounded-lg text-sm font-bold transition-colors ${
+                        limits?.allowancesAndDeductionsEnabled 
+                        ? 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-100' 
+                        : 'bg-gray-50 text-gray-400 border border-gray-100'
+                    }`}
                 >
-                    <IndianRupee size={18} />
+                    {limits?.allowancesAndDeductionsEnabled ? (
+                        <><IndianRupee size={16} className="mr-2" /> Give Advance (Kharchi)</>
+                    ) : (
+                        <><Lock size={14} className="mr-2" /> Give Advance (Pro Plan)</>
+                    )}
                 </button>
-
-                <button 
-                    onClick={() => onEditWorker(worker)}
-                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
-                >
-                    <Edit2 size={18} />
-                </button>
-                
-                {profile?.role === 'FACTORY_OWNER' && (
-                    <button 
-                        onClick={() => setWorkerToDelete(worker)}
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
-                    >
-                        <Trash2 size={18} />
-                    </button>
-                )}
               </div>
+
             </div>
           ))}
           

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Download, MapPinOff, Clock, UserCheck, AlertCircle, Shield, FileText, FileSpreadsheet } from 'lucide-react';
+import { Download, MapPinOff, Clock, UserCheck, AlertCircle, Shield, FileText, FileSpreadsheet, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import * as XLSX from 'xlsx';
 
 export const ReportsScreen: React.FC = () => {
-  const { profile } = useAuth();
+  // Extract limits and tenantPlan to check plan access
+  const { profile, limits, tenantPlan } = useAuth();
   
   // Get the accurate LOCAL month
   const getLocalMonth = () => {
@@ -95,8 +96,6 @@ export const ReportsScreen: React.FC = () => {
   };
 
   // ========== EPFO ECR GENERATOR - OFFICIAL FORMAT ==========
-  // Format: Plain Text (.txt) with #~# delimiter (25 fields)
-  // Reference: https://epfindia.gov.in
   const generateECR = async () => {
     if (!profile?.tenantId) {
       alert("⚠️ Tenant ID not found. Please login again.");
@@ -242,8 +241,6 @@ export const ReportsScreen: React.FC = () => {
   };
 
   // ========== ESIC RETURN GENERATOR - OFFICIAL FORMAT ==========
-  // Format: Excel 97-2003 (.xls) - NOT .xlsx or .csv
-  // Reference: https://www.esic.in
   const generateESIC = async () => {
     if (!profile?.tenantId) {
       alert("⚠️ Tenant ID not found. Please login again.");
@@ -404,217 +401,217 @@ export const ReportsScreen: React.FC = () => {
       </div>
 
       {/* STATUTORY COMPLIANCE SECTION */}
-      <div className="bg-linear-to-br from-indigo-50 via-purple-50 to-pink-50 p-6 rounded-xl shadow-lg border border-indigo-200 mb-6">
-          <div className="flex items-start gap-3 mb-4">
-              <div className="bg-indigo-600 p-2 rounded-lg">
-                  <Shield size={24} className="text-white"/>
+      {limits?.statutoryComplianceEnabled ? (
+          <>
+            <div className="bg-linear-to-br from-indigo-50 via-purple-50 to-pink-50 p-6 rounded-xl shadow-lg border border-indigo-200 mb-6">
+                <div className="flex items-start gap-3 mb-4">
+                    <div className="bg-indigo-600 p-2 rounded-lg">
+                        <Shield size={24} className="text-white"/>
+                    </div>
+                    <div className="flex-1">
+                        <h3 className="font-bold text-gray-800 text-lg mb-1">
+                            Government Statutory Returns
+                        </h3>
+                        <p className="text-sm text-gray-600">
+                            Official compliance formats accepted by EPFO & ESIC portals
+                        </p>
+                    </div>
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    {/* EPFO Card */}
+                    <div className="bg-white p-4 rounded-lg border border-indigo-100 shadow-sm">
+                        <div className="flex items-center gap-2 mb-3">
+                            <FileText size={20} className="text-indigo-600"/>
+                            <h4 className="font-bold text-gray-800">EPFO (ECR)</h4>
+                        </div>
+                        <ul className="text-xs text-gray-600 space-y-1.5 mb-4">
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>Plain Text (.txt) format</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>25 fields with #~# delimiter</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>Auto-calculated contributions</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>UAN-based filing</span></li>
+                        </ul>
+                        <button 
+                            onClick={generateECR}
+                            disabled={loading}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <Download size={16} className="mr-2"/> Generate EPFO ECR
+                        </button>
+                    </div>
+                    
+                    {/* ESIC Card */}
+                    <div className="bg-white p-4 rounded-lg border border-teal-100 shadow-sm">
+                        <div className="flex items-center gap-2 mb-3">
+                            <FileSpreadsheet size={20} className="text-teal-600"/>
+                            <h4 className="font-bold text-gray-800">ESIC Return</h4>
+                        </div>
+                        <ul className="text-xs text-gray-600 space-y-1.5 mb-4">
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>Excel 97-2003 (.xls) format</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>Portal-compatible template</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>Salary ≤ ₹21,000 eligibility</span></li>
+                            <li className="flex items-start"><span className="text-green-500 mr-2">✓</span><span>IP Number validation</span></li>
+                        </ul>
+                        <button 
+                            onClick={generateESIC}
+                            disabled={loading}
+                            className="w-full bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <Download size={16} className="mr-2"/> Generate ESIC Return
+                        </button>
+                    </div>
+                </div>
+                
+                {/* Quick Info */}
+                <div className="bg-white/70 backdrop-blur-sm p-3 rounded-lg border border-indigo-100">
+                    <p className="text-xs text-gray-600 font-medium">
+                        <span className="font-bold text-indigo-600">📅 Due Date:</span> 15th of following month | 
+                        <span className="font-bold text-teal-600 ml-2">📋 Requirements:</span> Workers must have UAN (EPFO) & IP Number (ESIC)
+                    </p>
+                </div>
+            </div>
+
+            {/* Help Section */}
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+                <h4 className="font-bold text-blue-800 mb-3 flex items-center">
+                    <AlertCircle size={18} className="mr-2"/> Important Information
+                </h4>
+                <div className="space-y-3">
+                    <div className="bg-white p-3 rounded-lg">
+                        <p className="font-bold text-indigo-700 text-sm mb-1">🔹 EPFO (ECR) - Employee Provident Fund</p>
+                        <ul className="text-xs text-gray-700 space-y-1 ml-4">
+                            <li>• Format: Plain Text (.txt) with #~# (hash-tilda-hash) delimiter</li>
+                            <li>• Fields: 25 mandatory columns per employee</li>
+                            <li>• Requirement: All workers must have UAN numbers</li>
+                            <li>• Upload: unifiedportal-mem.epfindia.gov.in</li>
+                            <li>• Contribution: EE 12% + ER 12% (split: 8.33% EPS + 3.67% EPF)</li>
+                        </ul>
+                    </div>
+                    
+                    <div className="bg-white p-3 rounded-lg">
+                        <p className="font-bold text-teal-700 text-sm mb-1">🔹 ESIC - Employee State Insurance Corporation</p>
+                        <ul className="text-xs text-gray-700 space-y-1 ml-4">
+                            <li>• Format: Excel 97-2003 (.xls) - NOT .xlsx or .csv</li>
+                            <li>• Eligibility: Gross salary ≤ ₹21,000 per month</li>
+                            <li>• Requirement: All eligible workers must have IP numbers</li>
+                            <li>• Upload: www.esic.in (File Monthly Contribution section)</li>
+                            <li>• Contribution: EE 0.75% + ER 3.25% = 4% of gross wages</li>
+                        </ul>
+                    </div>
+                    
+                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                        <p className="font-bold text-amber-800 text-sm mb-1">⚠️ Before Generating Reports</p>
+                        <ul className="text-xs text-gray-700 space-y-1 ml-4">
+                            <li>• Ensure all workers have UAN & ESIC IP numbers in Settings</li>
+                            <li>• Verify attendance data is complete for the month</li>
+                            <li>• Check wage configurations (Monthly/Daily) are correct</li>
+                            <li>• Monthly & Daily wages are automatically pro-rated based on attendance</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+          </>
+      ) : (
+          <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 mb-6 opacity-70">
+              <div className="flex items-center mb-2">
+                  <Lock className="text-gray-500 mr-2" size={24} />
+                  <h3 className="font-bold text-gray-800 text-lg">Government Statutory Returns Locked</h3>
               </div>
-              <div className="flex-1">
-                  <h3 className="font-bold text-gray-800 text-lg mb-1">
-                      Government Statutory Returns
-                  </h3>
-                  <p className="text-sm text-gray-600">
-                      Official compliance formats accepted by EPFO & ESIC portals
-                  </p>
-              </div>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              {/* EPFO Card */}
-              <div className="bg-white p-4 rounded-lg border border-indigo-100 shadow-sm">
-                  <div className="flex items-center gap-2 mb-3">
-                      <FileText size={20} className="text-indigo-600"/>
-                      <h4 className="font-bold text-gray-800">EPFO (ECR)</h4>
-                  </div>
-                  <ul className="text-xs text-gray-600 space-y-1.5 mb-4">
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>Plain Text (.txt) format</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>25 fields with #~# delimiter</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>Auto-calculated contributions</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>UAN-based filing</span>
-                      </li>
-                  </ul>
-                  <button 
-                      onClick={generateECR}
-                      disabled={loading}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                      <Download size={16} className="mr-2"/> 
-                      Generate EPFO ECR
-                  </button>
-              </div>
-              
-              {/* ESIC Card */}
-              <div className="bg-white p-4 rounded-lg border border-teal-100 shadow-sm">
-                  <div className="flex items-center gap-2 mb-3">
-                      <FileSpreadsheet size={20} className="text-teal-600"/>
-                      <h4 className="font-bold text-gray-800">ESIC Return</h4>
-                  </div>
-                  <ul className="text-xs text-gray-600 space-y-1.5 mb-4">
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>Excel 97-2003 (.xls) format</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>Portal-compatible template</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>Salary ≤ ₹21,000 eligibility</span>
-                      </li>
-                      <li className="flex items-start">
-                          <span className="text-green-500 mr-2">✓</span>
-                          <span>IP Number validation</span>
-                      </li>
-                  </ul>
-                  <button 
-                      onClick={generateESIC}
-                      disabled={loading}
-                      className="w-full bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                      <Download size={16} className="mr-2"/> 
-                      Generate ESIC Return
-                  </button>
-              </div>
-          </div>
-          
-          {/* Quick Info */}
-          <div className="bg-white/70 backdrop-blur-sm p-3 rounded-lg border border-indigo-100">
-              <p className="text-xs text-gray-600 font-medium">
-                  <span className="font-bold text-indigo-600">📅 Due Date:</span> 15th of following month | 
-                  <span className="font-bold text-teal-600 ml-2">📋 Requirements:</span> Workers must have UAN (EPFO) & IP Number (ESIC)
+              <p className="text-sm text-gray-600 mb-4">
+                  Official compliance formats for EPFO (ECR) and ESIC Returns are available exclusively on the <strong>Enterprise Plan</strong>. Upgrade to automate your factory's compliance and return filing.
               </p>
           </div>
-      </div>
-
-      {/* Help Section */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
-          <h4 className="font-bold text-blue-800 mb-3 flex items-center">
-              <AlertCircle size={18} className="mr-2"/> Important Information
-          </h4>
-          <div className="space-y-3">
-              <div className="bg-white p-3 rounded-lg">
-                  <p className="font-bold text-indigo-700 text-sm mb-1">🔹 EPFO (ECR) - Employee Provident Fund</p>
-                  <ul className="text-xs text-gray-700 space-y-1 ml-4">
-                      <li>• Format: Plain Text (.txt) with #~# (hash-tilda-hash) delimiter</li>
-                      <li>• Fields: 25 mandatory columns per employee</li>
-                      <li>• Requirement: All workers must have UAN numbers</li>
-                      <li>• Upload: unifiedportal-mem.epfindia.gov.in</li>
-                      <li>• Contribution: EE 12% + ER 12% (split: 8.33% EPS + 3.67% EPF)</li>
-                  </ul>
-              </div>
-              
-              <div className="bg-white p-3 rounded-lg">
-                  <p className="font-bold text-teal-700 text-sm mb-1">🔹 ESIC - Employee State Insurance Corporation</p>
-                  <ul className="text-xs text-gray-700 space-y-1 ml-4">
-                      <li>• Format: Excel 97-2003 (.xls) - NOT .xlsx or .csv</li>
-                      <li>• Eligibility: Gross salary ≤ ₹21,000 per month</li>
-                      <li>• Requirement: All eligible workers must have IP numbers</li>
-                      <li>• Upload: www.esic.in (File Monthly Contribution section)</li>
-                      <li>• Contribution: EE 0.75% + ER 3.25% = 4% of gross wages</li>
-                  </ul>
-              </div>
-              
-              <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
-                  <p className="font-bold text-amber-800 text-sm mb-1">⚠️ Before Generating Reports</p>
-                  <ul className="text-xs text-gray-700 space-y-1 ml-4">
-                      <li>• Ensure all workers have UAN & ESIC IP numbers in Settings</li>
-                      <li>• Verify attendance data is complete for the month</li>
-                      <li>• Check wage configurations (Monthly/Daily) are correct</li>
-                      <li>• Monthly & Daily wages are automatically pro-rated based on attendance</li>
-                  </ul>
-              </div>
-          </div>
-      </div>
+      )}
 
       {/* Muster Roll Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-slate-50">
-            <h3 className="font-bold text-sm text-gray-800 flex items-center">
-                <UserCheck size={16} className="mr-2 text-blue-600"/> Monthly Muster Roll
-            </h3>
-            <button 
-                onClick={exportCSV} 
-                disabled={loading || reportData.length === 0}
-                className="text-blue-600 bg-blue-50 p-2 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Download CSV"
-            >
-                <Download size={18}/>
-            </button>
-         </div>
-         <div className="overflow-x-auto">
-             <table className="w-full text-left text-sm">
-                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase font-bold">
-                     <tr>
-                         <th className="p-3 pl-4">Worker</th>
-                         <th className="p-3 text-center">Present</th>
-                         <th className="p-3 text-center">Absent</th>
-                         <th className="p-3 text-center">Late</th>
-                         <th className="p-3 text-center">OT (h)</th>
-                         <th className="p-3 pr-4 text-center">Violations</th>
-                     </tr>
-                 </thead>
-                 <tbody className="divide-y divide-gray-100">
-                     {loading ? (
+      {tenantPlan !== 'FREE' ? (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-sm text-gray-800 flex items-center">
+                    <UserCheck size={16} className="mr-2 text-blue-600"/> Monthly Muster Roll
+                </h3>
+                <button 
+                    onClick={exportCSV} 
+                    disabled={loading || reportData.length === 0}
+                    className="text-blue-600 bg-blue-50 p-2 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Download CSV"
+                >
+                    <Download size={18}/>
+                </button>
+             </div>
+             <div className="overflow-x-auto">
+                 <table className="w-full text-left text-sm">
+                     <thead className="bg-gray-50 text-gray-500 text-xs uppercase font-bold">
                          <tr>
-                             <td colSpan={6} className="p-12 text-center text-gray-400">
-                                 Processing report...
-                             </td>
+                             <th className="p-3 pl-4">Worker</th>
+                             <th className="p-3 text-center">Present</th>
+                             <th className="p-3 text-center">Absent</th>
+                             <th className="p-3 text-center">Late</th>
+                             <th className="p-3 text-center">OT (h)</th>
+                             <th className="p-3 pr-4 text-center">Violations</th>
                          </tr>
-                     ) : reportData.length === 0 ? (
-                         <tr>
-                             <td colSpan={6} className="p-12 text-center text-gray-400">
-                                 No workers found for this month.
-                             </td>
-                         </tr>
-                     ) : reportData.map((row, i) => (
-                         <tr key={i} className="hover:bg-gray-50 transition-colors">
-                             <td className="p-3 pl-4">
-                                 <p className="font-bold text-gray-800">{row.name}</p>
-                                 <p className="text-xs text-gray-500">{row.designation}</p>
-                             </td>
-                             <td className="p-3 text-center">
-                                 <span className="bg-green-50 text-green-700 px-2 py-1 rounded font-bold text-xs">
-                                     {row.present}
-                                 </span>
-                             </td>
-                             <td className="p-3 text-center">
-                                 <span className="bg-red-50 text-red-700 px-2 py-1 rounded font-bold text-xs">
-                                     {row.absent}
-                                 </span>
-                             </td>
-                             <td className="p-3 text-center">
-                                 <span className="text-orange-600 font-bold">{row.late}</span>
-                             </td>
-                             <td className="p-3 text-center font-mono text-gray-600">
-                                 {row.otHours}
-                             </td>
-                             <td className="p-3 pr-4 text-center">
-                                {row.geofenceViolations > 0 ? (
-                                    <span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold text-xs inline-flex items-center">
-                                        <AlertCircle size={12} className="mr-1"/> {row.geofenceViolations}
-                                    </span>
-                                ) : (
-                                    <span className="text-gray-300">-</span>
-                                )}
-                             </td>
-                         </tr>
-                     ))}
-                 </tbody>
-             </table>
-         </div>
-      </div>
+                     </thead>
+                     <tbody className="divide-y divide-gray-100">
+                         {loading ? (
+                             <tr>
+                                 <td colSpan={6} className="p-12 text-center text-gray-400">
+                                     Processing report...
+                                 </td>
+                             </tr>
+                         ) : reportData.length === 0 ? (
+                             <tr>
+                                 <td colSpan={6} className="p-12 text-center text-gray-400">
+                                     No workers found for this month.
+                                 </td>
+                             </tr>
+                         ) : reportData.map((row, i) => (
+                             <tr key={i} className="hover:bg-gray-50 transition-colors">
+                                 <td className="p-3 pl-4">
+                                     <p className="font-bold text-gray-800">{row.name}</p>
+                                     <p className="text-xs text-gray-500">{row.designation}</p>
+                                 </td>
+                                 <td className="p-3 text-center">
+                                     <span className="bg-green-50 text-green-700 px-2 py-1 rounded font-bold text-xs">
+                                         {row.present}
+                                     </span>
+                                 </td>
+                                 <td className="p-3 text-center">
+                                     <span className="bg-red-50 text-red-700 px-2 py-1 rounded font-bold text-xs">
+                                         {row.absent}
+                                     </span>
+                                 </td>
+                                 <td className="p-3 text-center">
+                                     <span className="text-orange-600 font-bold">{row.late}</span>
+                                 </td>
+                                 <td className="p-3 text-center font-mono text-gray-600">
+                                     {row.otHours}
+                                 </td>
+                                 <td className="p-3 pr-4 text-center">
+                                    {row.geofenceViolations > 0 ? (
+                                        <span className="bg-red-100 text-red-700 px-2 py-1 rounded font-bold text-xs inline-flex items-center">
+                                            <AlertCircle size={12} className="mr-1"/> {row.geofenceViolations}
+                                        </span>
+                                    ) : (
+                                        <span className="text-gray-300">-</span>
+                                    )}
+                                 </td>
+                             </tr>
+                         ))}
+                     </tbody>
+                 </table>
+             </div>
+          </div>
+      ) : (
+          <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 opacity-70">
+              <div className="flex items-center mb-2">
+                  <Lock className="text-gray-500 mr-2" size={24} />
+                  <h3 className="font-bold text-gray-800 text-lg">Monthly Muster Roll Locked</h3>
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                  Exporting the detailed Monthly Muster Roll CSV is a premium feature available on the <strong>Starter Plan and above</strong>. Upgrade to unlock advanced factory reporting and CSV downloads.
+              </p>
+          </div>
+      )}
     </div>
   );
 };

@@ -757,6 +757,7 @@ export const SettingsScreen: React.FC = () => {
                             <p className="text-sm font-bold text-slate-800">Enable Sandwich Rule</p>
                             <p className="text-[11px] text-slate-500 mt-1 max-w-sm">If a worker is absent on the day before AND the day after a holiday/weekly off, the holiday becomes unpaid.</p>
                         </div>
+                        {limits?.advancedLeavesEnabled ? (
                         <label className="relative inline-flex items-center cursor-pointer ml-4">
                             <input 
                                 type="checkbox" 
@@ -766,6 +767,9 @@ export const SettingsScreen: React.FC = () => {
                             />
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
                         </label>
+                        ) : (
+                          <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded font-black tracking-wide uppercase shadow-sm ml-4 whitespace-nowrap"><Lock size={10} className="inline mr-1 mb-0.5"/> Pro Plan</span>
+                        )}
                     </div>
 
                     <div className="border-t border-slate-100 pt-6">
@@ -795,101 +799,110 @@ export const SettingsScreen: React.FC = () => {
                 <div className="px-1 mb-3 flex justify-between items-end">
                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Public Holidays</h3>
                 </div>
-                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-                    
-                    {/* NEW: Clean, Spacious Flex Layout */}
-                    <div className="p-6 bg-slate-50 border-b border-slate-100">
-                        <h4 className="text-sm font-black text-slate-800 mb-4 tracking-tight">Register New Holiday</h4>
-                        
-                        <div className="flex flex-col md:flex-row flex-wrap gap-4">
-                            <div className="flex-1 min-w-50">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Holiday Name</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="e.g. Diwali, Holi" 
-                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
-                                    value={newHolidayName}
-                                    onChange={(e) => setNewHolidayName(e.target.value)}
-                                />
-                            </div>
+                
+                {limits?.publicHolidaysEnabled ? (
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="p-6 bg-slate-50 border-b border-slate-100">
+                          <h4 className="text-sm font-black text-slate-800 mb-4 tracking-tight">Register New Holiday</h4>
+                          
+                          <div className="flex flex-col md:flex-row flex-wrap gap-4">
+                              <div className="flex-1 min-w-50">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Holiday Name</label>
+                                  <input 
+                                      type="text" 
+                                      placeholder="e.g. Diwali, Holi" 
+                                      className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
+                                      value={newHolidayName}
+                                      onChange={(e) => setNewHolidayName(e.target.value)}
+                                  />
+                              </div>
 
-                            <div className="w-full md:w-40">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Date</label>
-                                <input 
-                                    type="date" 
-                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
-                                    value={newHolidayDate}
-                                    onChange={(e) => setNewHolidayDate(e.target.value)}
-                                />
-                            </div>
-                            
-                            <div className="w-full md:w-40">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Pay Type</label>
-                                <select 
-                                    className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm appearance-none"
-                                    value={newHolidayPaid ? 'PAID' : 'UNPAID'}
-                                    onChange={(e) => setNewHolidayPaid(e.target.value === 'PAID')}
-                                >
-                                    <option value="PAID">Paid (Full Wage)</option>
-                                    <option value="UNPAID">Unpaid</option>
-                                </select>
-                            </div>
+                              <div className="w-full md:w-40">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Date</label>
+                                  <input 
+                                      type="date" 
+                                      className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800 shadow-sm"
+                                      value={newHolidayDate}
+                                      onChange={(e) => setNewHolidayDate(e.target.value)}
+                                  />
+                              </div>
+                              
+                              <div className="w-full md:w-40">
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5 block">Pay Type</label>
+                                  <select 
+                                      className="w-full h-12 px-4 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm appearance-none"
+                                      value={newHolidayPaid ? 'PAID' : 'UNPAID'}
+                                      onChange={(e) => setNewHolidayPaid(e.target.value === 'PAID')}
+                                  >
+                                      <option value="PAID">Paid (Full Wage)</option>
+                                      <option value="UNPAID">Unpaid</option>
+                                  </select>
+                              </div>
 
-                            <div className="w-full md:w-28 flex items-end">
-                                <button 
-                                    type="button"
-                                    onClick={handleAddHoliday}
-                                    disabled={!newHolidayName.trim() || !newHolidayDate}
-                                    className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center shadow-md shadow-indigo-100"
-                                >
-                                    <Plus size={18} className="mr-1"/> Add
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    {/* NEW: Clean Calendar Badges List */}
-                    <div className="p-2">
-                        {(settings?.holidays || []).length > 0 ? (
-                            <div className="divide-y divide-slate-50">
-                                {settings?.holidays?.map((holiday) => (
-                                    <div key={holiday.id} className="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 transition-colors">
-                                        <div className="flex items-center space-x-4">
-                                            {/* Beautiful Date Badge */}
-                                            <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden text-center min-w-16 flex flex-col">
-                                                <div className={`text-[10px] font-black uppercase py-1 tracking-widest ${holiday.isPaid ? 'bg-indigo-500 text-white' : 'bg-slate-400 text-white'}`}>
-                                                    {new Date(holiday.date).toLocaleDateString('en-US', { month: 'short' })}
-                                                </div>
-                                                <div className="text-xl font-black text-slate-800 py-1.5">
-                                                    {new Date(holiday.date).getDate()}
-                                                </div>
-                                            </div>
-                                            
-                                            <div>
-                                                <h4 className="font-bold text-slate-800 text-base leading-tight">{holiday.name}</h4>
-                                                <span className={`text-[9px] font-black tracking-widest uppercase px-2 py-0.5 rounded flex items-center w-max mt-1.5 ${holiday.isPaid ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
-                                                    {holiday.isPaid ? 'Paid Holiday' : 'Unpaid Holiday'}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <button 
-                                            type="button"
-                                            onClick={() => removeHoliday(holiday.id)}
-                                            className="text-slate-400 hover:text-red-500 bg-white hover:bg-red-50 p-2.5 rounded-xl border border-slate-100 hover:border-red-100 transition-all shadow-sm"
-                                        >
-                                            <Trash2 size={18}/>
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="p-10 text-center text-slate-400">
-                                <CalendarDays size={48} className="mx-auto text-slate-200 mb-3" />
-                                <p className="text-sm font-medium">No public holidays registered.</p>
-                            </div>
-                        )}
-                    </div>
-                </div>
+                              <div className="w-full md:w-28 flex items-end">
+                                  <button 
+                                      type="button"
+                                      onClick={handleAddHoliday}
+                                      disabled={!newHolidayName.trim() || !newHolidayDate}
+                                      className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center shadow-md shadow-indigo-100"
+                                  >
+                                      <Plus size={18} className="mr-1"/> Add
+                                  </button>
+                              </div>
+                          </div>
+                      </div>
+                      
+                      <div className="p-2">
+                          {(settings?.holidays || []).length > 0 ? (
+                              <div className="divide-y divide-slate-50">
+                                  {settings?.holidays?.map((holiday) => (
+                                      <div key={holiday.id} className="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 transition-colors">
+                                          <div className="flex items-center space-x-4">
+                                              <div className="bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden text-center min-w-16 flex flex-col">
+                                                  <div className={`text-[10px] font-black uppercase py-1 tracking-widest ${holiday.isPaid ? 'bg-indigo-500 text-white' : 'bg-slate-400 text-white'}`}>
+                                                      {new Date(holiday.date).toLocaleDateString('en-US', { month: 'short' })}
+                                                  </div>
+                                                  <div className="text-xl font-black text-slate-800 py-1.5">
+                                                      {new Date(holiday.date).getDate()}
+                                                  </div>
+                                              </div>
+                                              
+                                              <div>
+                                                  <h4 className="font-bold text-slate-800 text-base leading-tight">{holiday.name}</h4>
+                                                  <span className={`text-[9px] font-black tracking-widest uppercase px-2 py-0.5 rounded flex items-center w-max mt-1.5 ${holiday.isPaid ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}>
+                                                      {holiday.isPaid ? 'Paid Holiday' : 'Unpaid Holiday'}
+                                                  </span>
+                                              </div>
+                                          </div>
+                                          <button 
+                                              type="button"
+                                              onClick={() => removeHoliday(holiday.id)}
+                                              className="text-slate-400 hover:text-red-500 bg-white hover:bg-red-50 p-2.5 rounded-xl border border-slate-100 hover:border-red-100 transition-all shadow-sm"
+                                          >
+                                              <Trash2 size={18}/>
+                                          </button>
+                                      </div>
+                                  ))}
+                              </div>
+                          ) : (
+                              <div className="p-10 text-center text-slate-400">
+                                  <CalendarDays size={48} className="mx-auto text-slate-200 mb-3" />
+                                  <p className="text-sm font-medium">No public holidays registered.</p>
+                              </div>
+                          )}
+                      </div>
+                  </div>
+                ) : (
+                  <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 opacity-70">
+                      <div className="flex items-center mb-2">
+                          <Lock className="text-gray-500 mr-2" size={18} />
+                          <h3 className="font-bold text-gray-800">Public Holidays Locked</h3>
+                      </div>
+                      <p className="text-xs text-gray-600">
+                          Managing public holidays and specific holiday multi-pay is available on the Starter plan and above.
+                      </p>
+                  </div>
+                )}
             </section>
         </div>
       )}
@@ -1115,80 +1128,94 @@ export const SettingsScreen: React.FC = () => {
       {/* ======================= TERMINALS TAB ======================= */}
       {activeTab === 'TERMINALS' && (
         <div className="animate-in fade-in duration-300">
-           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
-               <div className="mb-6">
-                   <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Register New Kiosk</h3>
-                   <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">Generate a 6-digit pairing code to link a factory tablet</p>
-               </div>
-               
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                  <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Terminal Name</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g., Main Gate, Packaging Dept" 
-                        className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
-                        value={newTerminalName} 
-                        onChange={e => setNewTerminalName(e.target.value)} 
-                      />
-                  </div>
-                  
-                  <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Admin Exit PIN</label>
-                      <div className="relative">
+          {limits?.kioskEnabled ? (
+            <>
+               <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 mb-8">
+                   <div className="mb-6">
+                       <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Register New Kiosk</h3>
+                       <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">Generate a 6-digit pairing code to link a factory tablet</p>
+                   </div>
+                   
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Terminal Name</label>
                           <input 
                             type="text" 
-                            maxLength={4} 
-                            placeholder="4-digit PIN" 
-                            className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold tracking-widest focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
-                            value={newTerminalPin} 
-                            onChange={e => setNewTerminalPin(e.target.value.replace(/\D/g, ''))} 
+                            placeholder="e.g., Main Gate, Packaging Dept" 
+                            className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
+                            value={newTerminalName} 
+                            onChange={e => setNewTerminalName(e.target.value)} 
                           />
-                          <Lock className="absolute right-4 top-3.5 text-slate-400" size={16} />
                       </div>
-                      <p className="text-[9px] text-slate-500 mt-1.5 font-medium leading-relaxed">
-                        Secret PIN required to unlock or exit the Kiosk Mode on the tablet.
-                      </p>
-                  </div>
+                      
+                      <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter">Admin Exit PIN</label>
+                          <div className="relative">
+                              <input 
+                                type="text" 
+                                maxLength={4} 
+                                placeholder="4-digit PIN" 
+                                className="w-full p-3 bg-slate-50 rounded-2xl border border-slate-200 text-sm font-bold tracking-widest focus:ring-2 focus:ring-purple-500 outline-none transition-all" 
+                                value={newTerminalPin} 
+                                onChange={e => setNewTerminalPin(e.target.value.replace(/\D/g, ''))} 
+                              />
+                              <Lock className="absolute right-4 top-3.5 text-slate-400" size={16} />
+                          </div>
+                          <p className="text-[9px] text-slate-500 mt-1.5 font-medium leading-relaxed">
+                            Secret PIN required to unlock or exit the Kiosk Mode on the tablet.
+                          </p>
+                      </div>
+                   </div>
+
+                   <div className="flex justify-end pt-4 border-t border-slate-50">
+                      <button 
+                        onClick={handleGenerateTerminal} 
+                        disabled={saving || !newTerminalName || newTerminalPin.length !== 4}
+                        className="bg-purple-600 text-white px-8 py-3 font-bold rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-purple-200 w-full md:w-auto"
+                      >
+                        {saving ? <Loader2 className="animate-spin mr-2" size={18} /> : <ScanFace className="mr-2" size={18} />}
+                        {saving ? 'Generating...' : 'Generate Pairing Code'}
+                      </button>
+                   </div>
                </div>
 
-               <div className="flex justify-end pt-4 border-t border-slate-50">
-                  <button 
-                    onClick={handleGenerateTerminal} 
-                    disabled={saving || !newTerminalName || newTerminalPin.length !== 4}
-                    className="bg-purple-600 text-white px-8 py-3 font-bold rounded-xl hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center shadow-lg shadow-purple-200 w-full md:w-auto"
-                  >
-                    {saving ? <Loader2 className="animate-spin mr-2" size={18} /> : <ScanFace className="mr-2" size={18} />}
-                    {saving ? 'Generating...' : 'Generate Pairing Code'}
-                  </button>
+               <div className="space-y-4">
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 px-1">Active Terminals</h3>
+                  {terminals.map(terminal => (
+                     <div key={terminal.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex justify-between items-center">
+                        <div>
+                           <h4 className="font-bold text-slate-800">{terminal.name}</h4>
+                           <p className="text-xs text-slate-500 font-mono mt-1">
+                              Pairing Code: <span className="font-bold text-purple-600 tracking-widest text-sm">{terminal.pairingCode}</span>
+                           </p>
+                        </div>
+                        <button 
+                          onClick={() => handleDeleteTerminal(terminal.id)} 
+                          disabled={saving}
+                          className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition disabled:opacity-50"
+                        >
+                          <Trash2 size={20}/>
+                        </button>
+                     </div>
+                  ))}
+                  {terminals.length === 0 && (
+                    <p className="text-center text-slate-400 text-xs py-8 bg-white rounded-3xl border border-dashed border-slate-200">
+                      No active terminals. Generate a code above to get started.
+                    </p>
+                  )}
                </div>
-           </div>
-
-           <div className="space-y-4">
-              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3 px-1">Active Terminals</h3>
-              {terminals.map(terminal => (
-                 <div key={terminal.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex justify-between items-center">
-                    <div>
-                       <h4 className="font-bold text-slate-800">{terminal.name}</h4>
-                       <p className="text-xs text-slate-500 font-mono mt-1">
-                          Pairing Code: <span className="font-bold text-purple-600 tracking-widest text-sm">{terminal.pairingCode}</span>
-                       </p>
-                    </div>
-                    <button 
-                      onClick={() => handleDeleteTerminal(terminal.id)} 
-                      disabled={saving}
-                      className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition disabled:opacity-50"
-                    >
-                      <Trash2 size={20}/>
-                    </button>
-                 </div>
-              ))}
-              {terminals.length === 0 && (
-                <p className="text-center text-slate-400 text-xs py-8 bg-white rounded-3xl border border-dashed border-slate-200">
-                  No active terminals. Generate a code above to get started.
+            </>
+          ) : (
+            <div className="bg-gray-100 rounded-3xl shadow-inner border border-gray-200 p-6 opacity-70">
+                <div className="flex items-center mb-2">
+                    <Lock className="text-gray-500 mr-2" size={24} />
+                    <h3 className="font-bold text-gray-800 text-lg">Kiosk Terminals Locked</h3>
+                </div>
+                <p className="text-sm text-gray-600 mb-4">
+                    Generating codes to pair factory tablets as dedicated AI Attendance Kiosks is a premium feature. Please upgrade your plan to unlock facial recognition terminals.
                 </p>
-              )}
-           </div>
+            </div>
+          )}
         </div>
       )}
 
