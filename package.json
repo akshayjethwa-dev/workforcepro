@@ -7,11 +7,16 @@
     "dev": "vite",
     "start": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:mobile": "vite build && npx cap sync"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/ios": "^8.2.0",
     "@vladmandic/human": "^3.3.6",
-    "face-api.js": "^0.22.2",
     "firebase": "^12.9.0",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.564.0",

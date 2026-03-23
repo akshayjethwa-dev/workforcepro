@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
+import { syncService } from '../services/syncService';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 import { useBackButton } from '../hooks/useBackButton';
 import { geoUtils } from '../utils/geo';
@@ -58,6 +59,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   const activeTenantId = isDedicatedMode ? propsTenantId : profile?.tenantId;
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null); // PERFORMANCE FIX: Track the stream to stop it
   
   const processingRef = useRef(false); 
   const workersRef = useRef<Worker[]>([]);
@@ -71,18 +73,26 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   const [feedback, setFeedback] = useState("Initializing System...");
   const [modelsLoaded, setModelsLoaded] = useState(false);
   
-  const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT'} | null>(null);
+  const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT', isOffline: boolean} | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
 
-  const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR'}[]>([]);
+  const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR', isOffline?: boolean}[]>([]);
   const [showExitPin, setShowExitPin] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
 
   useBackButton(() => {
     if (isDedicatedMode) return true; 
-    onExit();
+    handleCleanExit(); 
     return true; 
   });
+
+  const handleCleanExit = () => {
+      // PERFORMANCE FIX: Explicitly shut down hardware before exiting
+      if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      onExit();
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -112,8 +122,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                  (worker.branchId || 'default') === targetBranch
             );
             
-            // We still load all workers to reference for QR code scanning
-            // QR codes can work even if a face wasn't registered properly
             workersRef.current = w.filter(worker => (worker.branchId || 'default') === targetBranch);
             settingsRef.current = settings; 
             
@@ -132,6 +140,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } })
       .then(stream => { 
+          streamRef.current = stream; // Save ref to stop later
           if(videoRef.current) videoRef.current.srcObject = stream; 
       })
       .catch(err => {
@@ -141,11 +150,19 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
       
     return () => {
         processingRef.current = false;
+        // PERFORMANCE FIX: Stop camera tracks on unmount to prevent memory leak
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+        }
     };
   }, [activeTenantId, branchId]);
 
   useEffect(() => {
     if (!modelsLoaded || showExitPin) return;
+
+    // PERFORMANCE FIX: Create canvas ONCE, outside the high-frequency loop
+    const hiddenCanvas = document.createElement('canvas');
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true }); // Optimized for frequent reads
 
     const scanInterval = setInterval(async () => {
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
@@ -153,17 +170,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
        }
 
        try {
-           // --- 1. QR CODE SCANNING FALLBACK (Runs first, extremely fast) ---
-           const canvas = document.createElement('canvas');
-           canvas.width = videoRef.current.videoWidth;
-           canvas.height = videoRef.current.videoHeight;
-           const ctx = canvas.getContext('2d');
-           
            if (ctx) {
-               ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+               // Reuse the single hidden canvas
+               hiddenCanvas.width = videoRef.current.videoWidth;
+               hiddenCanvas.height = videoRef.current.videoHeight;
+               ctx.drawImage(videoRef.current, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+               const imageData = ctx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
                
-               // Attempt to read a QR code from the frame
                const code = jsQR(imageData.data, imageData.width, imageData.height, {
                    inversionAttempts: "dontInvert",
                });
@@ -175,12 +188,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                        setLivenessState('SCANNING'); 
                        targetWorkerRef.current = null;
                        await handlePunch(matchedWorker, 'QR Badge');
-                       return; // Exit this tick, skipping face detection
+                       return;
                    }
                }
            }
 
-           // --- 2. STANDARD FACE DETECTION & LIVENESS ---
            const matchResult = await faceService.findMatchAndLiveness(videoRef.current, workersRef.current.filter(w => w.faceDescriptor));
            
            if (!matchResult) {
@@ -252,15 +264,19 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         }
 
         if (activeTenantId) {
-            await dbService.addNotification({
-                tenantId: activeTenantId,
-                title: "⚠️ Security Alert: Liveness Failed",
-                message: `Multiple failed liveness checks for ${worker.name}. This may be a proxy punch attempt.`,
-                imageUrl: base64Image,
-                type: 'ALERT',
-                createdAt: new Date().toISOString(),
-                read: false
-            });
+            try {
+                await dbService.addNotification({
+                    tenantId: activeTenantId,
+                    title: "⚠️ Security Alert: Liveness Failed",
+                    message: `Multiple failed liveness checks for ${worker.name}. This may be a proxy punch attempt.`,
+                    imageUrl: base64Image,
+                    type: 'ALERT',
+                    createdAt: new Date().toISOString(),
+                    read: false
+                });
+            } catch(e) {
+                console.warn("Could not send spoof alert due to network.");
+            }
         }
 
         failedAttemptsRef.current[worker.id] = 0;
@@ -290,7 +306,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         const today = new Date().toISOString().split('T')[0];
         const recordId = `${activeTenantId}_${worker.id}_${today}`;
         
-        const existingDocs = await dbService.getTodayAttendance(activeTenantId!); 
+        let existingDocs: AttendanceRecord[] = [];
+        try {
+            existingDocs = await dbService.getTodayAttendance(activeTenantId!); 
+        } catch(e) {
+            console.warn("Offline: Could not fetch today's attendance history.");
+        }
+        
         const existingRecord = existingDocs.find(r => r.id === recordId);
 
         let punchType: 'IN' | 'OUT' = 'IN';
@@ -321,26 +343,28 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
         if (punchType === 'IN' && existingRecord?.status === 'ON_LEAVE' && existingRecord.leaveInfo?.isPaid) {
             const rawType = existingRecord.leaveInfo.type.toLowerCase();
-            
             if (rawType !== 'lwp' && worker.leaveBalances) {
                 const lType = rawType as 'cl' | 'sl' | 'pl';
                 const currentBal = worker.leaveBalances[lType] ?? 0;
                 
-                await dbService.updateWorker(worker.id, {
-                    leaveBalances: {
-                        ...worker.leaveBalances,
-                        [lType]: currentBal + 1
-                    }
-                });
-                
-                await dbService.addNotification({
-                    tenantId: activeTenantId!, 
-                    title: "Leave Automatically Cancelled",
-                    message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
-                    type: 'INFO', 
-                    createdAt: new Date().toISOString(), 
-                    read: false
-                });
+                try {
+                    await dbService.updateWorker(worker.id, {
+                        leaveBalances: {
+                            ...worker.leaveBalances,
+                            [lType]: currentBal + 1
+                        }
+                    });
+                    await dbService.addNotification({
+                        tenantId: activeTenantId!, 
+                        title: "Leave Automatically Cancelled",
+                        message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
+                        type: 'INFO', 
+                        createdAt: new Date().toISOString(), 
+                        read: false
+                    });
+                } catch(e) {
+                    console.warn("Offline: Could not update leave balance.");
+                }
             }
         }
 
@@ -384,7 +408,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         
         if (!shift) throw new Error("No Shift Configuration Found");
 
-        const lateCount = await dbService.getMonthlyLateCount(activeTenantId!, worker.id);
+        let lateCount = 0;
+        try {
+            lateCount = await dbService.getMonthlyLateCount(activeTenantId!, worker.id);
+        } catch(e) {
+            console.warn("Offline: Could not fetch late count, assuming 0.");
+        }
 
         const baseRecord: AttendanceRecord = {
             id: recordId,
@@ -399,37 +428,52 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
             hours: { gross: 0, net: 0, overtime: 0 }
         };
 
-        if (baseRecord.leaveInfo) {
-            delete baseRecord.leaveInfo;
-        }
+        if (baseRecord.leaveInfo) delete baseRecord.leaveInfo;
 
         const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking, worker, settingsRef.current);
 
-        await dbService.markAttendance(finalRecord);
+        let isOfflinePunch = false;
+        try {
+            await dbService.markAttendance(finalRecord);
+        } catch (dbError) {
+            console.warn("Network unreachable. Queuing punch offline...", dbError);
+            await syncService.savePunchOffline(finalRecord);
+            isOfflinePunch = true;
+        }
 
         if (isOutOfGeofence) {
-            await dbService.addNotification({
-                tenantId: activeTenantId!,
-                title: 'Geofence Violation Alert',
-                message: `${worker.name} punched ${punchType} via Kiosk outside the allowed factory radius.`,
-                type: 'WARNING',
-                createdAt: new Date().toISOString(),
-                read: false
-            });
+            try {
+                await dbService.addNotification({
+                    tenantId: activeTenantId!,
+                    title: 'Geofence Violation Alert',
+                    message: `${worker.name} punched ${punchType} via Kiosk outside the allowed factory radius.`,
+                    type: 'WARNING',
+                    createdAt: new Date().toISOString(),
+                    read: false
+                });
+            } catch (e) {
+                console.warn("Offline: Could not send geofence notification.");
+            }
         }
         
         playSound('SUCCESS'); 
 
-        setRecentPunches(prev => [{name: worker.name, type: punchType, time: new Date(), status: 'SUCCESS' as const}, ...prev].slice(0, 10));
+        setRecentPunches(prev => [{
+            name: worker.name, 
+            type: punchType, 
+            time: new Date(), 
+            status: 'SUCCESS' as const,
+            isOffline: isOfflinePunch
+        }, ...prev].slice(0, 10));
 
-        setDetectedWorker({ worker, action: punchType });
-        setFeedback(punchType === 'IN' ? "Welcome!" : "Goodbye!");
+        setDetectedWorker({ worker, action: punchType, isOffline: isOfflinePunch });
+        setFeedback(isOfflinePunch ? `Queued Offline: ${punchType}` : (punchType === 'IN' ? "Welcome!" : "Goodbye!"));
 
         setTimeout(() => {
             setDetectedWorker(null);
             processingRef.current = false; 
-            if (!isDedicatedMode) onExit(); 
-        }, 2000);
+            if (!isDedicatedMode) handleCleanExit(); // PERFORMANCE FIX: Clean exit
+        }, 2500);
 
     } catch (e: any) {
         console.error("Handle Punch Error", e);
@@ -442,7 +486,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
   const submitExitPin = () => {
     if (enteredPin === adminPin) {
-      onExit();
+      handleCleanExit(); // PERFORMANCE FIX: Clean exit
     } else {
       alert("Incorrect PIN");
       setShowExitPin(false);
@@ -459,18 +503,20 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
               setShowExitPin(true);
               processingRef.current = true; 
             }}
-            className="absolute top-6 right-6 z-50 p-3 rounded-full bg-black/20 text-white/30 hover:bg-black/50 hover:text-white/80 transition-all backdrop-blur-md border border-white/5"
+            // UI Optimization: expanded w-12 h-12 for touch
+            className="absolute top-6 right-6 z-50 w-12 h-12 flex items-center justify-center rounded-full bg-black/20 text-white/30 hover:bg-black/50 hover:text-white/80 transition-all backdrop-blur-md border border-white/5"
           >
             <Lock size={20} />
           </button>
        )}
 
        {!isDedicatedMode && (
-         <div className="absolute top-0 w-full p-4 flex justify-between z-10">
+         <div className="absolute top-0 w-full p-4 flex justify-between items-center z-10 min-h-16">
            <div className="bg-black/40 px-4 py-2 rounded-full text-white font-mono text-sm backdrop-blur-md">
                {new Date().toLocaleTimeString()}
            </div>
-           <button onClick={onExit} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
+           {/* UI Optimization: w-11 h-11 for touch */}
+           <button onClick={handleCleanExit} className="bg-white/20 w-11 h-11 flex items-center justify-center rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
          </div>
        )}
 
@@ -522,12 +568,15 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                   </div>
                ) : (
                   recentPunches.map((punch, idx) => (
-                     <div key={idx} className="bg-gray-900 border border-gray-800 rounded-2xl p-4 flex items-center animate-in slide-in-from-left-4 fade-in">
+                     <div key={idx} className={`bg-gray-900 border ${punch.isOffline ? 'border-orange-500/50' : 'border-gray-800'} rounded-2xl p-4 flex items-center animate-in slide-in-from-left-4 fade-in`}>
                         <div className={`p-3 rounded-xl mr-4 ${punch.type === 'IN' ? 'bg-green-500/20 text-green-400' : 'bg-orange-500/20 text-orange-400'}`}>
                            {punch.type === 'IN' ? <LogIn size={20}/> : <LogOut size={20}/>}
                         </div>
                         <div className="flex-1">
-                           <h4 className="text-white font-bold">{punch.name}</h4>
+                           <h4 className="text-white font-bold flex items-center">
+                               {punch.name} 
+                               {punch.isOffline && <span className="ml-2 text-[10px] bg-orange-600/30 text-orange-400 px-2 py-0.5 rounded-full">Queued</span>}
+                           </h4>
                            <p className="text-gray-400 text-xs">Punched {punch.type} • {punch.time.toLocaleTimeString()}</p>
                         </div>
                      </div>
@@ -547,8 +596,13 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                   </div>
                   <h2 className="text-3xl font-bold text-gray-800">{detectedWorker.worker.name}</h2>
                   <p className="text-xl font-medium text-gray-600 mt-2">
-                      {detectedWorker.action === 'IN' ? 'Check In' : 'Check Out'} Successful
+                      {detectedWorker.action === 'IN' ? 'Check In' : 'Check Out'} {detectedWorker.isOffline ? 'Queued' : 'Successful'}
                   </p>
+                  {detectedWorker.isOffline && (
+                      <p className="text-sm text-orange-600 font-bold mt-2 bg-orange-50 py-1 px-3 rounded-full inline-block">
+                          Offline Mode: Will sync automatically
+                      </p>
+                  )}
                   <div className="mt-6 flex items-center justify-center text-gray-400 text-sm">
                       <Clock size={16} className="mr-2"/> 
                       {new Date().toLocaleTimeString()}
@@ -578,19 +632,22 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                     maxLength={4} 
                     value={enteredPin} 
                     onChange={(e)=>setEnteredPin(e.target.value.replace(/\D/g, ''))}
-                    className="w-full text-center text-3xl tracking-widest p-4 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
+                    // UI Optimization: min-h-[56px] for touch
+                    className="w-full text-center text-3xl tracking-widest p-4 min-h-14 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
                     autoFocus
                  />
                  <div className="flex space-x-3">
                     <button 
                       onClick={() => { setShowExitPin(false); processingRef.current = false; setEnteredPin(''); }} 
-                      className="flex-1 p-3 bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors hover:bg-gray-300"
+                      // UI Optimization: min-h-[48px] for touch
+                      className="flex-1 p-3 min-h-12 bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors hover:bg-gray-300"
                     >
                       Cancel
                     </button>
                     <button 
                       onClick={submitExitPin} 
-                      className="flex-1 p-3 bg-red-600 text-white font-bold rounded-xl transition-colors hover:bg-red-700"
+                      // UI Optimization: min-h-[48px] for touch
+                      className="flex-1 p-3 min-h-12 bg-red-600 text-white font-bold rounded-xl transition-colors hover:bg-red-700"
                     >
                       Unlock
                     </button>

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight, MapPin } from 'lucide-react';
+import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight, MapPin, WifiOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
+import { syncService } from '../services/syncService';
 import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
 import { geoUtils } from '../utils/geo'; 
 
@@ -16,7 +17,15 @@ export const AttendanceScreen: React.FC = () => {
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
 
+  // Track offline status for the UI
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
   useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
@@ -35,13 +44,18 @@ export const AttendanceScreen: React.FC = () => {
           });
           setAttendanceMap(map);
         } catch (e) {
-          console.error(e);
+          console.error("Offline or Error fetching data", e);
         } finally {
           setLoading(false);
         }
       }
     };
     loadData();
+
+    return () => {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+    };
   }, [profile]);
 
   const handlePunch = async (worker: Worker, type: 'IN' | 'OUT') => {
@@ -77,39 +91,38 @@ export const AttendanceScreen: React.FC = () => {
 
         const existingRecord = attendanceMap[worker.id];
 
-        // --- FIXED: TS Error by extracting rawType before casting ---
         if (type === 'IN' && existingRecord?.status === 'ON_LEAVE' && existingRecord.leaveInfo?.isPaid) {
             const rawType = existingRecord.leaveInfo.type.toLowerCase();
             
             if (rawType !== 'lwp' && worker.leaveBalances) {
                 const lType = rawType as 'cl' | 'sl' | 'pl';
                 const currentBal = worker.leaveBalances[lType] ?? 0;
-                
-                // Refund 1 day back to the worker
                 const updatedBalances = { ...worker.leaveBalances, [lType]: currentBal + 1 };
-                await dbService.updateWorker(worker.id, { leaveBalances: updatedBalances });
                 
-                // Update local state so UI reflects the refund immediately
+                try {
+                    await dbService.updateWorker(worker.id, { leaveBalances: updatedBalances });
+                    await dbService.addNotification({
+                        tenantId: profile.tenantId, 
+                        title: "Leave Automatically Cancelled",
+                        message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
+                        type: 'INFO', 
+                        createdAt: new Date().toISOString(), 
+                        read: false
+                    });
+                } catch(e) {
+                    console.warn("Offline: Could not refund leave balance to server, but proceeding with punch.");
+                }
+                
                 setWorkers(prev => prev.map(w => w.id === worker.id ? { ...w, leaveBalances: updatedBalances } : w));
-
-                await dbService.addNotification({
-                    tenantId: profile.tenantId, 
-                    title: "Leave Automatically Cancelled",
-                    message: `${worker.name} punched in today, cancelling their scheduled ${lType.toUpperCase()} leave. 1 day refunded to balance.`,
-                    type: 'INFO', 
-                    createdAt: new Date().toISOString(), 
-                    read: false
-                });
             }
         }
-        // ----------------------------------
 
         let currentTimeline = existingRecord?.timeline || [];
         
         const newPunch = {
             timestamp: now.toISOString(),
             type: type,
-            device: 'Mobile App',
+            device: 'Mobile App (Admin)',
             location: currentLocation,
             isOutOfGeofence
         };
@@ -117,7 +130,13 @@ export const AttendanceScreen: React.FC = () => {
         const newTimeline = [...currentTimeline, newPunch];
 
         const shift = settings.shifts.find(s => s.id === worker.shiftId) || settings.shifts[0];
-        const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, worker.id);
+        
+        let lateCount = 0;
+        try {
+             lateCount = await dbService.getMonthlyLateCount(profile.tenantId, worker.id);
+        } catch (e) {
+             console.warn("Offline: Could not fetch late count");
+        }
 
         const baseRecord: AttendanceRecord = existingRecord || {
             id: recordId,
@@ -134,7 +153,6 @@ export const AttendanceScreen: React.FC = () => {
 
         baseRecord.timeline = newTimeline;
         
-        // Clear any previous leave info since they actually punched in
         if (baseRecord.leaveInfo) {
             delete baseRecord.leaveInfo;
         }
@@ -148,35 +166,52 @@ export const AttendanceScreen: React.FC = () => {
             settings
         );
 
-        await dbService.markAttendance(finalRecord);
+        let isOfflinePunch = false;
+        try {
+            await dbService.markAttendance(finalRecord);
+        } catch (dbError) {
+            console.warn("Network unreachable. Queuing manual punch offline...");
+            await syncService.savePunchOffline(finalRecord);
+            isOfflinePunch = true;
+        }
+
         setAttendanceMap(prev => ({ ...prev, [worker.id]: finalRecord }));
 
         if (isOutOfGeofence) {
-            await dbService.addNotification({
-                tenantId: profile.tenantId,
-                title: 'Geofence Violation Alert',
-                message: `${worker.name} punched ${type} outside the allowed factory radius.`,
-                type: 'WARNING',
-                createdAt: new Date().toISOString(),
-                read: false
-            });
-            alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
+            try {
+                await dbService.addNotification({
+                    tenantId: profile.tenantId,
+                    title: 'Geofence Violation Alert',
+                    message: `${worker.name} punched ${type} outside the allowed factory radius.`,
+                    type: 'WARNING',
+                    createdAt: new Date().toISOString(),
+                    read: false
+                });
+            } catch(e) { console.warn("Offline: Geofence notification not sent"); }
+            
+            if (!isOfflinePunch) alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
         }
 
         if (finalRecord.lateStatus.isLate && !existingRecord?.lateStatus?.isLate) {
-             await dbService.addNotification({
-                tenantId: profile.tenantId,
-                title: 'Late Arrival',
-                message: `${worker.name} checked in late today.`,
-                type: 'INFO',
-                createdAt: new Date().toISOString(),
-                read: false
-            });
+            try {
+                await dbService.addNotification({
+                    tenantId: profile.tenantId,
+                    title: 'Late Arrival',
+                    message: `${worker.name} checked in late today.`,
+                    type: 'INFO',
+                    createdAt: new Date().toISOString(),
+                    read: false
+                });
+            } catch(e) {}
+        }
+
+        if (isOfflinePunch) {
+            alert(`Queued Offline: ${worker.name} punched ${type}. It will sync automatically.`);
         }
 
     } catch (e) {
         console.error("Punch Error", e);
-        alert("Failed to update attendance");
+        alert("System Error: Failed to process punch");
     } finally {
         setActionLoading(null);
     }
@@ -207,7 +242,14 @@ export const AttendanceScreen: React.FC = () => {
           }
       };
 
-      await dbService.markAttendance(leaveRecord);
+      try {
+          await dbService.markAttendance(leaveRecord);
+      } catch (error) {
+          console.warn("Network unreachable. Queuing leave offline...");
+          await syncService.savePunchOffline(leaveRecord);
+          alert(`Queued Offline: Marked ${worker.name} on Leave. Will sync automatically.`);
+      }
+
       setAttendanceMap(prev => ({ ...prev, [worker.id]: leaveRecord }));
   };
 
@@ -230,7 +272,15 @@ export const AttendanceScreen: React.FC = () => {
     <div className="p-4 bg-gray-50 min-h-screen pb-24">
       <div className="flex justify-between items-center mb-6">
           <div>
-            <h2 className="text-xl font-bold text-gray-800">Manual Entry</h2>
+            <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                Manual Entry
+                {/* FIXED: Wrapped the icon in a span to hold the title attribute */}
+                {isOffline && (
+                    <span title="Offline Mode">
+                        <WifiOff size={16} className="ml-2 text-amber-500" />
+                    </span>
+                )}
+            </h2>
             <p className="text-xs text-gray-500">{new Date().toLocaleDateString('en-IN', {weekday: 'long', day:'numeric', month:'long'})}</p>
           </div>
           <div className="text-xs font-bold bg-white px-3 py-1 rounded-full shadow-sm text-gray-600">
@@ -333,17 +383,20 @@ export const AttendanceScreen: React.FC = () => {
                            ) : (
                                <div className="space-y-2 mt-3">
                                    {sortedTimeline.map((punch, idx) => {
-                                       const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN';
+                                       const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN' || punch.device.includes('Admin');
                                        return (
                                            <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100">
                                                 <div className="flex items-center flex-wrap gap-1">
                                                     <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
                                                     <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
                                                     {isRegulated && (
-                                                        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Regulated</span>
+                                                        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Admin</span>
                                                     )}
                                                     {punch.isOutOfGeofence && (
-                                                        <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" title="Outside Geofence">
+                                                        <span 
+                                                            className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" 
+                                                            title="Outside Geofence"
+                                                        >
                                                             <MapPin size={10} className="mr-0.5"/> Out of Zone
                                                         </span>
                                                     )}
@@ -381,7 +434,7 @@ export const AttendanceScreen: React.FC = () => {
                                 : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
                             }`}
                         >
-                             <LogOut size={14} className="mr-1.5"/> Check Out
+                             {actionLoading === worker.id ? <Loader2 className="animate-spin" size={14}/> : <><LogOut size={14} className="mr-1.5"/> Check Out</>}
                         </button>
                         
                         <button 
