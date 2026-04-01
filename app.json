@@ -1,12 +1,30 @@
 {
   "expo": {
+    "name": "Workforce",
+    "slug": "workforcepro",
+    "version": "1.0.0",
+    "description": "B2B workforce management and attendance tracking application.",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "android": {
+      "package": "com.workforceapp.app",
+      "versionCode": 1,
+      "targetSdkVersion": 34,
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_AUDIO"
+      ]
+    },
     "extra": {
       "eas": {
         "projectId": "398af4ba-4c88-4430-a3f9-0194721f6aea"
       }
-    },
-    "android": {
-      "package": "com.akshay2888.workforce"
     }
   }
 }

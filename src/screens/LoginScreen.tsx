@@ -63,7 +63,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
   return (
     // min-h-[100dvh] handles mobile browser toolbars correctly. 
     // overflow-y-auto ensures the form can scroll if the keyboard pushes it up.
-    <div className="min-h-[100dvh] bg-blue-600 flex flex-col items-center p-4 overflow-y-auto">
+    <div className="min-h-dvh bg-blue-600 flex flex-col items-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-8 my-auto shrink-0 mb-6 mt-6">
         <div className="text-center mb-8">
           <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${isKioskMode ? 'bg-purple-100' : 'bg-blue-100'}`}>
@@ -89,7 +89,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
                 maxLength={6}
                 required
                 // Mobile Optimization: p-4 ensures > 44px height for touch target
-                className="w-full text-center text-2xl tracking-widest p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none transition-all font-mono min-h-[56px]"
+                className="w-full text-center text-2xl tracking-widest p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none transition-all font-mono min-h-14"
                 placeholder="------"
                 value={pairingCode}
                 onChange={(e) => setPairingCode(e.target.value.replace(/\D/g, ''))} 
@@ -104,7 +104,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
                   <input
                     type="email"
                     required
-                    className="w-full pl-10 pr-4 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[48px]"
+                    className="w-full pl-10 pr-4 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-12"
                     placeholder="admin@company.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -116,7 +116,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
                 <div className="flex justify-between items-center mb-1">
                    <label className="block text-sm font-medium text-gray-700">Password</label>
                    {/* Mobile Optimization: Expanded touch area with p-2 and min-h-[44px] */}
-                   <button type="button" onClick={handleForgotPassword} disabled={resetLoading} className="text-xs text-blue-600 font-bold flex items-center min-h-[44px] px-2 -mr-2">
+                   <button type="button" onClick={handleForgotPassword} disabled={resetLoading} className="text-xs text-blue-600 font-bold flex items-center min-h-11 px-2 -mr-2">
                       {resetLoading ? 'Sending...' : 'Forgot Password?'}
                    </button>
                 </div>
@@ -125,7 +125,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
                   <input
                     type={showPassword ? "text" : "password"}
                     required
-                    className="w-full pl-10 pr-12 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[48px]"
+                    className="w-full pl-10 pr-12 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-12"
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -142,7 +142,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
           <button
             type="submit"
             disabled={loading}
-            className={`w-full min-h-[52px] text-white font-bold rounded-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center mt-2 ${
+            className={`w-full min-h-13 text-white font-bold rounded-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center mt-2 ${
               isKioskMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-gray-900 hover:bg-gray-800'
             }`}
           >
@@ -154,7 +154,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
           <div className="mt-6 pt-6 border-t border-gray-100 text-center flex flex-col items-center">
             <p className="text-gray-500 text-sm mb-1">Don't have a factory account?</p>
             {/* Mobile Optimization: Expanded touch area */}
-            <button onClick={onNavigateToRegister} className="text-blue-600 font-bold min-h-[44px] px-4 flex items-center">
+            <button onClick={onNavigateToRegister} className="text-blue-600 font-bold min-h-11 px-4 flex items-center">
               Register New Company
             </button>
           </div>
@@ -163,7 +163,7 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
 
       <button 
         onClick={() => { setIsKioskMode(!isKioskMode); setError(''); }}
-        className="text-white bg-white/20 hover:bg-white/30 px-6 min-h-[52px] rounded-xl font-bold transition-all flex items-center justify-center shadow-sm backdrop-blur-sm shrink-0 mb-6"
+        className="text-white bg-white/20 hover:bg-white/30 px-6 min-h-13 rounded-xl font-bold transition-all flex items-center justify-center shadow-sm backdrop-blur-sm shrink-0 mb-6"
       >
         {isKioskMode ? <LogIn size={18} className="mr-2"/> : <MonitorSmartphone size={18} className="mr-2"/>}
         {isKioskMode ? 'Return to Standard Login' : 'Login as Kiosk Terminal'}

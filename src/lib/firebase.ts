@@ -1,7 +1,7 @@
 // src/lib/firebase.ts
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentSingleTabManager } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -18,7 +18,8 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager() 
+    // Pass an empty object to satisfy the TypeScript definition
+    tabManager: persistentSingleTabManager({}) 
   })
 });
 export const storage = getStorage(app);
