@@ -7,7 +7,7 @@ import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { syncService } from '../services/syncService';
-import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
+import { Worker, AttendanceRecord, OrgSettings, Punch } from '../types/index';
 import { useBackButton } from '../hooks/useBackButton';
 import { geoUtils } from '../utils/geo';
 
@@ -59,7 +59,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   const activeTenantId = isDedicatedMode ? propsTenantId : profile?.tenantId;
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null); // PERFORMANCE FIX: Track the stream to stop it
+  const streamRef = useRef<MediaStream | null>(null);
   
   const processingRef = useRef(false); 
   const workersRef = useRef<Worker[]>([]);
@@ -87,7 +87,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   });
 
   const handleCleanExit = () => {
-      // PERFORMANCE FIX: Explicitly shut down hardware before exiting
       if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
       }
@@ -140,7 +139,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } })
       .then(stream => { 
-          streamRef.current = stream; // Save ref to stop later
+          streamRef.current = stream; 
           if(videoRef.current) videoRef.current.srcObject = stream; 
       })
       .catch(err => {
@@ -150,7 +149,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
       
     return () => {
         processingRef.current = false;
-        // PERFORMANCE FIX: Stop camera tracks on unmount to prevent memory leak
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
         }
@@ -160,9 +158,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   useEffect(() => {
     if (!modelsLoaded || showExitPin) return;
 
-    // PERFORMANCE FIX: Create canvas ONCE, outside the high-frequency loop
     const hiddenCanvas = document.createElement('canvas');
-    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true }); // Optimized for frequent reads
+    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true }); 
 
     const scanInterval = setInterval(async () => {
        if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || processingRef.current || workersRef.current.length === 0) {
@@ -171,7 +168,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
        try {
            if (ctx) {
-               // Reuse the single hidden canvas
                hiddenCanvas.width = videoRef.current.videoWidth;
                hiddenCanvas.height = videoRef.current.videoHeight;
                ctx.drawImage(videoRef.current, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
@@ -368,7 +364,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
             }
         }
 
-        let currentLocation: { lat: number; lng: number } | undefined;
+        let currentLocation: { lat: number; lng: number } | undefined = undefined;
         let isOutOfGeofence = false;
 
         if (navigator.geolocation) {
@@ -382,7 +378,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                 const branch = branches?.find(b => b.id === branchId) || branches?.[0];
                 const targetLoc = branch?.location || baseLocation;
                 
-                if (targetLoc) {
+                if (targetLoc && currentLocation) {
                     const dist = geoUtils.getDistanceInMeters(
                         currentLocation.lat, currentLocation.lng,
                         targetLoc.lat, targetLoc.lng
@@ -390,18 +386,25 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                     isOutOfGeofence = dist > (targetLoc.radius || 200);
                 }
             } catch (err) {
-                console.warn("Could not get location on Kiosk", err);
+                console.warn("Could not get location on Kiosk (Timeout/Denied). Skipping Geofence check.");
             }
         }
 
         const currentTimeline = existingRecord?.timeline || [];
-        const newTimeline = [...currentTimeline, { 
+        
+        // FIX: Construct the new punch, and conditionally add the location property 
+        // to avoid passing `undefined` to Firebase if Geolocation fails.
+        const newPunch: Punch = { 
             timestamp: now.toISOString(), 
             type: punchType, 
             device: `Kiosk (${method})`,
-            location: currentLocation,
             isOutOfGeofence 
-        }];
+        };
+        if (currentLocation) {
+            newPunch.location = currentLocation;
+        }
+
+        const newTimeline = [...currentTimeline, newPunch];
 
         const { shifts, enableBreakTracking } = settingsRef.current;
         const shift = shifts.find(s => s.id === worker.shiftId) || shifts[0];
@@ -432,12 +435,16 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
         const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking, worker, settingsRef.current);
 
+        // EXTRA FIX: Deep parse to instantly strip any remaining undefined properties 
+        // throughout the entire object before sending to Firestore
+        const cleanedRecord = JSON.parse(JSON.stringify(finalRecord));
+
         let isOfflinePunch = false;
         try {
-            await dbService.markAttendance(finalRecord);
+            await dbService.markAttendance(cleanedRecord);
         } catch (dbError) {
             console.warn("Network unreachable. Queuing punch offline...", dbError);
-            await syncService.savePunchOffline(finalRecord);
+            await syncService.savePunchOffline(cleanedRecord);
             isOfflinePunch = true;
         }
 
@@ -472,7 +479,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         setTimeout(() => {
             setDetectedWorker(null);
             processingRef.current = false; 
-            if (!isDedicatedMode) handleCleanExit(); // PERFORMANCE FIX: Clean exit
+            if (!isDedicatedMode) handleCleanExit();
         }, 2500);
 
     } catch (e: any) {
@@ -486,7 +493,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
   const submitExitPin = () => {
     if (enteredPin === adminPin) {
-      handleCleanExit(); // PERFORMANCE FIX: Clean exit
+      handleCleanExit(); 
     } else {
       alert("Incorrect PIN");
       setShowExitPin(false);
@@ -503,7 +510,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
               setShowExitPin(true);
               processingRef.current = true; 
             }}
-            // UI Optimization: expanded w-12 h-12 for touch
             className="absolute top-6 right-6 z-50 w-12 h-12 flex items-center justify-center rounded-full bg-black/20 text-white/30 hover:bg-black/50 hover:text-white/80 transition-all backdrop-blur-md border border-white/5"
           >
             <Lock size={20} />
@@ -515,7 +521,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
            <div className="bg-black/40 px-4 py-2 rounded-full text-white font-mono text-sm backdrop-blur-md">
                {new Date().toLocaleTimeString()}
            </div>
-           {/* UI Optimization: w-11 h-11 for touch */}
            <button onClick={handleCleanExit} className="bg-white/20 w-11 h-11 flex items-center justify-center rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
          </div>
        )}
@@ -632,21 +637,18 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                     maxLength={4} 
                     value={enteredPin} 
                     onChange={(e)=>setEnteredPin(e.target.value.replace(/\D/g, ''))}
-                    // UI Optimization: min-h-[56px] for touch
                     className="w-full text-center text-3xl tracking-widest p-4 min-h-14 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
                     autoFocus
                  />
                  <div className="flex space-x-3">
                     <button 
                       onClick={() => { setShowExitPin(false); processingRef.current = false; setEnteredPin(''); }} 
-                      // UI Optimization: min-h-[48px] for touch
                       className="flex-1 p-3 min-h-12 bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors hover:bg-gray-300"
                     >
                       Cancel
                     </button>
                     <button 
                       onClick={submitExitPin} 
-                      // UI Optimization: min-h-[48px] for touch
                       className="flex-1 p-3 min-h-12 bg-red-600 text-white font-bold rounded-xl transition-colors hover:bg-red-700"
                     >
                       Unlock

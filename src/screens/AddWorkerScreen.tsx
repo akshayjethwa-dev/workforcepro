@@ -277,10 +277,17 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         status: 'ACTIVE'
       };
 
-      // FIREBASE SAFETY: Remove undefined fields if the toggle is OFF
+      // FIREBASE SAFETY: Remove leaveBalances if the override toggle is OFF
       if (!isLeaveOverride) {
           delete workerData.leaveBalances;
       }
+      
+      // FIREBASE SAFETY: Clean up any undefined fields (like weeklyOffOverride or photoUrl) to prevent addDoc crashes
+      Object.keys(workerData).forEach(key => {
+        if (workerData[key] === undefined) {
+          delete workerData[key];
+        }
+      });
       
       if (isEditing && initialData?.id) {
           await dbService.updateWorker(initialData.id, workerData);

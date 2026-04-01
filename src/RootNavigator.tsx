@@ -22,8 +22,11 @@ import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
 import { useBackButton } from './hooks/useBackButton';
 
+// LEGAL & SUPPORT SCREENS
+import { TermsScreen } from './screens/TermsScreen';
+import { PrivacyScreen } from './screens/PrivacyScreen';
+
 export const RootNavigator: React.FC = () => {
-  // Added 'profile' here
   const { user, profile, loading } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
   const [isRegistering, setIsRegistering] = useState(false);
@@ -35,9 +38,7 @@ export const RootNavigator: React.FC = () => {
     return saved ? JSON.parse(saved) : null;
   });
 
-  // --- NEW: Redirect Super Admin on Login ---
   useEffect(() => {
-    // If user is logged in, profile is loaded, they are a super admin, and are sitting on the default dashboard
     if (user && profile && profile.role === 'SUPER_ADMIN' && currentScreen === 'DASHBOARD') {
       setCurrentScreen('SUPER_ADMIN_DASHBOARD');
     }
@@ -50,7 +51,6 @@ export const RootNavigator: React.FC = () => {
       return false; 
     }
     
-    // Allow super admin to default back to their dashboard, not the regular one
     const defaultScreen = profile?.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN_DASHBOARD' : 'DASHBOARD';
     
     if (currentScreen !== defaultScreen) {
@@ -133,14 +133,18 @@ export const RootNavigator: React.FC = () => {
       case 'SETTINGS': return <SettingsScreen />;
       case 'WORKER_HISTORY': return <WorkerHistoryScreen />;
       
-      // --- NEW: Route Protection ---
       case 'SUPER_ADMIN_DASHBOARD': 
         return profile?.role === 'SUPER_ADMIN' 
           ? <SuperAdminDashboard /> 
-          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />; // Fallback if regular user tries to access
+          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />; 
 
       case 'REPORTS': return <ReportsScreen />;
       case 'BILLING': return <BillingScreen />;
+      
+      // NEW LEGAL SCREENS
+      case 'TERMS': return <TermsScreen />;
+      case 'PRIVACY': return <PrivacyScreen />;
+      
       default: 
         return profile?.role === 'SUPER_ADMIN' 
           ? <SuperAdminDashboard /> 

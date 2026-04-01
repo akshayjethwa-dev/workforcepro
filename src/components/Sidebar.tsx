@@ -1,7 +1,7 @@
 // src/components/Sidebar.tsx
 import React from 'react';
 import { 
-  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard, PieChart, IdCard
+  X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, History, FileText, CreditCard, PieChart, IdCard, Headset, FileCheck
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ScreenName } from '../types/index';
@@ -14,16 +14,31 @@ interface Props {
 }
 
 export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout }) => {
-  const { profile, limits } = useAuth(); // Added limits
+  const { profile, limits } = useAuth();
   const isOwner = profile?.role === 'FACTORY_OWNER';
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
 
   const sidebarClass = `fixed inset-y-0 left-0 w-64 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out z-50 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`;
   const backdropClass = `fixed inset-0 bg-black/50 z-40 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`;
 
-  const MenuItem = ({ icon: Icon, label, screen }: { icon: any, label: string, screen: ScreenName }) => (
+  const handleSupportClick = () => {
+    // Replace with your actual WhatsApp support number
+    const adminPhone = "918460852903"; 
+    const message = encodeURIComponent(`Hello Workforce Support, I need some help regarding my organization (${profile?.companyName || 'Not Set'}).`);
+    window.open(`https://wa.me/${adminPhone}?text=${message}`, '_blank');
+    onClose();
+  };
+
+  const MenuItem = ({ icon: Icon, label, screen, onClick }: { icon: any, label: string, screen?: ScreenName, onClick?: () => void }) => (
     <button 
-      onClick={() => { onNavigate(screen); onClose(); }}
+      onClick={() => { 
+          if (onClick) {
+              onClick();
+          } else if (screen) {
+              onNavigate(screen); 
+              onClose(); 
+          }
+      }}
       className="flex items-center w-full p-4 hover:bg-gray-50 text-gray-700 transition-colors border-b border-gray-50"
     >
       <div className="bg-blue-50 p-2 rounded-lg text-blue-600 mr-3">
@@ -44,7 +59,6 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                   <User size={24} className="text-white"/>
                </div>
                <h2 className="font-bold text-lg leading-tight">{profile?.companyName || 'Super Admin'}</h2>
-               {/* FIXED: Bypassed TS error by casting to any, falling back to email if name is missing */}
                <p className="text-slate-400 text-xs mt-1">{(profile as any)?.name || profile?.email}</p>
             </div>
             <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded-full transition-colors">
@@ -52,7 +66,7 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
             </button>
         </div>
 
-        <div className="flex flex-col h-[calc(100%-180px)] overflow-y-auto">
+        <div className="flex flex-col h-[calc(100%-180px)] overflow-y-auto pb-6">
            {/* SUPER ADMIN MENU (Single Item) */}
            {isSuperAdmin ? (
              <>
@@ -93,6 +107,15 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout
                <MenuItem icon={User} label="My Profile" screen="DASHBOARD" />
              </>
            )}
+
+           {/* NEW: Support & Legal Section (Visible to both Super Admins & Regular Users) */}
+           <div className="px-4 py-2 bg-gray-50 text-xs font-bold text-gray-400 uppercase tracking-wider mt-2 border-t border-gray-100">
+              Support & Legal
+           </div>
+           <MenuItem icon={Headset} label="WhatsApp Support" onClick={handleSupportClick} />
+           <MenuItem icon={FileCheck} label="Terms & Conditions" screen="TERMS" />
+           <MenuItem icon={Shield} label="Privacy Policy" screen="PRIVACY" />
+
         </div>
 
         <div className="absolute bottom-0 w-full p-4 border-t border-gray-100 bg-white">

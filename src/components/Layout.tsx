@@ -14,21 +14,18 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavigate, onLogout }) => {
-  // Pull impersonation variables alongside existing ones
   const { profile, tenantPlan, trialDaysLeft, isImpersonating, stopImpersonating } = useAuth();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   
-  // Determine if the current user is a Super Admin
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
 
   useEffect(() => {
-    // Only fetch notifications if they have a tenantId AND are not a Super Admin
     if (profile?.tenantId && !isSuperAdmin) {
       dbService.getNotifications(profile.tenantId).then(setNotifications);
     }
-  }, [profile, showNotifications, isSuperAdmin]); // Refresh when dropdown opens
+  }, [profile, showNotifications, isSuperAdmin]); 
 
   if (currentScreen === 'LOGIN') {
     return <div className="min-h-screen bg-gray-50">{children}</div>;
@@ -45,13 +42,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
 
   const handleClearAll = async () => {
     if (!profile?.tenantId) return;
-    
     setNotifications([]);
-    
     try {
       await dbService.deleteAllNotifications(profile.tenantId);
     } catch (error) {
-      console.error("Failed to clear notifications from database", error);
+      console.error("Failed to clear notifications", error);
     }
   };
 
@@ -80,7 +75,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onLogout={onLogout}
       />
 
-      {/* --- NEW: IMPERSONATION WARNING BANNER --- */}
       {isImpersonating && (
         <div className="bg-red-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between z-50">
             <div className="flex items-center">
@@ -98,7 +92,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       )}
 
-      {/* --- TRIAL BANNER (Hidden for Super Admins and during Impersonation) --- */}
       {tenantPlan === 'TRIAL' && trialDaysLeft !== null && !isSuperAdmin && !isImpersonating && (
         <div 
             onClick={() => onNavigate('BILLING')}
@@ -112,7 +105,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       )}
 
-      {/* Header */}
       <header className="bg-blue-600 text-white p-4 shadow-md z-10 sticky top-0">
         <div className="flex justify-between items-center relative">
           <div className="flex items-center">
@@ -122,13 +114,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
             <div className="ml-2">
               <h1 className="text-lg font-bold tracking-tight">WorkForce</h1>
               <p className="text-blue-100 text-[10px] uppercase tracking-wide">
-                {/* Dynamically change header text for Super Admin */}
                 {isSuperAdmin ? 'System Administrator' : (profile?.companyName || 'Factory Admin')}
               </p>
             </div>
           </div>
 
-          {/* Notifications Bell (Hidden for Super Admin) */}
           {!isSuperAdmin && (
             <button 
               onClick={() => setShowNotifications(!showNotifications)} 
@@ -141,7 +131,6 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
             </button>
           )}
 
-          {/* Notifications Dropdown (Hidden for Super Admin) */}
           {showNotifications && !isSuperAdmin && (
             <div className="absolute top-12 right-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden z-50 text-gray-800">
               
@@ -187,12 +176,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       </header>
 
-      {/* Adjust padding dynamically depending on if the bottom nav is rendered */}
       <main className={`flex-1 overflow-y-auto ${isSuperAdmin ? 'pb-6' : 'pb-20'} scroll-smooth`}>
         {children}
       </main>
 
-      {/* Bottom Navigation (Hidden for Super Admin) */}
       {!isSuperAdmin && (
         <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-safe z-30">
           <div className="flex justify-around items-center h-16">
