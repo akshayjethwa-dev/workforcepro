@@ -8,7 +8,8 @@
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:mobile": "vite build && npx cap sync"
+    "build:mobile": "vite build && npx cap sync",
+    "eas-build-pre-install": "sudo apt-get update && sudo apt-get install -y openjdk-21-jdk"
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",

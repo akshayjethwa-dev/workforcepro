@@ -375,5 +375,68 @@ export const dbService = {
 
   savePayroll: async (payroll: MonthlyPayroll) => {
     await setDoc(doc(db, "payrolls", payroll.id), payroll, { merge: true });
+  },
+
+  // --- NEW: DELETE TENANT ACCOUNT ---
+  deleteTenantAccount: async (tenantId: string, ownerUid: string) => {
+    if (!tenantId || !ownerUid) throw new Error("Missing credentials for deletion.");
+
+    try {
+      // 1. Delete all workers
+      const workersQ = query(collection(db, "workers"), where("tenantId", "==", tenantId));
+      const workersSnap = await getDocs(workersQ);
+      const workerDeletes = workersSnap.docs.map(d => deleteDoc(doc(db, "workers", d.id)));
+      await Promise.all(workerDeletes);
+
+      // 2. Delete all attendance records
+      const attendanceQ = query(collection(db, "attendance"), where("tenantId", "==", tenantId));
+      const attendanceSnap = await getDocs(attendanceQ);
+      const attendanceDeletes = attendanceSnap.docs.map(d => deleteDoc(doc(db, "attendance", d.id)));
+      await Promise.all(attendanceDeletes);
+
+      // 3. Delete all payrolls
+      const payrollsQ = query(collection(db, "payrolls"), where("tenantId", "==", tenantId));
+      const payrollsSnap = await getDocs(payrollsQ);
+      const payrollDeletes = payrollsSnap.docs.map(d => deleteDoc(doc(db, "payrolls", d.id)));
+      await Promise.all(payrollDeletes);
+
+      // 4. Delete all advances
+      const advancesQ = query(collection(db, "advances"), where("tenantId", "==", tenantId));
+      const advancesSnap = await getDocs(advancesQ);
+      const advanceDeletes = advancesSnap.docs.map(d => deleteDoc(doc(db, "advances", d.id)));
+      await Promise.all(advanceDeletes);
+
+      // 5. Delete all kiosks
+      const kiosksQ = query(collection(db, "kiosks"), where("tenantId", "==", tenantId));
+      const kiosksSnap = await getDocs(kiosksQ);
+      const kioskDeletes = kiosksSnap.docs.map(d => deleteDoc(doc(db, "kiosks", d.id)));
+      await Promise.all(kioskDeletes);
+
+      // 6. Delete all notifications
+      const notifQ = query(collection(db, "notifications"), where("tenantId", "==", tenantId));
+      const notifSnap = await getDocs(notifQ);
+      const notifDeletes = notifSnap.docs.map(d => deleteDoc(doc(db, "notifications", d.id)));
+      await Promise.all(notifDeletes);
+
+      // 7. Unlink all supervisors associated with this tenant
+      const usersQ = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "==", "SUPERVISOR"));
+      const usersSnap = await getDocs(usersQ);
+      const supervisorUnlinks = usersSnap.docs.map(d => updateDoc(doc(db, "users", d.id), { tenantId: null, role: null }));
+      await Promise.all(supervisorUnlinks);
+
+      // 8. Delete Tenant Settings
+      await deleteDoc(doc(db, "settings", tenantId));
+
+      // 9. Delete the Tenant record itself
+      await deleteDoc(doc(db, "tenants", tenantId));
+
+      // 10. Finally, delete the Owner User record (Firebase Auth user must be deleted from client side via auth.currentUser.delete())
+      await deleteDoc(doc(db, "users", ownerUid));
+
+      return true;
+    } catch (error) {
+      console.error("Critical error during tenant deletion:", error);
+      throw error;
+    }
   }
 };
