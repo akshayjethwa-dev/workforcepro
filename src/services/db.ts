@@ -3,7 +3,6 @@ import {
   collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
-// ADDED DEFAULT_PLAN_CONFIG to the imports
 import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, DEFAULT_PLAN_CONFIG } from "../types/index";
 
 const getWorkersRef = () => collection(db, "workers");
@@ -14,7 +13,6 @@ export const dbService = {
   
   // --- SUPER ADMIN METHODS ---
 
-  // NEW: Fetch Global Plans from Firestore
   getGlobalPlanConfig: async (): Promise<Record<SubscriptionTier, PlanLimits>> => {
     try {
       const docRef = doc(db, "system_settings", "plan_config");
@@ -22,7 +20,6 @@ export const dbService = {
       if (snap.exists()) {
         return snap.data() as Record<SubscriptionTier, PlanLimits>;
       }
-      // If no config exists yet, return the hardcoded defaults
       return DEFAULT_PLAN_CONFIG;
     } catch (error) {
       console.error("Failed to fetch global plans, falling back to default", error);
@@ -30,10 +27,8 @@ export const dbService = {
     }
   },
 
-  // NEW: Save Global Plans to Firestore
   updateGlobalPlanConfig: async (config: Record<SubscriptionTier, PlanLimits>) => {
     const docRef = doc(db, "system_settings", "plan_config");
-    // merge: true ensures we don't accidentally wipe out other settings if we expand this document later
     await setDoc(docRef, config, { merge: true });
   },
 
@@ -47,14 +42,13 @@ export const dbService = {
         const workersQ = query(collection(db, "workers"), where("tenantId", "==", data.tenantId));
         const workersSnap = await getDocs(workersQ);
         
-        // NEW: Fetch the actual plan and overrides from the tenant's document
         let plan = 'FREE';
         let overrides = {};
         if (data.tenantId) {
             const tenantDoc = await getDoc(doc(db, 'tenants', data.tenantId));
             if (tenantDoc.exists()) {
                 plan = tenantDoc.data().plan || 'FREE';
-                overrides = tenantDoc.data().overrides || {}; // NEW: Fetch overrides
+                overrides = tenantDoc.data().overrides || {};
             }
         }
         
@@ -64,8 +58,8 @@ export const dbService = {
           workerCount: workersSnap.size,
           isActive: data.isActive !== false, 
           joinedAt: data.createdAt || new Date().toISOString(),
-          plan: plan, // Append plan to the returned object
-          overrides: overrides // NEW: Append overrides to the returned object
+          plan: plan, 
+          overrides: overrides 
         };
       }));
       
@@ -87,13 +81,11 @@ export const dbService = {
     return true;
   },
 
-  // Update Tenant Plan in the database
   updateTenantPlan: async (tenantId: string, plan: SubscriptionTier) => {
     const tenantRef = doc(db, 'tenants', tenantId);
     await updateDoc(tenantRef, { plan });
   },
 
-  // NEW: Update Custom Overrides
   updateTenantOverrides: async (tenantId: string, overrides: Partial<PlanLimits>) => {
     const tenantRef = doc(db, 'tenants', tenantId);
     await updateDoc(tenantRef, { overrides });
@@ -347,7 +339,8 @@ export const dbService = {
   },
 
   addKioskTerminal: async (terminal: any) => {
-    await addDoc(collection(db, "kiosks"), terminal);
+    // SECURITY FIX: Save the document using the exact 6-digit code as the Document ID
+    await setDoc(doc(db, "kiosks", terminal.pairingCode), terminal);
   },
 
   deleteKioskTerminal: async (id: string) => {
@@ -355,10 +348,12 @@ export const dbService = {
   },
 
   verifyKioskPairingCode: async (code: string): Promise<any | null> => {
-    const q = query(collection(db, "kiosks"), where("pairingCode", "==", code));
-    const snapshot = await getDocs(q);
-    if (snapshot.empty) return null;
-    return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+    // SECURITY FIX: Direct lookup by Document ID instead of querying a collection
+    const docRef = doc(db, "kiosks", code);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) return null;
+    return { id: docSnap.id, ...docSnap.data() };
   },
 
   // --- PAYROLL METHODS ---
@@ -430,7 +425,7 @@ export const dbService = {
       // 9. Delete the Tenant record itself
       await deleteDoc(doc(db, "tenants", tenantId));
 
-      // 10. Finally, delete the Owner User record (Firebase Auth user must be deleted from client side via auth.currentUser.delete())
+      // 10. Finally, delete the Owner User record
       await deleteDoc(doc(db, "users", ownerUid));
 
       return true;

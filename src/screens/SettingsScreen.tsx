@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { OrgSettings, ShiftConfig, Branch, KioskTerminal } from '../types/index';
 
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 export const SettingsScreen: React.FC = () => {
@@ -86,7 +86,25 @@ export const SettingsScreen: React.FC = () => {
     try {
       const pairingCode = Math.floor(100000 + Math.random() * 900000).toString();
       
-      const newKiosk = {
+      // 1. We use setDoc to force the Document ID to be the pairingCode
+      //    This perfectly satisfies the "match /kiosks/{pairingCode}" rule.
+      const kioskDocRef = doc(db, 'kiosks', pairingCode);
+      
+      // 2. We explicitly pass tenantId so your "hasRole" rule passes!
+      await setDoc(kioskDocRef, {
+         tenantId: profile.tenantId, 
+         createdBy: profile.uid || 'unknown',
+         branchId: 'default',
+         name: newTerminalName,
+         pairingCode,
+         adminPin: newTerminalPin,
+         status: 'pending',
+         createdAt: serverTimestamp()
+      });
+
+      // Update UI state locally to avoid an extra database read
+      const newKioskLocal: KioskTerminal = {
+         id: pairingCode, 
          tenantId: profile.tenantId,
          branchId: 'default',
          name: newTerminalName,
@@ -95,15 +113,18 @@ export const SettingsScreen: React.FC = () => {
          createdAt: new Date().toISOString()
       };
       
-      await dbService.addKioskTerminal(newKiosk);
-      setTerminals(await dbService.getKioskTerminals(profile.tenantId));
+      setTerminals([...terminals, newKioskLocal]);
       
       setNewTerminalName('');
       setNewTerminalPin('');
       setMessage({ type: 'success', text: `Terminal paired! Code: ${pairingCode}`});
-    } catch (e) {
-      console.error(e);
-      setMessage({ type: 'error', text: 'Failed to generate terminal code.'});
+    } catch (e: any) {
+      console.error("Firebase Error: ", e);
+      if (e.code === 'permission-denied') {
+         setMessage({ type: 'error', text: 'Permission Denied: Database rules blocked this. Check role/tenantId.'});
+      } else {
+         setMessage({ type: 'error', text: 'Failed to generate terminal code.'});
+      }
     } finally {
       setSaving(false);
       setTimeout(() => setMessage(null), 8000); 
@@ -114,10 +135,11 @@ export const SettingsScreen: React.FC = () => {
     if (window.confirm("Revoke this terminal's access? The kiosk will no longer be able to punch workers.")) {
       setSaving(true);
       try {
-        await dbService.deleteKioskTerminal(id);
+        // Direct Firestore call mapping to the exact pairingCode ID
+        await deleteDoc(doc(db, 'kiosks', id));
         setTerminals(terminals.filter(t => t.id !== id));
-      } catch (e) {
-        console.error(e);
+      } catch (e: any) {
+        console.error("Delete Error: ", e);
         setMessage({ type: 'error', text: 'Failed to delete terminal.'});
       } finally {
         setSaving(false);
