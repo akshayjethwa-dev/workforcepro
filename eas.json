@@ -12,6 +12,7 @@
       "distribution": "internal"
     },
     "production": {
+      "node": "22.x", 
       "autoIncrement": true,
       "android": {
         "image": "latest",
