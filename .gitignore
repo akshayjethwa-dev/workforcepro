@@ -25,3 +25,4 @@ dist-ssr
 functions/.env
 functions/.env.*
 .env
+.env.production

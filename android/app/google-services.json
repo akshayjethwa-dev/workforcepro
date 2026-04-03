@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "555067537482",
+    "project_id": "workforcepro-saas",
+    "storage_bucket": "workforcepro-saas.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:555067537482:android:3d4071acc7b3f9be7e4eb3",
+        "android_client_info": {
+          "package_name": "com.WorkForcePro"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDnVAArL8pWZf4FO1s_Rr0t2-odJHBRNmw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:555067537482:android:c2cab9b1a9d4291e7e4eb3",
+        "android_client_info": {
+          "package_name": "com.workforceapp.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDnVAArL8pWZf4FO1s_Rr0t2-odJHBRNmw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

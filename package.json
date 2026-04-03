@@ -1,7 +1,7 @@
 {
   "name": "workforce",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",
+    "@capacitor/camera": "^8.0.2",
     "@capacitor/cli": "^8.2.0",
     "@capacitor/core": "^8.2.0",
     "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "^8.2.0",
     "@vladmandic/human": "^3.3.6",
     "firebase": "^12.9.0",
