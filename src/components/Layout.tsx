@@ -65,13 +65,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
     );
   };
 
-  // Determine which banner is at the top to apply safe area padding dynamically
   const showImpersonationBanner = Boolean(isImpersonating);
   const showTrialBanner = Boolean(tenantPlan === 'TRIAL' && trialDaysLeft !== null && !isSuperAdmin && !isImpersonating);
   const headerIsTopmost = !showImpersonationBanner && !showTrialBanner;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
+    // FIXED: Changed min-h-screen to h-[100dvh] and removed fixed positioned elements
+    <div className="h-[100dvh] bg-gray-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
       
       <Sidebar 
         isOpen={isSidebarOpen} 
@@ -80,8 +80,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onLogout={onLogout}
       />
 
+      {/* TOP BANNERS: flex-shrink-0 ensures they never compress */}
       {showImpersonationBanner && (
-        <div className="bg-red-600 text-white text-[11px] font-bold px-4 pb-2 pt-[calc(env(safe-area-inset-top,0px)+0.5rem)] flex items-center justify-between z-50">
+        <div className="bg-red-600 flex-shrink-0 text-white text-[11px] font-bold px-4 pb-2 pt-[calc(env(safe-area-inset-top,0px)+0.5rem)] flex items-center justify-between z-50">
             <div className="flex items-center">
                 ⚠️ Impersonating: {profile?.companyName}
             </div>
@@ -100,7 +101,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
       {showTrialBanner && (
         <div 
             onClick={() => onNavigate('BILLING')}
-            className={`bg-indigo-600 text-white text-[11px] font-bold px-4 pb-2 ${!showImpersonationBanner ? 'pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]' : 'pt-2'} flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20`}
+            className={`bg-indigo-600 flex-shrink-0 text-white text-[11px] font-bold px-4 pb-2 ${!showImpersonationBanner ? 'pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]' : 'pt-2'} flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20`}
         >
             <div className="flex items-center">
                 <Zap size={14} className="mr-1.5 text-yellow-300 fill-current"/>
@@ -110,7 +111,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       )}
 
-      <header className={`bg-blue-600 text-white px-4 pb-4 ${headerIsTopmost ? 'pt-[calc(env(safe-area-inset-top,0px)+1rem)]' : 'pt-4'} shadow-md z-10 sticky top-0`}>
+      {/* HEADER: flex-shrink-0 and removed 'sticky top-0' because the flex column naturally handles it */}
+      <header className={`bg-blue-600 flex-shrink-0 text-white px-4 pb-4 ${headerIsTopmost ? 'pt-[calc(env(safe-area-inset-top,0px)+1rem)]' : 'pt-4'} shadow-md z-10`}>
         <div className="flex justify-between items-center relative">
           <div className="flex items-center">
             <button onClick={() => setSidebarOpen(true)} className="p-2 -ml-2 hover:bg-blue-700 rounded-full transition-colors">
@@ -138,15 +140,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
 
           {showNotifications && !isSuperAdmin && (
             <div className="absolute top-12 right-0 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden z-50 text-gray-800">
-              
               <div className="flex justify-between items-center p-3 border-b border-gray-100 bg-gray-50">
                 <span className="font-bold text-sm">Notifications</span>
                 <div className="flex items-center space-x-3">
                   {notifications.length > 0 && (
-                    <button 
-                      onClick={handleClearAll} 
-                      className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors"
-                    >
+                    <button onClick={handleClearAll} className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors">
                       Clear All
                     </button>
                   )}
@@ -155,23 +153,17 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   </button>
                 </div>
               </div>
-
               <div className="max-h-72 overflow-y-auto">
                 {notifications.length === 0 ? (
                   <p className="text-center text-xs text-gray-400 py-4">No new notifications</p>
                 ) : (
                   notifications.map(n => (
-                    <div 
-                      key={n.id} 
-                      onClick={() => handleNotificationClick(n)}
-                      className={`p-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${!n.read ? 'bg-blue-50/30' : ''}`}
-                    >
+                    <div key={n.id} onClick={() => handleNotificationClick(n)} className={`p-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${!n.read ? 'bg-blue-50/30' : ''}`}>
                       <div className="flex items-start justify-between">
                         <h4 className={`text-xs font-bold ${n.type === 'WARNING' ? 'text-red-600' : 'text-gray-800'}`}>{n.title}</h4>
                         {!n.read && <span className="w-2 h-2 bg-blue-500 rounded-full mt-1"></span>}
                       </div>
                       <p className="text-[10px] text-gray-600 mt-1">{n.message}</p>
-                      <p className="text-[9px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
                     </div>
                   ))
                 )}
@@ -181,12 +173,16 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       </header>
 
-      <main className={`flex-1 overflow-y-auto ${isSuperAdmin ? 'pb-6' : 'pb-[calc(5rem+env(safe-area-inset-bottom,0px))]'} scroll-smooth`}>
-        {children}
+      {/* MAIN CONTENT: flex-1 takes up exact remaining space. Overflows internally. */}
+      <main className="flex-1 overflow-y-auto scroll-smooth w-full relative">
+        <div className="pb-4">
+          {children}
+        </div>
       </main>
 
+      {/* BOTTOM NAV: Removed fixed positioning. Sits safely at the bottom of the flex column. */}
       {!isSuperAdmin && (
-        <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-[env(safe-area-inset-bottom,0px)] z-30">
+        <nav className="bg-white border-t flex-shrink-0 border-gray-200 w-full pb-[env(safe-area-inset-bottom,0px)] z-30">
           <div className="flex justify-around items-center h-16">
             <NavItem screen="DASHBOARD" icon={Home} label="Home" />
             <NavItem screen="WORKERS" icon={Users} label="Workers" />
