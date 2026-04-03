@@ -10,6 +10,9 @@ const config: CapacitorConfig = {
       backgroundColor: "#ffffff",
       androidSplashResourceName: "splash",
       androidScaleType: "CENTER_CROP",
+    },
+    CapacitorUpdater: {
+      autoUpdate: true, // Allows Capgo to automatically download and apply updates
     }
   }
 };

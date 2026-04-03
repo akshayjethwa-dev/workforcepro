@@ -65,6 +65,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
     );
   };
 
+  // Determine which banner is at the top to apply safe area padding dynamically
+  const showImpersonationBanner = Boolean(isImpersonating);
+  const showTrialBanner = Boolean(tenantPlan === 'TRIAL' && trialDaysLeft !== null && !isSuperAdmin && !isImpersonating);
+  const headerIsTopmost = !showImpersonationBanner && !showTrialBanner;
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col max-w-md mx-auto shadow-2xl overflow-hidden relative">
       
@@ -75,8 +80,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onLogout={onLogout}
       />
 
-      {isImpersonating && (
-        <div className="bg-red-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between z-50">
+      {showImpersonationBanner && (
+        <div className="bg-red-600 text-white text-[11px] font-bold px-4 pb-2 pt-[calc(env(safe-area-inset-top,0px)+0.5rem)] flex items-center justify-between z-50">
             <div className="flex items-center">
                 ⚠️ Impersonating: {profile?.companyName}
             </div>
@@ -92,10 +97,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       )}
 
-      {tenantPlan === 'TRIAL' && trialDaysLeft !== null && !isSuperAdmin && !isImpersonating && (
+      {showTrialBanner && (
         <div 
             onClick={() => onNavigate('BILLING')}
-            className="bg-indigo-600 text-white text-[11px] font-bold px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20"
+            className={`bg-indigo-600 text-white text-[11px] font-bold px-4 pb-2 ${!showImpersonationBanner ? 'pt-[calc(env(safe-area-inset-top,0px)+0.5rem)]' : 'pt-2'} flex items-center justify-between cursor-pointer hover:bg-indigo-700 transition-colors z-20`}
         >
             <div className="flex items-center">
                 <Zap size={14} className="mr-1.5 text-yellow-300 fill-current"/>
@@ -105,7 +110,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       )}
 
-      <header className="bg-blue-600 text-white p-4 shadow-md z-10 sticky top-0">
+      <header className={`bg-blue-600 text-white px-4 pb-4 ${headerIsTopmost ? 'pt-[calc(env(safe-area-inset-top,0px)+1rem)]' : 'pt-4'} shadow-md z-10 sticky top-0`}>
         <div className="flex justify-between items-center relative">
           <div className="flex items-center">
             <button onClick={() => setSidebarOpen(true)} className="p-2 -ml-2 hover:bg-blue-700 rounded-full transition-colors">
@@ -176,12 +181,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         </div>
       </header>
 
-      <main className={`flex-1 overflow-y-auto ${isSuperAdmin ? 'pb-6' : 'pb-20'} scroll-smooth`}>
+      <main className={`flex-1 overflow-y-auto ${isSuperAdmin ? 'pb-6' : 'pb-[calc(5rem+env(safe-area-inset-bottom,0px))]'} scroll-smooth`}>
         {children}
       </main>
 
       {!isSuperAdmin && (
-        <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-safe z-30">
+        <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-[env(safe-area-inset-bottom,0px)] z-30">
           <div className="flex justify-around items-center h-16">
             <NavItem screen="DASHBOARD" icon={Home} label="Home" />
             <NavItem screen="WORKERS" icon={Users} label="Workers" />

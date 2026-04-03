@@ -9,7 +9,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:mobile": "vite build && npx cap sync",
-    "eas-build-pre-install": "sudo apt-get update && sudo apt-get install -y openjdk-21-jdk"
+    "eas-build-pre-install": "sudo apt-get update && sudo apt-get install -y openjdk-21-jdk",
+    "capgo:login": "npx @capgo/cli login",
+    "capgo:init": "npx @capgo/cli init",
+    "capgo:upload": "npm run build && npx @capgo/cli upload -a"
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",
@@ -19,6 +22,7 @@
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "^8.2.0",
+    "@capgo/capacitor-updater": "^8.45.1",
     "@vladmandic/human": "^3.3.6",
     "firebase": "^12.9.0",
     "jsqr": "^1.4.0",
@@ -30,9 +34,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@capgo/cli": "^7.88.9",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.24",
     "postcss": "^8.5.6",

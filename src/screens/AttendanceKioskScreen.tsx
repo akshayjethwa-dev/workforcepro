@@ -392,8 +392,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
         const currentTimeline = existingRecord?.timeline || [];
         
-        // FIX: Construct the new punch, and conditionally add the location property 
-        // to avoid passing `undefined` to Firebase if Geolocation fails.
         const newPunch: Punch = { 
             timestamp: now.toISOString(), 
             type: punchType, 
@@ -435,8 +433,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
         const finalRecord = attendanceLogic.processDailyStatus(baseRecord, shift, lateCount, enableBreakTracking, worker, settingsRef.current);
 
-        // EXTRA FIX: Deep parse to instantly strip any remaining undefined properties 
-        // throughout the entire object before sending to Firestore
         const cleanedRecord = JSON.parse(JSON.stringify(finalRecord));
 
         let isOfflinePunch = false;
@@ -525,7 +521,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
          </div>
        )}
 
-      <div className={`relative h-1/2 md:h-full bg-gray-900 border-b md:border-b-0 md:border-r border-white/10 ${isDedicatedMode ? 'w-full md:w-2/3' : 'w-full'}`}>
+      {/* UPDATED: Dynamic height logic based on isDedicatedMode */}
+      <div className={`relative bg-gray-900 ${isDedicatedMode ? 'h-1/2 md:h-full w-full md:w-2/3 border-b md:border-b-0 md:border-r border-white/10' : 'h-full w-full'}`}>
          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
          
          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
