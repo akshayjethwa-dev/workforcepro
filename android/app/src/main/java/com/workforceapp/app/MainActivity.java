@@ -1,17 +1,19 @@
 package com.workforceapp.app;
 
 import android.os.Bundle;
-import androidx.activity.EdgeToEdge;
+import android.view.Window;
+import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        // Fixes the Android 15 Edge-to-Edge warning for Google Play
-        EdgeToEdge.enable(this);
-        super.onCreate(savedInstanceState);
+    protected void onCreate(Bundle savedInstanceState) {
+        // 🔑 KEY FIX: Must be called BEFORE super.onCreate()
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
         
-        // BULLETPROOF FIX: Forcibly hide the Android native action bar
+        super.onCreate(savedInstanceState);
+
+        // Hide action bar if it exists
         if (getSupportActionBar() != null) {
             getSupportActionBar().hide();
         }
