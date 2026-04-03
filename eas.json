@@ -9,8 +9,15 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "image": "latest",
+        "env": {
+          "JAVA_HOME": "/usr/lib/jvm/java-21-openjdk-amd64"
+        }
+      }
     },
+
     "production": {
       "node": "24.12.0", 
       "autoIncrement": true,
