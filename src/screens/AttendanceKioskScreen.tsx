@@ -109,10 +109,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
             
             const targetBranch = branchId || 'default';
 
+            // CRITICAL FIX: Properly parse Firestore objects back to standard Arrays
             const validWorkers = w.map(worker => {
                 let fd = worker.faceDescriptor;
+                // If Firestore saved the Float32Array as an Object, map it back to an Array of numbers
                 if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
-                    fd = Object.values(fd) as number[];
+                    fd = Object.values(fd).map(Number) as number[];
                 }
                 return { ...worker, faceDescriptor: fd };
             }).filter(worker => 
@@ -121,7 +123,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
                  (worker.branchId || 'default') === targetBranch
             );
             
-            workersRef.current = w.filter(worker => (worker.branchId || 'default') === targetBranch);
+            // CRITICAL FIX: Assign the parsed validWorkers, NOT the raw 'w' variable!
+            workersRef.current = validWorkers;
             settingsRef.current = settings; 
             
             if (workersRef.current.length === 0) {
@@ -521,7 +524,6 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
          </div>
        )}
 
-      {/* UPDATED: Dynamic height logic based on isDedicatedMode */}
       <div className={`relative bg-gray-900 ${isDedicatedMode ? 'h-1/2 md:h-full w-full md:w-2/3 border-b md:border-b-0 md:border-r border-white/10' : 'h-full w-full'}`}>
          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
          

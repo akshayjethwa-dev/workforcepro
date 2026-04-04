@@ -1,19 +1,25 @@
 @import "tailwindcss";
 
-body {
-  /* Disable text selection */
-  -webkit-touch-callout: none; 
-  -webkit-user-select: none; 
-  -khtml-user-select: none; 
-  -moz-user-select: none; 
-  -ms-user-select: none; 
-  user-select: none; 
-
-  /* Disable the blue tap highlight on buttons and links */
-  -webkit-tap-highlight-color: transparent; 
+/* Safe area CSS variables for Capacitor / Android edge-to-edge */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
 }
 
-/* Allow text selection only inside input fields and textareas */
+body {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  margin: 0;
+  padding: 0;
+}
+
 input, textarea {
   -webkit-user-select: auto;
   user-select: auto;

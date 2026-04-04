@@ -2,23 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- viewport-fit=cover is CRITICAL for env(safe-area-inset-*) to work -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
-    <title>WorkForce</title>
-    
+    <title>WorkForce Pro</title>
+
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WorkForce" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
     <link rel="manifest" href="/manifest.json" />
-    
+
     <style>
-      body {
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #2563eb;
         -webkit-tap-highlight-color: transparent;
-        background-color: #f3f4f6;
       }
-      .hide-scrollbar::-webkit-scrollbar {
-        display: none;
-      }
-      .hide-scrollbar {
-        -ms-overflow-style: none;
-        scrollbar-width: none;
-      }
+      .hide-scrollbar::-webkit-scrollbar { display: none; }
+      .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
   <script type="importmap">
     {
@@ -31,7 +35,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/src/index.css"> 
+  <link rel="stylesheet" href="/src/index.css">
   </head>
   <body>
     <div id="root"></div>
