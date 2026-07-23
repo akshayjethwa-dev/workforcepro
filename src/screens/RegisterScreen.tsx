@@ -4,7 +4,7 @@ import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
-import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff, X } from 'lucide-react';
+import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff, X, Building2 } from 'lucide-react';
 
 interface Props {
   onNavigateToLogin: () => void;
@@ -37,7 +37,8 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
     e.preventDefault();
     setError('');
 
-    if (!formData.companyName.trim()) return setError("Company Name is required.");
+    // If there's an invite, they don't NEED a company name (we'll use the invited one), 
+    // but they still need to provide one if it's a public signup.
     if (!formData.name.trim()) return setError("Your Name is required.");
     if (!formData.phone.trim() || !/^\d{10}$/.test(formData.phone)) return setError("Valid 10-digit Phone Number is required.");
     if (!formData.email.trim()) return setError("Email Address is required.");
@@ -51,21 +52,87 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      // 1. Check for invite FIRST
+      const inviteData = await dbService.checkInvite(formData.email.toLowerCase());
+
+      // 2. Enforce Company Name for public signups
+      if (!inviteData && !formData.companyName.trim()) {
+          setLoading(false);
+          return setError("Company Name is required for new public registrations.");
+      }
+
+      // 3. Create Firebase Auth User
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email.toLowerCase(), formData.password);
       const user = userCredential.user;
 
-      const invite = await dbService.checkInvite(formData.email.toLowerCase());
+      if (inviteData) {
+        // ==========================================
+        // SCENARIO A: USER WAS INVITED
+        // ==========================================
+        const role = inviteData.role;
 
-      let finalTenantId = '';
-      let finalRole = 'FACTORY_OWNER';
-      let finalCompanyName = formData.companyName;
+        if (role === 'RESELLER') {
+            await setDoc(doc(db, 'users', user.uid), {
+                uid: user.uid,
+                email: user.email,
+                name: formData.name,
+                phone: formData.phone,
+                companyName: inviteData.companyName || formData.companyName,
+                role: 'RESELLER',
+                commissionRate: inviteData.commissionRate || 150,
+                createdAt: new Date().toISOString()
+            });
+        } 
+        else if (role === 'FACTORY_OWNER') {
+            // Determine Trial End Date (If custom was passed by reseller, use it)
+            let trialEndsAt = inviteData.trialEndsAt || null;
+            if (inviteData.plan === 'TRIAL' && !trialEndsAt) {
+                 const d = new Date();
+                 d.setDate(d.getDate() + 30); // Fallback to 30 days if somehow missing
+                 trialEndsAt = d.toISOString();
+            }
 
-      if (invite) {
-        finalTenantId = invite.tenantId;
-        finalRole = invite.role; 
-        finalCompanyName = "Joined via Invite"; 
+            const tenantRef = await addDoc(collection(db, 'tenants'), {
+                name: inviteData.companyName || formData.companyName,
+                ownerId: user.uid,
+                plan: inviteData.plan || 'STARTER',
+                resellerId: inviteData.resellerId,
+                trialEndsAt: trialEndsAt, 
+                createdAt: new Date().toISOString(),
+                isActive: true
+            });
+
+            await setDoc(doc(db, 'users', user.uid), {
+                uid: user.uid,
+                email: user.email,
+                name: formData.name,
+                phone: formData.phone,
+                role: 'FACTORY_OWNER',
+                tenantId: tenantRef.id,
+                resellerId: inviteData.resellerId,
+                companyName: inviteData.companyName || formData.companyName,
+                createdAt: new Date().toISOString()
+            });
+        }
+        else if (role === 'SUPERVISOR') {
+             await setDoc(doc(db, 'users', user.uid), {
+                uid: user.uid,
+                email: user.email,
+                name: inviteData.name || formData.name,
+                phone: formData.phone,
+                role: 'SUPERVISOR',
+                tenantId: inviteData.tenantId,
+                createdAt: new Date().toISOString()
+            });
+        }
+
+        // Clean up invite
         await dbService.deleteInvite(formData.email.toLowerCase());
+
       } else {
+        // ==========================================
+        // SCENARIO B: NORMAL PUBLIC SIGNUP
+        // ==========================================
         const trialEndDate = new Date();
         trialEndDate.setDate(trialEndDate.getDate() + 30);
 
@@ -74,20 +141,21 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             ownerId: user.uid,
             createdAt: new Date().toISOString(),
             plan: 'TRIAL',
-            trialEndsAt: trialEndDate.toISOString() 
+            trialEndsAt: trialEndDate.toISOString(),
+            isActive: true 
         });
-        finalTenantId = tenantRef.id;
-      }
 
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: formData.email,
-        name: formData.name,
-        phone: formData.phone, 
-        role: finalRole,       
-        tenantId: finalTenantId, 
-        companyName: finalCompanyName
-      });
+        await setDoc(doc(db, 'users', user.uid), {
+            uid: user.uid,
+            email: formData.email.toLowerCase(),
+            name: formData.name,
+            phone: formData.phone, 
+            role: 'FACTORY_OWNER',       
+            tenantId: tenantRef.id, 
+            companyName: formData.companyName,
+            createdAt: new Date().toISOString()
+        });
+      }
 
       await updateProfile(user, { displayName: formData.name });
       setTimeout(() => {
@@ -97,7 +165,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
     } catch (err: any) {
       console.error(err);
       setError(err.message.replace('Firebase: ', ''));
-      setLoading(false); // Make sure to disable loading on error
+      setLoading(false);
     }
   };
 
@@ -105,8 +173,8 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   const LegalModal = ({ title, isOpen, onClose, children }: any) => {
     if (!isOpen) return null;
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-        <div className="bg-white rounded-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4 backdrop-blur-sm">
+        <div className="bg-white rounded-2xl w-full max-w-lg flex flex-col max-h-[80vh] shadow-2xl animate-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center p-4 border-b border-gray-100">
             <h2 className="text-lg font-bold text-gray-900">{title}</h2>
             <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
@@ -117,7 +185,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             {children}
           </div>
           <div className="p-4 border-t border-gray-100">
-            <button onClick={onClose} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors">
+            <button onClick={onClose} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-colors shadow-md">
               I Understand
             </button>
           </div>
@@ -130,24 +198,27 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
     <div className="min-h-dvh bg-gray-50 flex flex-col items-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8 my-auto shrink-0 mb-6 mt-6">
         <div className="text-center mb-8">
+          <div className="mx-auto w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 mb-4">
+             <Building2 className="text-white" size={32} />
+          </div>
           <h1 className="text-2xl font-bold text-gray-900">Setup Your Account</h1>
-          <p className="text-gray-500 text-sm mt-1">Start your 30-day free trial today</p>
+          <p className="text-gray-500 text-sm mt-1">Start your free trial today</p>
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-xs mb-6 text-center font-medium">
+          <div className="bg-red-50 border border-red-100 text-red-600 p-3 rounded-lg text-xs mb-6 text-center font-medium">
             {error}
           </div>
         )}
 
         <form onSubmit={handleRegister} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Company Name *</label>
+            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Company Name</label>
             <div className="relative">
               <Factory className="absolute left-3 top-3.5 text-gray-400" size={18} />
               <input 
                 className="w-full pl-10 pr-4 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
-                placeholder="Ex: Jethwa Industries"
+                placeholder="Ex: Jethwa Industries (Optional if invited)"
                 value={formData.companyName}
                 onChange={e => setFormData({...formData, companyName: e.target.value})}
               />
@@ -218,7 +289,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             <p className="text-[10px] text-gray-400 mt-1.5 leading-tight ml-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char.</p>
           </div>
 
-          {/* New Legal Checkbox */}
+          {/* Legal Checkbox */}
           <div className="flex items-start mt-6 mb-2">
             <div className="flex items-center h-5 mt-0.5">
               <input
@@ -240,15 +311,15 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
           <button 
             type="submit" 
             disabled={loading}
-            className="w-full min-h-13 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-lg flex items-center justify-center transition-all mt-4 active:scale-95 disabled:opacity-70"
+            className="w-full min-h-13 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-lg shadow-lg shadow-blue-200 flex items-center justify-center transition-all mt-4 active:scale-95 disabled:opacity-70"
           >
             {loading ? <Loader2 className="animate-spin" /> : <>Create Account <ArrowRight size={18} className="ml-2"/></>}
           </button>
         </form>
 
-        <div className="mt-6 text-center flex flex-col items-center">
+        <div className="mt-8 text-center border-t border-gray-100 pt-6">
           <p className="text-gray-500 text-sm mb-1">Already have an account?</p>
-          <button onClick={onNavigateToLogin} className="text-blue-600 font-bold hover:underline min-h-11 px-4 flex items-center">
+          <button onClick={onNavigateToLogin} className="text-blue-600 font-bold hover:underline min-h-11 px-4 flex items-center mx-auto">
             Login here
           </button>
         </div>
@@ -285,7 +356,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         <p>As the account owner, you act as the Data Controller for your employees' data. You warrant that capturing photos and logging attendance via this app complies with your local labor and privacy laws.</p>
 
         <h3 className="font-bold text-gray-900 mt-4">3. Trial and Subscription</h3>
-        <p>Upon registration, you are granted a 30-day free trial. Continued use of the platform after this period requires an active subscription.</p>
+        <p>Upon registration, you may be granted a free trial. Continued use of the platform after this period requires an active subscription or an agreement with your Reseller Partner.</p>
       </LegalModal>
 
     </div>

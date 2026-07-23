@@ -1,6 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { MonthlyPayroll } from '../types/index';
-import { X, Printer } from 'lucide-react';
+import { X, Printer, Share2, Download } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import { toPng } from 'html-to-image';
+import jsPDF from 'jspdf';
 
 interface Props {
   data: MonthlyPayroll;
@@ -10,6 +15,7 @@ interface Props {
 }
 
 export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClose }) => {
+  const [isProcessing, setIsProcessing] = useState(false);
   
   // Format "2026-02" to "February 2026"
   const formattedMonth = React.useMemo(() => {
@@ -18,6 +24,148 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
      return date.toLocaleString('default', { month: 'long', year: 'numeric' });
   }, [data.month]);
 
+  // Generates a formal A4 PDF matching the Web Print layout
+  const getPayslipPDF = async (): Promise<string | null> => {
+    const element = document.getElementById('payslip-content');
+    if (!element) return null;
+    
+    try {
+      // Force desktop width (800px) so the mobile export doesn't look squished
+      const dataUrl = await toPng(element, { 
+        quality: 1.0,
+        pixelRatio: 2, // High resolution
+        backgroundColor: '#ffffff',
+        style: {
+            width: '800px', 
+            padding: '40px', // Add page margins
+            margin: '0'
+        }
+      });
+
+      // Get actual image dimensions to scale properly on the PDF
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise((resolve) => { img.onload = resolve; });
+
+      // Create A4 PDF Document
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        format: 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const imgHeight = (img.height * pdfWidth) / img.width;
+
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, imgHeight);
+      
+      // Return base64 data (strip the data URI prefix)
+      return pdf.output('datauristring').split(',')[1];
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      return null;
+    }
+  };
+
+  const handleDownload = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    
+    try {
+      const pdfBase64 = await getPayslipPDF();
+      if (!pdfBase64) throw new Error('Failed to generate PDF');
+
+      const fileName = `Payslip_${data.workerName.replace(/\s+/g, '_')}_${data.month}.pdf`;
+
+      if (Capacitor.isNativePlatform()) {
+        await Filesystem.writeFile({
+          path: fileName,
+          data: pdfBase64,
+          directory: Directory.Documents,
+        });
+        alert('Payslip PDF downloaded successfully to your Documents folder.');
+      } else {
+        // Web fallback
+        const link = document.createElement('a');
+        link.download = fileName;
+        link.href = `data:application/pdf;base64,${pdfBase64}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    } catch (error) {
+      console.error('Error downloading payslip:', error);
+      alert('Failed to download the payslip. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+
+    try {
+      const pdfBase64 = await getPayslipPDF();
+      if (!pdfBase64) throw new Error('Failed to generate PDF');
+
+      const fileName = `Payslip_${data.workerName.replace(/\s+/g, '_')}_${data.month}.pdf`;
+
+      if (Capacitor.isNativePlatform()) {
+        // Save to cache directory temporarily for sharing
+        const savedFile = await Filesystem.writeFile({
+          path: fileName,
+          data: pdfBase64,
+          directory: Directory.Cache,
+        });
+        
+        await Share.share({
+          title: `Payslip - ${data.workerName}`,
+          text: `Here is the payslip for ${data.workerName} for ${formattedMonth}.`,
+          url: savedFile.uri,
+          dialogTitle: 'Share Payslip',
+        });
+      } else {
+        // Web Share API fallback
+        const byteCharacters = atob(pdfBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: `Payslip - ${data.workerName}`,
+            text: `Here is the payslip for ${data.workerName} for ${formattedMonth}.`,
+          });
+        } else {
+          alert('Sharing files is not supported on this browser. Please use the download button instead.');
+        }
+      }
+    } catch (error) {
+      console.error('Error sharing payslip:', error);
+      alert('Failed to share the payslip. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Mobile Native Print uses the Share sheet, which natively contains the OS "Print" capability for PDFs
+  const handlePrint = async () => {
+      if (!Capacitor.isNativePlatform()) {
+          window.print();
+      } else {
+          // Alert user and open the native print/share spooler
+          alert("Preparing formal document. Please select 'Print' from the iOS/Android menu that appears.");
+          await handleShare();
+      }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl overflow-hidden animate-fadeIn my-auto">
@@ -25,18 +173,39 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
         {/* Actions Header */}
         <div className="bg-gray-800 text-white p-3 flex justify-between items-center print:hidden">
             <h3 className="font-bold">Payslip Preview</h3>
-            <div className="flex space-x-2">
-                <button onClick={() => window.print()} className="p-2 hover:bg-gray-700 rounded-full">
+            <div className="flex space-x-1 sm:space-x-2">
+                <button 
+                  onClick={handleShare} 
+                  disabled={isProcessing}
+                  className={`p-2 rounded-full ${isProcessing ? 'opacity-50 cursor-wait' : 'hover:bg-gray-700'}`}
+                  title="Share"
+                >
+                    <Share2 size={20} />
+                </button>
+                <button 
+                  onClick={handleDownload} 
+                  disabled={isProcessing}
+                  className={`p-2 rounded-full ${isProcessing ? 'opacity-50 cursor-wait' : 'hover:bg-gray-700'}`}
+                  title="Download PDF"
+                >
+                    <Download size={20} />
+                </button>
+                <button 
+                  onClick={handlePrint} 
+                  disabled={isProcessing}
+                  className={`p-2 rounded-full ${isProcessing ? 'opacity-50 cursor-wait' : 'hover:bg-gray-700'}`} 
+                  title="Print"
+                >
                     <Printer size={20} />
                 </button>
-                <button onClick={onClose} className="p-2 hover:bg-gray-700 rounded-full">
+                <button onClick={onClose} className="p-2 hover:bg-red-600 bg-gray-700 ml-2 rounded-full" title="Close">
                     <X size={20} />
                 </button>
             </div>
         </div>
 
         {/* Printable Area */}
-        <div className="p-8 print:p-0" id="payslip-content">
+        <div className="p-8 print:p-0 bg-white" id="payslip-content">
             {/* Header */}
             <div className="text-center border-b-2 border-gray-800 pb-4 mb-6">
                 <h1 className="text-2xl font-bold uppercase tracking-wider text-gray-900">
@@ -56,7 +225,6 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                 </div>
                 <div className="text-right">
                      <p className="text-gray-500">Employee ID</p>
-                     {/* Renders exact Firebase ID */}
                      <p className="font-bold text-xs font-mono">{data.workerId}</p> 
                 </div>
                 <div>

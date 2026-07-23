@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { IndianRupee, FileText, Download, CheckCircle, Clock } from 'lucide-react';
+import { IndianRupee, FileText, Download, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
@@ -7,7 +7,6 @@ import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings } from '
 import { Payslip } from '../components/Payslip';
 
 export const PayrollScreen: React.FC = () => {
-  // FIXED: Added 'limits' to the useAuth destructuring
   const { profile, limits } = useAuth();
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -19,6 +18,7 @@ export const PayrollScreen: React.FC = () => {
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   
   const currentMonthStr = new Date().toISOString().slice(0, 7); 
 
@@ -27,6 +27,7 @@ export const PayrollScreen: React.FC = () => {
       if (!profile?.tenantId) return;
       
       try {
+        setFetchError(null);
         const fetchedWorkers = await dbService.getWorkers(profile.tenantId);
         const fetchedAttendance = await dbService.getAttendanceHistory(profile.tenantId);
         const fetchedAdvances = await dbService.getAdvances(profile.tenantId);
@@ -36,18 +37,23 @@ export const PayrollScreen: React.FC = () => {
         try {
            fetchedPayrolls = await dbService.getPayrollsByMonth(profile.tenantId, currentMonthStr);
         } catch (payrollErr) {
-           console.warn("Could not load saved payrolls. Check Firestore Rules for the 'payrolls' collection.", payrollErr);
+           console.warn("Could not load saved payrolls.", payrollErr);
         }
 
         setWorkers(fetchedWorkers);
         setAdvances(fetchedAdvances);
         setSettings(fetchedSettings);
-        setSiteAddress(fetchedSettings.baseLocation?.address || '');
+        setSiteAddress(fetchedSettings?.baseLocation?.address || '');
         setSavedPayrolls(fetchedPayrolls);
         setAttendanceHistory(fetchedAttendance);
 
-      } catch (e) {
+      } catch (e: any) {
         console.error("Critical error loading data:", e);
+        if (e.message?.includes('permissions') || e.code === 'permission-denied') {
+          setFetchError("Firebase Permission Denied. Please update your Firestore Security Rules to allow access.");
+        } else {
+          setFetchError("Failed to load payroll data. Please check your connection.");
+        }
       } finally {
         setLoading(false);
       }
@@ -63,7 +69,6 @@ export const PayrollScreen: React.FC = () => {
         const savedPayroll = savedPayrolls.find(p => p.workerId === worker.id);
         if (savedPayroll) return savedPayroll;
 
-        // UPDATED: Pass settings to generation logic
         return wageService.generateMonthlyPayroll(worker, currentMonthStr, attendanceHistory, advances, settings);
     });
   }, [workers, attendanceHistory, advances, currentMonthStr, savedPayrolls, settings]);
@@ -104,7 +109,7 @@ export const PayrollScreen: React.FC = () => {
         });
       } catch (error) {
         console.error("Failed to mark as paid", error);
-        alert("Failed to save to database. If this persists, please check your Firestore Security Rules to ensure writes to 'payrolls' are allowed.");
+        alert("Failed to save to database. Check Firestore Permissions.");
       }
     }
   };
@@ -125,87 +130,101 @@ export const PayrollScreen: React.FC = () => {
         <p className="text-gray-500 text-sm">For {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase font-bold">Pending Payout</p>
-            <p className="text-2xl font-bold text-orange-500 mt-1">₹{(pendingPayout/1000).toFixed(1)}k</p>
+      {fetchError && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-r-lg flex items-start">
+            <AlertTriangle className="text-red-500 mr-3 mt-0.5" size={20} />
+            <div>
+                <h3 className="text-red-800 font-bold">Database Error</h3>
+                <p className="text-red-600 text-sm mt-1">{fetchError}</p>
+            </div>
         </div>
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase font-bold">Total Paid</p>
-            <p className="text-2xl font-bold text-green-600 mt-1">₹{(paidPayout/1000).toFixed(1)}k</p>
-        </div>
-      </div>
+      )}
 
-      <div className="space-y-3">
-        {payrolls.map(payroll => (
-            <div key={payroll.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                <div 
-                    onClick={() => {
-                        if (!limits?.payslipEnabled) {
-                            alert("Generating Detailed Payslips is a premium feature. Please upgrade your plan to unlock.");
-                            return;
-                        }
-                        setSelectedPayroll(payroll);
-                    }}
-                    className="p-4 active:bg-gray-50 cursor-pointer transition-colors"
-                >
-                    <div className="flex justify-between items-start mb-2">
-                        <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-full overflow-hidden flex items-center justify-center font-bold text-gray-500">
-                                {payroll.workerName.charAt(0)}
-                            </div>
-                            <div>
-                                <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
-                                <div className="flex space-x-2 text-xs mt-1 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
-                                    <span className="text-green-600 font-bold">{payroll.attendanceSummary.presentDays} P</span>
-                                    {payroll.attendanceSummary.halfDays > 0 && <span className="text-orange-500 font-bold">• {payroll.attendanceSummary.halfDays} HD</span>}
-                                    {payroll.attendanceSummary.absentDays > 0 && <span className="text-red-500 font-bold">• {payroll.attendanceSummary.absentDays} A</span>}
-                                    <span className="text-gray-400">•</span>
-                                    <span className="text-gray-600 font-bold">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
+      {!fetchError && (
+        <>
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <p className="text-xs text-gray-500 uppercase font-bold">Pending Payout</p>
+                <p className="text-2xl font-bold text-orange-500 mt-1">₹{(pendingPayout/1000).toFixed(1)}k</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <p className="text-xs text-gray-500 uppercase font-bold">Total Paid</p>
+                <p className="text-2xl font-bold text-green-600 mt-1">₹{(paidPayout/1000).toFixed(1)}k</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {payrolls.map(payroll => (
+                <div key={payroll.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div 
+                        onClick={() => {
+                            if (!limits?.payslipEnabled) {
+                                alert("Generating Detailed Payslips is a premium feature. Please upgrade your plan to unlock.");
+                                return;
+                            }
+                            setSelectedPayroll(payroll);
+                        }}
+                        className="p-4 active:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                        <div className="flex justify-between items-start mb-2">
+                            <div className="flex items-center space-x-3">
+                                <div className="w-10 h-10 bg-gray-100 rounded-full overflow-hidden flex items-center justify-center font-bold text-gray-500">
+                                    {payroll.workerName.charAt(0)}
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
+                                    <div className="flex space-x-2 text-xs mt-1 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                                        <span className="text-green-600 font-bold">{payroll.attendanceSummary.presentDays} P</span>
+                                        {payroll.attendanceSummary.halfDays > 0 && <span className="text-orange-500 font-bold">• {payroll.attendanceSummary.halfDays} HD</span>}
+                                        {payroll.attendanceSummary.absentDays > 0 && <span className="text-red-500 font-bold">• {payroll.attendanceSummary.absentDays} A</span>}
+                                        <span className="text-gray-400">•</span>
+                                        <span className="text-gray-600 font-bold">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
+                                    </div>
                                 </div>
                             </div>
+                            <div className="text-right">
+                                <p className="text-lg font-bold text-gray-900">₹{payroll.netPayable.toLocaleString()}</p>
+                                
+                                {payroll.status === 'PAID' ? (
+                                    <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full mt-1">
+                                        <CheckCircle size={10} />
+                                        <span>PAID</span>
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-orange-500 bg-orange-50 px-2 py-1 rounded-full mt-1">
+                                        <Clock size={10} />
+                                        <span>PENDING</span>
+                                    </span>
+                                )}
+                            </div>
                         </div>
-                        <div className="text-right">
-                            <p className="text-lg font-bold text-gray-900">₹{payroll.netPayable.toLocaleString()}</p>
+                        
+                        <div className="mt-3 flex items-center justify-between">
+                            <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
+                                <span className="font-medium">Earned: ₹{payroll.earnings.gross}</span>
+                                <span className="text-red-500 font-bold">Less: -₹{payroll.deductions.advances}</span>
+                            </div>
                             
-                            {payroll.status === 'PAID' ? (
-                                <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full mt-1">
-                                    <CheckCircle size={10} />
-                                    <span>PAID</span>
-                                </span>
-                            ) : (
-                                <span className="inline-flex items-center space-x-1 text-[10px] font-bold text-orange-500 bg-orange-50 px-2 py-1 rounded-full mt-1">
-                                    <Clock size={10} />
-                                    <span>PENDING</span>
-                                </span>
+                            {payroll.status !== 'PAID' && (
+                                <button 
+                                    onClick={(e) => handleMarkAsPaid(payroll, e)}
+                                    className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition-colors"
+                                >
+                                    Mark as Paid
+                                </button>
                             )}
                         </div>
                     </div>
-                    
-                    <div className="mt-3 flex items-center justify-between">
-                        <div className="flex space-x-3 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
-                            <span className="font-medium">Earned: ₹{payroll.earnings.gross}</span>
-                            <span className="text-red-500 font-bold">Less: -₹{payroll.deductions.advances}</span>
-                        </div>
-                        
-                        {payroll.status !== 'PAID' && (
-                            <button 
-                                onClick={(e) => handleMarkAsPaid(payroll, e)}
-                                className="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition-colors"
-                            >
-                                Mark as Paid
-                            </button>
-                        )}
-                    </div>
                 </div>
-            </div>
-        ))}
-        {payrolls.length === 0 && !loading && (
-          <div className="text-center py-8 text-gray-500">
-             No workers found for this location.
+            ))}
+            {payrolls.length === 0 && !loading && (
+              <div className="text-center py-8 text-gray-500">
+                 No workers found for this location.
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {selectedPayroll && (
         <Payslip 

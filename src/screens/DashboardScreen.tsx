@@ -4,6 +4,7 @@ import {
   CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { AttendanceRecord, OrgSettings } from '../types/index';
@@ -15,6 +16,7 @@ interface Props {
 
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
   const { profile, limits, user } = useAuth();
+  const { branding } = useTheme(); // NEW: Pull dynamic branding
   
   const [stats, setStats] = useState({ 
       total: 0, 
@@ -198,9 +200,22 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
   return (
     <div className="p-4 space-y-6 pb-24 bg-gray-50 min-h-full">
         <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center">
-            <div>
-                <h1 className="text-xl font-bold text-gray-800">Dashboard</h1>
-                <p className="text-xs text-gray-500">{profile?.companyName || 'Overview'}</p>
+            
+            {/* UPDATED: Dynamic Branding Header */}
+            <div className="flex items-center">
+                {branding?.logoUrl && (
+                    <img 
+                        src={branding.logoUrl} 
+                        alt="Logo" 
+                        className="h-10 w-auto max-w-25 object-contain mr-3 bg-white p-1 rounded-lg border border-gray-100 shadow-sm" 
+                    />
+                )}
+                <div>
+                    <h1 className="text-xl font-bold text-gray-800">
+                        {branding?.appName || profile?.companyName || 'Dashboard'}
+                    </h1>
+                    <p className="text-xs text-gray-500">Live Overview</p>
+                </div>
             </div>
             
             <div className="flex items-center space-x-2">
@@ -240,16 +255,17 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
         </button> 
         */}
 
+        {/* UPDATED: Kiosk Button using the bg-brand dynamic class */}
         {limits?.kioskEnabled !== false ? (
-            <button onClick={handleKioskLaunch} className="w-full bg-indigo-900 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform">
+            <button onClick={handleKioskLaunch} className="w-full bg-brand text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-all">
                 <div className="flex items-center space-x-3">
-                    <div className="bg-indigo-800 p-2 rounded-lg"><PlayCircle size={24} className="text-indigo-200" /></div>
+                    <div className="bg-black/20 p-2 rounded-lg"><PlayCircle size={24} className="text-white" /></div>
                     <div className="text-left">
                         <p className="font-bold">Launch Attendance Kiosk</p>
-                        <p className="text-indigo-300 text-xs">Scan Faces for Check-In/Out</p>
+                        <p className="text-white/80 text-xs">Scan Faces for Check-In/Out</p>
                     </div>
                 </div>
-                <ChevronRight className="text-indigo-400 group-hover:translate-x-1 transition-transform" />
+                <ChevronRight className="text-white/60 group-hover:translate-x-1 transition-transform" />
             </button>
         ) : (
              <div className="w-full bg-gray-200 text-gray-500 rounded-xl p-4 shadow-inner flex items-center justify-between opacity-80 cursor-not-allowed">
@@ -274,9 +290,9 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                            <div 
                               key={b.id} 
                               onClick={() => setSelectedKioskBranch(b.id)}
-                              className={`p-4 rounded-xl border-2 cursor-pointer flex items-center transition-all ${selectedKioskBranch === b.id ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:border-gray-200'}`}
+                              className={`p-4 rounded-xl border-2 cursor-pointer flex items-center transition-all ${selectedKioskBranch === b.id ? 'border-brand bg-brand/5' : 'border-gray-100 hover:border-gray-200'}`}
                            >
-                              <MapPin size={18} className={selectedKioskBranch === b.id ? "text-indigo-600 mr-3" : "text-gray-400 mr-3"} />
+                              <MapPin size={18} className={selectedKioskBranch === b.id ? "text-brand mr-3" : "text-gray-400 mr-3"} />
                               <span className="font-bold text-sm text-gray-800">{b.name}</span>
                            </div>
                        ))}
@@ -286,7 +302,7 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                        <button onClick={() => setShowKioskModal(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl text-sm hover:bg-gray-200">Cancel</button>
                        <button 
                           onClick={() => { setShowKioskModal(false); onOpenKiosk(selectedKioskBranch); }} 
-                          className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl text-sm shadow-lg shadow-indigo-200 hover:bg-indigo-700"
+                          className="flex-1 py-3 bg-brand text-white font-bold rounded-xl text-sm shadow-lg hover:brightness-110"
                        >
                           Launch Device
                        </button>
@@ -360,7 +376,7 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-4 border-b border-gray-50 flex justify-between items-center">
                 <h3 className="font-bold text-gray-800 text-sm flex items-center">
-                    <Activity size={16} className="mr-2 text-blue-500"/> Live Activity
+                    <Activity size={16} className="mr-2 text-brand"/> Live Activity
                 </h3>
                 <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded-full">Today</span>
             </div>
