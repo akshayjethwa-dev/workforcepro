@@ -6,6 +6,9 @@ import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
 import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff, X, Building2 } from 'lucide-react';
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 interface Props {
   onNavigateToLogin: () => void;
 }
@@ -88,7 +91,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             let trialEndsAt = inviteData.trialEndsAt || null;
             if (inviteData.plan === 'TRIAL' && !trialEndsAt) {
                  const d = new Date();
-                 d.setDate(d.getDate() + 3); // Updated to 3 days
+                 d.setDate(d.getDate() + FREE_TRIAL_DAYS); // Configurable Trial Days
                  trialEndsAt = d.toISOString();
             }
 
@@ -134,7 +137,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         // SCENARIO B: NORMAL PUBLIC SIGNUP
         // ==========================================
         const trialEndDate = new Date();
-        trialEndDate.setDate(trialEndDate.getDate() + 3); // Updated to 3 days
+        trialEndDate.setDate(trialEndDate.getDate() + FREE_TRIAL_DAYS); // Configurable Trial Days
 
         const tenantRef = await addDoc(collection(db, 'tenants'), {
             name: formData.companyName,
@@ -202,7 +205,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
              <Building2 className="text-white" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Setup Your Account</h1>
-          <p className="text-gray-500 text-sm mt-1">Start your free trial today</p>
+          <p className="text-gray-500 text-sm mt-1">Start your {FREE_TRIAL_DAYS}-day free trial today</p>
         </div>
 
         {error && (
@@ -356,7 +359,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         <p>As the account owner, you act as the Data Controller for your employees' data. You warrant that capturing photos and logging attendance via this app complies with your local labor and privacy laws.</p>
 
         <h3 className="font-bold text-gray-900 mt-4">3. Trial and Subscription</h3>
-        <p>Upon registration, you may be granted a free trial. Continued use of the platform after this period requires an active subscription or an agreement with your Reseller Partner.</p>
+        <p>Upon registration, you may be granted a {FREE_TRIAL_DAYS}-day free trial. Continued use of the platform after this period requires an active subscription or an agreement with your Reseller Partner.</p>
       </LegalModal>
 
     </div>

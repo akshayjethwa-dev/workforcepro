@@ -6,6 +6,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { SubscriptionTier, PlanLimits } from '../types/index';
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 export const BillingScreen: React.FC = () => {
   const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
   const { branding } = useTheme();
@@ -112,16 +115,16 @@ Current Plan: ${currentDisplayPlan}`;
         {tenantPlan === 'TRIAL' && trialDaysLeft !== null && (
             <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
                 <div>
-                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} Days left in Free Trial</p>
-                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Premium Growth Plan' features unlocked.</p>
+                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} {trialDaysLeft === 1 ? 'Day' : 'Days'} left in {FREE_TRIAL_DAYS}-Day Free Trial</p>
+                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all Premium Growth Plan features unlocked. After {FREE_TRIAL_DAYS} days, your account moves to the Free plan unless you upgrade.</p>
                 </div>
             </div>
         )}
-        {tenantPlan === 'FREE' && trialDaysLeft === 0 && (
-             <div className="mt-2 bg-red-50 border border-red-200 p-3 rounded-xl flex items-center justify-between">
+        {tenantPlan === 'FREE' && (
+             <div className="mt-2 bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center justify-between">
                  <div>
-                     <p className="text-red-800 font-bold text-sm">Trial Expired</p>
-                     <p className="text-red-600 text-xs mt-0.5">Your account has been moved to the Free plan. Upgrade to restore premium features.</p>
+                     <p className="text-amber-800 font-bold text-sm">Free Plan Active</p>
+                     <p className="text-amber-700 text-xs mt-0.5">Your {FREE_TRIAL_DAYS}-day trial has completed and you are currently on the Free plan. Buy the Premium Growth Plan to unlock all features.</p>
                  </div>
              </div>
         )}

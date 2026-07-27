@@ -7,6 +7,9 @@ import { SubscriptionTier } from '../types/index';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 export const ResellerDashboard: React.FC = () => {
   const { user, profile, impersonateTenant } = useAuth();
   const [clients, setClients] = useState<any[]>([]);
@@ -22,8 +25,7 @@ export const ResellerDashboard: React.FC = () => {
 
   // Modals
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
-  // NEW: Add trialDays state for custom length trials
-  const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: 30 });
+  const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: FREE_TRIAL_DAYS });
   
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
@@ -60,11 +62,10 @@ export const ResellerDashboard: React.FC = () => {
 
   const handleInviteClient = async () => {
       if (!inviteData.email || !inviteData.companyName) return alert("Fill all fields");
-      // NEW: Pass trialDays to the invite logic
       await dbService.inviteResellerClient(user!.uid, inviteData.email, inviteData.companyName, inviteData.plan, inviteData.trialDays);
       alert(`Invite sent! Once registered, they will appear here.`);
       setInviteModalOpen(false);
-      setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: 30 });
+      setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: FREE_TRIAL_DAYS });
   };
 
   const toggleStatus = async (id: string, currentStatus: boolean) => {
@@ -347,7 +348,7 @@ export const ResellerDashboard: React.FC = () => {
                           </select>
                       </div>
 
-                      {/* NEW: Custom Trial Duration Selector */}
+                      {/* Custom Trial Duration Selector */}
                       {inviteData.plan === 'TRIAL' && (
                           <div>
                               <label className="text-xs font-bold text-gray-700 uppercase">Trial Duration (Days)</label>

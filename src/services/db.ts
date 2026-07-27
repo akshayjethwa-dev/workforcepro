@@ -5,6 +5,9 @@ import {
 import { db } from "../lib/firebase";
 import { Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, DEFAULT_PLAN_CONFIG } from "../types/index";
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
 const getNotificationsRef = () => collection(db, "notifications");
@@ -93,10 +96,10 @@ export const dbService = {
     const tenantRef = doc(db, 'tenants', tenantId);
     const updateData: any = { plan };
     
-    // Auto-assign a 3-day trial if manually switched to TRIAL from the dropdown later
+    // Auto-assign the free trial if manually switched to TRIAL from the dropdown later
     if (plan === 'TRIAL') {
         const d = new Date();
-        d.setDate(d.getDate() + 3); // Updated to 3 days
+        d.setDate(d.getDate() + FREE_TRIAL_DAYS); // Configurable Trial Days
         updateData.trialEndsAt = d.toISOString();
     }
     
@@ -203,8 +206,8 @@ export const dbService = {
     }
   },
 
-  // NEW: Support for Custom Trial Days
-  inviteResellerClient: async (resellerUid: string, email: string, companyName: string, plan: SubscriptionTier, trialDays: number = 3) => { // Updated default to 3 days
+  // Support for Custom Trial Days
+  inviteResellerClient: async (resellerUid: string, email: string, companyName: string, plan: SubscriptionTier, trialDays: number = FREE_TRIAL_DAYS) => { 
     let trialEndsAt = null;
     
     if (plan === 'TRIAL') {
@@ -472,7 +475,6 @@ export const dbService = {
   },
 
   addKioskTerminal: async (terminal: any) => {
-    // SECURITY FIX: Save the document using the exact 6-digit code as the Document ID
     await setDoc(doc(db, "kiosks", terminal.pairingCode), terminal);
   },
 
@@ -481,7 +483,6 @@ export const dbService = {
   },
 
   verifyKioskPairingCode: async (code: string): Promise<any | null> => {
-    // SECURITY FIX: Direct lookup by Document ID instead of querying a collection
     const docRef = doc(db, "kiosks", code);
     const docSnap = await getDoc(docRef);
     
@@ -505,7 +506,7 @@ export const dbService = {
     await setDoc(doc(db, "payrolls", payroll.id), payroll, { merge: true });
   },
 
-  // --- NEW: DELETE TENANT ACCOUNT ---
+  // --- DELETE TENANT ACCOUNT ---
   deleteTenantAccount: async (tenantId: string, ownerUid: string) => {
     if (!tenantId || !ownerUid) throw new Error("Missing credentials for deletion.");
 

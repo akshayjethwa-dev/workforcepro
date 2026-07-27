@@ -71,9 +71,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const now = new Date();
                 now.setHours(0, 0, 0, 0); 
                 
-                // Calculate pure day difference
+                // Calculate pure day difference rounding up to the nearest whole day
                 const diffTime = endDate.getTime() - now.getTime();
-                daysLeft = Math.round(diffTime / (1000 * 60 * 60 * 24));
+                let calculatedDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                // Safeguard: Cap the UI to 7 days maximum for old test accounts that were created with 14/30 day trials
+                daysLeft = Math.min(calculatedDays, 7);
 
                 if (daysLeft <= 0) {
                     currentPlan = 'FREE'; // Auto-downgrade to FREE
