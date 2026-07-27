@@ -88,7 +88,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             let trialEndsAt = inviteData.trialEndsAt || null;
             if (inviteData.plan === 'TRIAL' && !trialEndsAt) {
                  const d = new Date();
-                 d.setDate(d.getDate() + 30); // Fallback to 30 days if somehow missing
+                 d.setDate(d.getDate() + 3); // Updated to 3 days
                  trialEndsAt = d.toISOString();
             }
 
@@ -134,7 +134,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         // SCENARIO B: NORMAL PUBLIC SIGNUP
         // ==========================================
         const trialEndDate = new Date();
-        trialEndDate.setDate(trialEndDate.getDate() + 30);
+        trialEndDate.setDate(trialEndDate.getDate() + 3); // Updated to 3 days
 
         const tenantRef = await addDoc(collection(db, 'tenants'), {
             name: formData.companyName,

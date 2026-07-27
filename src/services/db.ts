@@ -93,10 +93,10 @@ export const dbService = {
     const tenantRef = doc(db, 'tenants', tenantId);
     const updateData: any = { plan };
     
-    // Auto-assign a 14-day trial if manually switched to TRIAL from the dropdown later
+    // Auto-assign a 3-day trial if manually switched to TRIAL from the dropdown later
     if (plan === 'TRIAL') {
         const d = new Date();
-        d.setDate(d.getDate() + 14);
+        d.setDate(d.getDate() + 3); // Updated to 3 days
         updateData.trialEndsAt = d.toISOString();
     }
     
@@ -204,7 +204,7 @@ export const dbService = {
   },
 
   // NEW: Support for Custom Trial Days
-  inviteResellerClient: async (resellerUid: string, email: string, companyName: string, plan: SubscriptionTier, trialDays: number = 30) => {
+  inviteResellerClient: async (resellerUid: string, email: string, companyName: string, plan: SubscriptionTier, trialDays: number = 3) => { // Updated default to 3 days
     let trialEndsAt = null;
     
     if (plan === 'TRIAL') {

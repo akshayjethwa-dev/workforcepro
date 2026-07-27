@@ -29,14 +29,27 @@ export const BillingScreen: React.FC = () => {
   // Determine if the user is a client under a Reseller/Agency
   const isResellerManaged = !!profile?.resellerId;
 
+  // Helper function to map backend plan names to frontend display names
+  const getDisplayPlanName = (plan: string | undefined) => {
+    if (!plan) return 'Unknown';
+    if (plan === 'ENTERPRISE') return 'Premium Growth Plan';
+    if (plan === 'FREE') return 'Micro-Team (Free)';
+    if (plan === 'TRIAL') return 'Free Trial (Premium Growth)';
+    if (plan === 'PRO') return 'Agency (Pro Plan)'; // Kept just in case old users are still on it
+    if (plan === 'STARTER') return 'Site Manager'; // Kept just in case old users are still on it
+    return plan;
+  };
+
+  const currentDisplayPlan = getDisplayPlanName(tenantPlan);
+
   const orgDetails = `
 ---
 *Organization Details:*
 Name: ${profile?.companyName || 'Not Set'}
 Org ID: ${profile?.tenantId || 'Unknown'}
-Current Plan: ${tenantPlan}`;
+Current Plan: ${currentDisplayPlan}`;
 
-  const enterpriseMsg = `Hi, I am interested in upgrading to the *Enterprise Plan* for WorkForcePro. Could we discuss custom pricing and features?${orgDetails}`;
+  const enterpriseMsg = `Hi, I am interested in upgrading to the *Premium Growth Plan* for WorkForcePro. Could we discuss custom pricing and features?${orgDetails}`;
   const whatsappEnterpriseUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(enterpriseMsg)}`;
 
   const paymentMsg = `Hi, I just paid ₹${showPaymentModal.price} for the *${showPaymentModal.planName} Plan* via Razorpay. Here is my receipt/screenshot.${orgDetails}`;
@@ -100,7 +113,7 @@ Current Plan: ${tenantPlan}`;
             <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
                 <div>
                     <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} Days left in Free Trial</p>
-                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Enterprise' features unlocked.</p>
+                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Premium Growth Plan' features unlocked.</p>
                 </div>
             </div>
         )}
@@ -114,12 +127,12 @@ Current Plan: ${tenantPlan}`;
         )}
       </div>
 
-      {/* Current Plan Overview added for better context before conditional hiding */}
+      {/* Current Plan Overview */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6">
         <div className="flex justify-between items-center mb-4">
             <div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Current Plan</p>
-                <h2 className="text-2xl font-black text-gray-900 mt-1">{tenantPlan}</h2>
+                <h2 className="text-2xl font-black text-gray-900 mt-1">{currentDisplayPlan}</h2>
             </div>
             <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center">
                 <CreditCard className="text-blue-600" size={24} />
@@ -177,34 +190,15 @@ Current Plan: ${tenantPlan}`;
                 buttonText="Start for Free"
                 onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
             />
+            
             <PlanCard 
-                title="Site Manager" 
+                title="Premium Growth Plan" 
                 price="1999" 
-                strikePrice="2999"
-                desc="Basic automation for single-site businesses."
-                features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Manage Public Holidays" ,"Geofencing & Offline Sync", "Payslips & Allowances"]}
-                isCurrent={tenantPlan === 'STARTER'}
-                onUpgrade={() => handleUpgradeClick('Site Manager', '1999')}
-            />
-            <PlanCard 
-                title="Agency (Pro Plan)" 
-                price="3999"
-                strikePrice="5299"
-                desc="Multi-site control with strict HR rules and anti-spoofing."
-                features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Digital ID Cards" ,"Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
-                isCurrent={tenantPlan === 'PRO'}
-                isPopular={true}
-                onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '3999')}
-            />
-            <PlanCard 
-                title="Enterprise" 
-                price="7999" 
-                strikePrice="9999"
                 desc="For large factories requiring full statutory compliance."
                 features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
                 isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
                 currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
-                onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
+                onUpgrade={() => handleUpgradeClick('Premium Growth Plan', '1999')}
             />
           </div>
       )}
