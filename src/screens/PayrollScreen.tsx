@@ -24,18 +24,20 @@ export const PayrollScreen: React.FC = () => {
 
   useEffect(() => {
     const loadData = async () => {
-      if (!profile?.tenantId) return;
+      // Extracted to a constant so TS knows it's safely non-null inside the async callback
+      const tenantId = profile?.tenantId;
+      if (!tenantId) return;
       
       try {
         setFetchError(null);
-        const fetchedWorkers = await dbService.getWorkers(profile.tenantId);
-        const fetchedAttendance = await dbService.getAttendanceHistory(profile.tenantId);
-        const fetchedAdvances = await dbService.getAdvances(profile.tenantId);
-        const fetchedSettings = await dbService.getOrgSettings(profile.tenantId);
+        const fetchedWorkers = await dbService.getWorkers(tenantId);
+        const fetchedAttendance = await dbService.getAttendanceHistory(tenantId);
+        const fetchedAdvances = await dbService.getAdvances(tenantId);
+        const fetchedSettings = await dbService.getOrgSettings(tenantId);
         
         let fetchedPayrolls: MonthlyPayroll[] = [];
         try {
-           fetchedPayrolls = await dbService.getPayrollsByMonth(profile.tenantId, currentMonthStr);
+           fetchedPayrolls = await dbService.getPayrollsByMonth(tenantId, currentMonthStr);
         } catch (payrollErr) {
            console.warn("Could not load saved payrolls.", payrollErr);
         }
@@ -76,6 +78,12 @@ export const PayrollScreen: React.FC = () => {
   const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
     e.stopPropagation(); 
     
+    const tenantId = profile?.tenantId;
+    if (!tenantId) {
+        alert("Error: User profile not loaded.");
+        return;
+    }
+    
     if (window.confirm(`Mark ₹${payroll.netPayable} as paid to ${payroll.workerName}?`)) {
       try {
         if (payroll.carriedForwardAdvance && payroll.carriedForwardAdvance > 0) {
@@ -89,7 +97,7 @@ export const PayrollScreen: React.FC = () => {
             const nextMonthStr = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
             await dbService.addAdvance({
-                tenantId: profile!.tenantId, 
+                tenantId: tenantId, 
                 workerId: payroll.workerId, 
                 amount: payroll.carriedForwardAdvance, 
                 date: nextMonthStr, 
@@ -173,16 +181,19 @@ export const PayrollScreen: React.FC = () => {
                                 </div>
                                 <div>
                                     <h3 className="font-bold text-gray-800">{payroll.workerName}</h3>
-                                    <div className="flex space-x-2 text-xs mt-1 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
-                                        <span className="text-green-600 font-bold">{payroll.attendanceSummary.presentDays} P</span>
+                                    <div className="flex flex-wrap gap-2 text-xs mt-1 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                                        <span className="text-blue-600 font-bold">{payroll.attendanceSummary.payableDays} Pay Days</span>
+                                        <span className="text-green-600 font-bold">• {payroll.attendanceSummary.presentDays} P</span>
                                         {payroll.attendanceSummary.halfDays > 0 && <span className="text-orange-500 font-bold">• {payroll.attendanceSummary.halfDays} HD</span>}
                                         {payroll.attendanceSummary.absentDays > 0 && <span className="text-red-500 font-bold">• {payroll.attendanceSummary.absentDays} A</span>}
+                                        {payroll.attendanceSummary.paidLeaves > 0 && <span className="text-teal-600 font-bold">• {payroll.attendanceSummary.paidLeaves} PL</span>}
+                                        {payroll.attendanceSummary.unpaidLeaves > 0 && <span className="text-red-400 font-bold">• {payroll.attendanceSummary.unpaidLeaves} UL</span>}
                                         <span className="text-gray-400">•</span>
                                         <span className="text-gray-600 font-bold">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
                                     </div>
                                 </div>
                             </div>
-                            <div className="text-right">
+                            <div className="text-right ml-2">
                                 <p className="text-lg font-bold text-gray-900">₹{payroll.netPayable.toLocaleString()}</p>
                                 
                                 {payroll.status === 'PAID' ? (

@@ -14,6 +14,17 @@ interface Props {
   onClose: () => void;
 }
 
+// Helper to convert base64 to Blob for robust mobile downloads
+const base64ToBlob = (base64: string, type = 'application/pdf'): Blob => {
+  const binStr = atob(base64);
+  const len = binStr.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    arr[i] = binStr.charCodeAt(i);
+  }
+  return new Blob([arr], { type });
+};
+
 export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClose }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   
@@ -32,9 +43,10 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
     try {
       // Force desktop width (800px) so the mobile export doesn't look squished
       const dataUrl = await toPng(element, { 
-        quality: 1.0,
+        quality: 0.95,
         pixelRatio: 2, // High resolution
         backgroundColor: '#ffffff',
+        cacheBust: true,
         style: {
             width: '800px', 
             padding: '40px', // Add page margins
@@ -76,26 +88,59 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
       if (!pdfBase64) throw new Error('Failed to generate PDF');
 
       const fileName = `Payslip_${data.workerName.replace(/\s+/g, '_')}_${data.month}.pdf`;
+      const blob = base64ToBlob(pdfBase64, 'application/pdf');
 
       if (Capacitor.isNativePlatform()) {
-        await Filesystem.writeFile({
-          path: fileName,
-          data: pdfBase64,
-          directory: Directory.Documents,
-        });
-        alert('Payslip PDF downloaded successfully to your Documents folder.');
+        let fileUri = '';
+        try {
+          const savedFile = await Filesystem.writeFile({
+            path: fileName,
+            data: pdfBase64,
+            directory: Directory.Cache,
+          });
+          fileUri = savedFile.uri;
+        } catch (err) {
+          console.warn('Cache write failed, trying Documents:', err);
+          const savedFile = await Filesystem.writeFile({
+            path: fileName,
+            data: pdfBase64,
+            directory: Directory.Documents,
+          });
+          fileUri = savedFile.uri;
+        }
+
+        // Trigger native share/save dialog for maximum native mobile compatibility
+        try {
+          await Share.share({
+            title: `Payslip - ${data.workerName}`,
+            text: `Payslip for ${data.workerName} (${formattedMonth})`,
+            url: fileUri,
+            dialogTitle: 'Save or Share Payslip',
+          });
+        } catch (sErr) {
+          alert('Payslip PDF downloaded and saved to your device.');
+        }
       } else {
-        // Web fallback
+        // Web & Mobile Web fallback using Blob URL
+        const blobUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.download = fileName;
-        link.href = `data:application/pdf;base64,${pdfBase64}`;
+        link.href = blobUrl;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+
+        // Fallback for iOS Safari which might block dynamic downloads
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (isIOS) {
+          window.open(blobUrl, '_blank');
+        }
+
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error downloading payslip:', error);
-      alert('Failed to download the payslip. Please try again.');
+      alert('Failed to download the payslip: ' + (error.message || 'Please try again.'));
     } finally {
       setIsProcessing(false);
     }
@@ -240,14 +285,34 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
             {/* Attendance Table */}
             <div className="mb-6">
                 <h3 className="font-bold text-xs uppercase text-gray-500 mb-2 border-b border-gray-200 pb-1">Attendance Summary</h3>
-                <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 text-sm">
                     <div className="bg-gray-50 p-2 rounded">
                         <span className="block text-xs text-gray-500">Total Days</span>
                         <span className="font-bold">{data.attendanceSummary.totalDays}</span>
                     </div>
                     <div className="bg-gray-50 p-2 rounded">
+                        <span className="block text-xs text-gray-500">Payable Days</span>
+                        <span className="font-bold">{data.attendanceSummary.payableDays}</span>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded">
                         <span className="block text-xs text-gray-500">Present</span>
-                        <span className="font-bold">{data.attendanceSummary.presentDays}</span>
+                        <span className="font-bold">{data.attendanceSummary.presentDays + (data.attendanceSummary.halfDays * 0.5)}</span>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded">
+                        <span className="block text-xs text-gray-500">Absent</span>
+                        <span className="font-bold">{data.attendanceSummary.absentDays}</span>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded">
+                        <span className="block text-xs text-gray-500">Paid Leaves</span>
+                        <span className="font-bold">{data.attendanceSummary.paidLeaves}</span>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded">
+                        <span className="block text-xs text-gray-500">Unpaid Leaves</span>
+                        <span className="font-bold">{data.attendanceSummary.unpaidLeaves}</span>
+                    </div>
+                    <div className="bg-gray-50 p-2 rounded">
+                        <span className="block text-xs text-gray-500">Holidays & W.Offs</span>
+                        <span className="font-bold">{data.attendanceSummary.publicHolidays + data.attendanceSummary.weeklyOffs + data.attendanceSummary.holidayWorkedDays}</span>
                     </div>
                     <div className="bg-gray-50 p-2 rounded">
                          <span className="block text-xs text-gray-500">OT Hours</span>

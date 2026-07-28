@@ -49,8 +49,9 @@ export const faceService = {
     
     // Check if we found a face with a descriptor
     if (result && result.face && result.face.length > 0) {
+      const embedding = result.face[0].embedding;
       // Return the embedding of the largest/main face
-      return result.face[0].embedding; 
+      return embedding ? (Array.from(embedding) as number[]) : null; 
     }
     
     return null;
@@ -66,12 +67,15 @@ export const faceService = {
     if (!result || !result.face || result.face.length === 0) return null;
 
     const currentEmbedding = result.face[0].embedding;
+    if (!currentEmbedding) return null;
+
     let bestMatch: Worker | null = null;
     let bestScore = 0; 
 
     workers.forEach(worker => {
       if (worker.faceDescriptor && worker.faceDescriptor.length > 0) {
-        const score = human.match.similarity(currentEmbedding, worker.faceDescriptor);
+        // Castings added to ensure Typescript recognizes the descriptor structure as number[]
+        const score = human.match.similarity(currentEmbedding as number[], worker.faceDescriptor as number[]);
         if (score > bestScore) {
           bestScore = score;
           bestMatch = worker;
@@ -97,6 +101,7 @@ export const faceService = {
     if (!result || !result.face || result.face.length === 0) return null;
 
     const currentEmbedding = result.face[0].embedding;
+    if (!currentEmbedding) return null;
 
     // FIX: Check if the AI detected any gesture containing "blink" (e.g., "blink left eye" or "blink right eye")
     let hasBlinked = false;
@@ -110,7 +115,8 @@ export const faceService = {
 
     workers.forEach(worker => {
       if (worker.faceDescriptor && worker.faceDescriptor.length > 0) {
-        const score = human.match.similarity(currentEmbedding, worker.faceDescriptor);
+        // Castings added to ensure Typescript recognizes the descriptor structure as number[]
+        const score = human.match.similarity(currentEmbedding as number[], worker.faceDescriptor as number[]);
         if (score > bestScore) {
           bestScore = score;
           bestMatch = worker;
