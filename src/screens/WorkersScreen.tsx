@@ -34,11 +34,12 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
   });
 
   const loadWorkersAndSettings = async () => {
-    if (profile?.tenantId) {
+    const tenantId = profile?.tenantId;
+    if (tenantId) {
       try {
         const [workersData, settingsData] = await Promise.all([
-            dbService.getWorkers(profile.tenantId),
-            dbService.getOrgSettings(profile.tenantId)
+            dbService.getWorkers(tenantId),
+            dbService.getOrgSettings(tenantId)
         ]);
         setWorkers(workersData);
         setSettings(settingsData);
@@ -54,11 +55,12 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
 
   // Custom deletion logic handled via modal
   const confirmDelete = async () => {
-    if (!workerToDelete || !profile?.tenantId) return;
+    const tenantId = profile?.tenantId;
+    if (!workerToDelete || !tenantId) return;
     setIsDeleting(true);
     
     try {
-      await dbService.deleteWorker(profile.tenantId, workerToDelete.id);
+      await dbService.deleteWorker(tenantId, workerToDelete.id);
       setWorkers(prev => prev.filter(w => w.id !== workerToDelete.id)); 
       setWorkerToDelete(null);
     } catch (e) {
@@ -79,16 +81,18 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
 
   // Quick Action Logic for Advances
   const handleOpenAdvance = async (worker: Worker) => {
+    const tenantId = profile?.tenantId;
+    if (!tenantId) return;
     if (!limits?.allowancesAndDeductionsEnabled) {
         alert("Advance/Kharchi tracking is a premium feature. Please upgrade your plan to record worker advances.");
         return;
     }
     const currentMonth = new Date().toISOString().slice(0, 7);
     
-    const attendance = await dbService.getAttendanceHistory(profile.tenantId!);
-    const advances = await dbService.getAdvances(profile.tenantId!);
+    const attendance = await dbService.getAttendanceHistory(tenantId);
+    const advances = await dbService.getAdvances(tenantId);
     
-    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance, settings!);
+    const earned = wageService.calculateCurrentEarnings(worker, currentMonth, attendance, settings || { shifts: [], enableBreakTracking: false });
     const existingAdvances = advances
         .filter(a => a.workerId === worker.id && a.date.startsWith(currentMonth))
         .reduce((sum, a) => sum + a.amount, 0);
@@ -106,11 +110,12 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
   };
 
   const handleSaveAdvance = async () => {
-    if (!profile?.tenantId || !advanceModal.worker || !advanceModal.amount) return;
+    const tenantId = profile?.tenantId;
+    if (!tenantId || !advanceModal.worker || !advanceModal.amount) return;
     setAdvanceModal(prev => ({ ...prev, isSaving: true }));
     try {
       await dbService.addAdvance({
-        tenantId: profile.tenantId,
+        tenantId: tenantId,
         workerId: advanceModal.worker.id,
         amount: parseFloat(advanceModal.amount),
         date: advanceModal.date,

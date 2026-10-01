@@ -2,6 +2,9 @@
 import React from 'react';
 import { FileCheck } from 'lucide-react';
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 export const TermsScreen: React.FC = () => {
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto animate-in fade-in">
@@ -30,7 +33,7 @@ export const TermsScreen: React.FC = () => {
 
         <div>
             <h3 className="font-bold text-gray-900 text-lg mb-2">3. Trial and Subscription</h3>
-            <p>Upon registration, you are granted a 30-day free trial. Continued use of the platform after this period requires an active subscription. We reserve the right to suspend accounts that fail to maintain an active subscription after the trial period expires.</p>
+            <p>Upon registration, you are granted a {FREE_TRIAL_DAYS}-day free trial with full access to Premium Growth Plan features. After {FREE_TRIAL_DAYS} days, your account will move to the Free plan. To access all premium features continuously, an upgrade to the Premium Growth Plan is required.</p>
         </div>
         
         <div>

@@ -25,7 +25,7 @@ export const WorkerHistoryScreen: React.FC = () => {
   const [regulateTime, setRegulateTime] = useState<string>('09:00');
   const [savingRegulation, setSavingRegulation] = useState(false);
 
-  // NEW: Leave Manager Modal State
+  // Leave Manager Modal State
   const [leaveModal, setLeaveModal] = useState({
     isOpen: false,
     startDate: '',
@@ -36,10 +36,11 @@ export const WorkerHistoryScreen: React.FC = () => {
 
   // 1. Load Workers & Settings on Mount
   useEffect(() => {
-    if (profile?.tenantId) {
+    const tenantId = profile?.tenantId;
+    if (tenantId) {
       Promise.all([
-         dbService.getWorkers(profile.tenantId),
-         dbService.getOrgSettings(profile.tenantId)
+         dbService.getWorkers(tenantId),
+         dbService.getOrgSettings(tenantId)
       ]).then(([workersData, settingsData]) => {
          setWorkers(workersData);
          setSettings(settingsData);
@@ -50,8 +51,9 @@ export const WorkerHistoryScreen: React.FC = () => {
 
   // 2. Load Attendance & Advances when Worker or Month changes
   useEffect(() => {
-    if (profile?.tenantId && selectedWorkerId) {
-      dbService.getAttendanceHistory(profile.tenantId).then(allRecords => {
+    const tenantId = profile?.tenantId;
+    if (tenantId && selectedWorkerId) {
+      dbService.getAttendanceHistory(tenantId).then(allRecords => {
         const filtered = allRecords.filter(r => 
           r.workerId === selectedWorkerId && 
           r.date.startsWith(selectedMonth)
@@ -60,7 +62,7 @@ export const WorkerHistoryScreen: React.FC = () => {
         setAttendanceHistory(filtered);
       });
 
-      dbService.getAdvances(profile.tenantId).then(advances => {
+      dbService.getAdvances(tenantId).then(advances => {
         setMonthAdvances(advances.filter(a => a.workerId === selectedWorkerId && a.date.startsWith(selectedMonth)));
       });
     } else {
@@ -135,7 +137,8 @@ export const WorkerHistoryScreen: React.FC = () => {
 
   // 4. Handle Applying Leave (Deducts balance & pushes future records)
   const handleApplyLeave = async () => {
-    if (!selectedWorker || !profile?.tenantId || !leaveModal.startDate || !leaveModal.endDate) return;
+    const tenantId = profile?.tenantId;
+    if (!selectedWorker || !tenantId || !leaveModal.startDate || !leaveModal.endDate) return;
     setSavingRegulation(true);
 
     try {
@@ -146,7 +149,6 @@ export const WorkerHistoryScreen: React.FC = () => {
             dates.push(new Date(d).toISOString().split('T')[0]);
         }
 
-        // Get current balance (fallback to org default if worker has no data)
         let currentBalance = 0;
         if (leaveModal.type !== 'lwp') {
             currentBalance = selectedWorker.leaveBalances?.[leaveModal.type] 
@@ -167,7 +169,6 @@ export const WorkerHistoryScreen: React.FC = () => {
                     isPaid = true;
                     newBalance -= 1;
                 } else {
-                    // Out of leaves -> Auto Convert to LWP
                     isPaid = false;
                     actualType = 'lwp';
                 }
@@ -176,8 +177,8 @@ export const WorkerHistoryScreen: React.FC = () => {
             }
 
             const rec: AttendanceRecord = {
-                id: `${profile.tenantId}_${selectedWorker.id}_${dateStr}`,
-                tenantId: profile.tenantId,
+                id: `${tenantId}_${selectedWorker.id}_${dateStr}`,
+                tenantId: tenantId,
                 workerId: selectedWorker.id,
                 workerName: selectedWorker.name,
                 date: dateStr,
@@ -195,10 +196,8 @@ export const WorkerHistoryScreen: React.FC = () => {
             newRecords.push(rec);
         }
 
-        // 1. Save Attendance Records
         await Promise.all(newRecords.map(r => dbService.markAttendanceOnline(r)));
 
-        // 2. Update Worker Balance in DB
         if (leaveModal.type !== 'lwp') {
             const updatedLeaveBalances = {
                 ...(selectedWorker.leaveBalances || {cl:0, sl:0, pl:0}),
@@ -206,15 +205,13 @@ export const WorkerHistoryScreen: React.FC = () => {
             };
             await dbService.updateWorker(selectedWorker.id, { leaveBalances: updatedLeaveBalances });
             
-            // Update local worker state so UI refreshes immediately
             const updatedWorker = { ...selectedWorker, leaveBalances: updatedLeaveBalances };
             setWorkers(prev => prev.map(w => w.id === updatedWorker.id ? updatedWorker : w));
         }
 
         setLeaveModal({ isOpen: false, startDate: '', endDate: '', type: 'cl', reason: '' });
         
-        // Refresh History
-        const updatedDocs = await dbService.getAttendanceHistory(profile.tenantId);
+        const updatedDocs = await dbService.getAttendanceHistory(tenantId);
         setAttendanceHistory(updatedDocs.filter(r => r.workerId === selectedWorkerId && r.date.startsWith(selectedMonth)).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
     } catch (e) {
@@ -227,7 +224,8 @@ export const WorkerHistoryScreen: React.FC = () => {
 
   // 5. Handle Regulating a Missed Punch
   const handleSaveRegulation = async () => {
-    if (!editingRecord || !profile?.tenantId || !selectedWorker) return;
+    const tenantId = profile?.tenantId;
+    if (!editingRecord || !tenantId || !selectedWorker) return;
     setSavingRegulation(true);
 
     try {
@@ -254,9 +252,9 @@ export const WorkerHistoryScreen: React.FC = () => {
       updatedTimeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       const shift = settings.shifts.find(s => s.id === selectedWorker.shiftId) || settings.shifts[0];
-      const lateCount = await dbService.getMonthlyLateCount(profile.tenantId, selectedWorker.id);
+      const lateCount = await dbService.getMonthlyLateCount(tenantId, selectedWorker.id);
 
-      const draftRecord: AttendanceRecord = { ...editingRecord, timeline: updatedTimeline, status: 'ABSENT' }; // Clear ON_LEAVE if they punch
+      const draftRecord: AttendanceRecord = { ...editingRecord, timeline: updatedTimeline, status: 'ABSENT' }; 
 
       const finalRecord = attendanceLogic.processDailyStatus(
           draftRecord, shift, lateCount, settings.enableBreakTracking, selectedWorker, settings
@@ -281,6 +279,8 @@ export const WorkerHistoryScreen: React.FC = () => {
   };
 
   const openRegulationModal = (dateStr: string, existingRecord?: AttendanceRecord) => {
+      const tenantId = profile?.tenantId;
+      if (!selectedWorker || !tenantId) return;
       if (existingRecord) {
           setEditingRecord(existingRecord);
           setRegulateType('IN');
@@ -293,12 +293,12 @@ export const WorkerHistoryScreen: React.FC = () => {
           }
       } else {
           setEditingRecord({
-              id: `${profile!.tenantId}_${selectedWorker!.id}_${dateStr}`,
-              tenantId: profile!.tenantId,
-              workerId: selectedWorker!.id,
-              workerName: selectedWorker!.name,
+              id: `${tenantId}_${selectedWorker.id}_${dateStr}`,
+              tenantId: tenantId,
+              workerId: selectedWorker.id,
+              workerName: selectedWorker.name,
               date: dateStr,
-              shiftId: selectedWorker!.shiftId || 'default',
+              shiftId: selectedWorker.shiftId || 'default',
               timeline: [],
               status: 'ABSENT',
               lateStatus: { isLate: false, lateByMins: 0, penaltyApplied: false },
@@ -435,15 +435,15 @@ export const WorkerHistoryScreen: React.FC = () => {
                <div className="grid grid-cols-3 gap-3">
                   <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
                      <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Casual (CL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker.leaveBalances?.cl ?? settings?.leavePolicy?.cl ?? 0}</p>
+                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.cl ?? settings?.leavePolicy?.cl ?? 0}</p>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
                      <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Sick (SL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker.leaveBalances?.sl ?? settings?.leavePolicy?.sl ?? 0}</p>
+                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.sl ?? settings?.leavePolicy?.sl ?? 0}</p>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
                      <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Privilege (PL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0}</p>
+                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0}</p>
                   </div>
                </div>
             </div>
@@ -522,7 +522,7 @@ export const WorkerHistoryScreen: React.FC = () => {
                                         {statusText}
                                         {log.record?.lateStatus?.isLate && computedStatus !== 'PENDING' && <span className="ml-1 text-red-600 font-extrabold">• LATE</span>}
                                     </span>
-                                    {log.record?.status === 'ON_LEAVE' && log.record.leaveInfo?.reason && (
+                                    {log.record?.status === 'ON_LEAVE' && log.record?.leaveInfo?.reason && (
                                         <p className="text-[10px] text-gray-500 mt-1 italic">"{log.record.leaveInfo.reason}"</p>
                                     )}
                                 </div>
@@ -558,7 +558,7 @@ export const WorkerHistoryScreen: React.FC = () => {
                                        <div className="flex items-center space-x-2">
                                            <span>Net: {displayHours.toFixed(1)} hrs</span>
                                            <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full text-gray-600">{sortedTimeline.length} Punches</span>
-                                           {log.record?.hours?.overtime > 0 && <span className="text-orange-500 font-bold ml-2">(+{log.record.hours.overtime} OT)</span>}
+                                           {(log.record?.hours?.overtime ?? 0) > 0 && <span className="text-orange-500 font-bold ml-2">(+{log.record?.hours?.overtime} OT)</span>}
                                        </div>
                                        <div className="flex items-center text-blue-600">
                                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}

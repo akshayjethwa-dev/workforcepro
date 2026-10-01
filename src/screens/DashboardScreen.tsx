@@ -207,7 +207,11 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                     <img 
                         src={branding.logoUrl} 
                         alt="Logo" 
+<<<<<<< HEAD
                         className="h-10 w-auto max-w-[100px] object-contain mr-3 bg-white p-1 rounded-lg border border-gray-100 shadow-sm" 
+=======
+                        className="h-10 w-auto max-w-25 object-contain mr-3 bg-white p-1 rounded-lg border border-gray-100 shadow-sm" 
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
                     />
                 )}
                 <div>

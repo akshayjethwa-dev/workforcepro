@@ -1,6 +1,11 @@
 // src/types/index.ts
+
 export type Role = 
+<<<<<<< HEAD
   | 'SUPER_ADMIN'   // You (SaaS Owner)
+=======
+  | 'SUPER_ADMIN'   // SaaS Owner
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   | 'RESELLER'      // NEW: Channel Partner / Agency
   | 'FACTORY_OWNER' // Tenant Admin
   | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
@@ -39,7 +44,11 @@ export interface UserProfile {
 
 export interface BrandingConfig {
   appName: string;
+<<<<<<< HEAD
   logoUrl: string;        // We'll save this as a base64 string for immediate use
+=======
+  logoUrl: string;        // Base64 string for immediate use
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   primaryColor: string;   // Hex color code
 }
 
@@ -244,6 +253,7 @@ export interface MonthlyPayroll {
     totalOvertimeHours: number;
     paidLeaves: number;
     unpaidLeaves: number;
+    notJoinedDays?: number;
   };
   earnings: {
     basic: number;

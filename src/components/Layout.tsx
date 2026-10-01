@@ -6,6 +6,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { Sidebar } from './Sidebar';
 import { dbService } from '../services/db';
 
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
 interface LayoutProps {
   children: React.ReactNode;
   currentScreen: ScreenName;
@@ -124,7 +127,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         >
           <div className="flex items-center">
             <Zap size={14} className="mr-1.5 text-yellow-300 fill-current" />
-            {trialDaysLeft} Days left in Free Trial.
+            {trialDaysLeft} {trialDaysLeft === 1 ? 'Day' : 'Days'} left in {FREE_TRIAL_DAYS}-Day Free Trial
           </div>
           <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Upgrade</span>
         </div>

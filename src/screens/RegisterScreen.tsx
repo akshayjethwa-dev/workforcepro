@@ -5,6 +5,12 @@ import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
 import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff, X, Building2 } from 'lucide-react';
+<<<<<<< HEAD
+=======
+
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
 
 interface Props {
   onNavigateToLogin: () => void;
@@ -88,7 +94,11 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             let trialEndsAt = inviteData.trialEndsAt || null;
             if (inviteData.plan === 'TRIAL' && !trialEndsAt) {
                  const d = new Date();
+<<<<<<< HEAD
                  d.setDate(d.getDate() + 30); // Fallback to 30 days if somehow missing
+=======
+                 d.setDate(d.getDate() + FREE_TRIAL_DAYS); // Configurable Trial Days
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
                  trialEndsAt = d.toISOString();
             }
 
@@ -134,7 +144,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         // SCENARIO B: NORMAL PUBLIC SIGNUP
         // ==========================================
         const trialEndDate = new Date();
-        trialEndDate.setDate(trialEndDate.getDate() + 30);
+        trialEndDate.setDate(trialEndDate.getDate() + FREE_TRIAL_DAYS); // Configurable Trial Days
 
         const tenantRef = await addDoc(collection(db, 'tenants'), {
             name: formData.companyName,
@@ -202,7 +212,11 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
              <Building2 className="text-white" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Setup Your Account</h1>
+<<<<<<< HEAD
           <p className="text-gray-500 text-sm mt-1">Start your free trial today</p>
+=======
+          <p className="text-gray-500 text-sm mt-1">Start your {FREE_TRIAL_DAYS}-day free trial today</p>
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
         </div>
 
         {error && (
@@ -356,7 +370,11 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
         <p>As the account owner, you act as the Data Controller for your employees' data. You warrant that capturing photos and logging attendance via this app complies with your local labor and privacy laws.</p>
 
         <h3 className="font-bold text-gray-900 mt-4">3. Trial and Subscription</h3>
+<<<<<<< HEAD
         <p>Upon registration, you may be granted a free trial. Continued use of the platform after this period requires an active subscription or an agreement with your Reseller Partner.</p>
+=======
+        <p>Upon registration, you may be granted a {FREE_TRIAL_DAYS}-day free trial. Continued use of the platform after this period requires an active subscription or an agreement with your Reseller Partner.</p>
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
       </LegalModal>
 
     </div>

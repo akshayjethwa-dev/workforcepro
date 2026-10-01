@@ -116,12 +116,23 @@ export const wageService = {
     const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
     const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
 
+    // Helper to get clean YYYY-MM-DD
+    const joiningDate = (worker.joinedDate || worker.dateOfJoining || '').slice(0, 10);
+    const exitDate = (worker.dateOfExit || '').slice(0, 10);
+
     const dailyStatuses = new Map<number, string>();
     const dailyRecords = new Map<number, AttendanceRecord>();
 
     // Pass 1: Plot the calendar and establish base statuses
     for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${yearStr}-${monthStr}-${day.toString().padStart(2, '0')}`;
+        
+        // 1. Check if worker was employed on this date
+        if ((joiningDate && dateStr < joiningDate) || (exitDate && dateStr > exitDate)) {
+            dailyStatuses.set(day, 'NOT_EMPLOYED');
+            continue;
+        }
+
         const record = attendanceRecords.find(a => a.date === dateStr && a.workerId === worker.id);
         const isPubHol = orgSettings.holidays?.find(h => h.date === dateStr);
         const isWeekOff = attendanceLogic.isWeeklyOff(dateStr, worker, orgSettings);
@@ -153,8 +164,8 @@ export const wageService = {
                 const prevDay = day > 1 ? dailyStatuses.get(day - 1) : null;
                 const nextDay = day < daysInMonth ? dailyStatuses.get(day + 1) : null;
                 
-                // Helper to check if a day is an unpaid absence
-                const isUnpaidAbsence = (dStatus: string | null, dRecord: AttendanceRecord | undefined) => {
+                // FIXED: Accept undefined to handle Map.get() return types safely
+                const isUnpaidAbsence = (dStatus: string | null | undefined, dRecord: AttendanceRecord | undefined) => {
                     if (dStatus === 'ABSENT' || dStatus === 'UNPAID_HOLIDAY') return true;
                     // LWP (Leave Without Pay) counts as an absence for Sandwich Rule purposes
                     if (dStatus === 'ON_LEAVE' && dRecord?.leaveInfo?.isPaid === false) return true;
@@ -175,6 +186,7 @@ export const wageService = {
     let presentDays = 0, halfDays = 0, absentDays = 0;
     let weeklyOffs = 0, publicHolidays = 0, holidayWorkedDays = 0;
     let paidLeaves = 0, unpaidLeaves = 0; // NEW TRACKERS
+    let notJoinedDays = 0;
     
     let totalBasic = 0;
     let totalOTPay = 0;
@@ -184,6 +196,11 @@ export const wageService = {
 
     for (let day = 1; day <= daysInMonth; day++) {
         const status = dailyStatuses.get(day)!;
+        if (status === 'NOT_EMPLOYED') {
+            notJoinedDays++;
+            continue;
+        }
+
         const dailyRate = worker.wageConfig.type === 'MONTHLY' ? worker.wageConfig.amount / totalWorkingDays : worker.wageConfig.amount;
         
         let dwBaseWage = 0, dwOTWage = 0, dwAllowances = 0;
@@ -259,8 +276,9 @@ export const wageService = {
         weeklyOffs,
         publicHolidays,
         holidayWorkedDays,
-        paidLeaves,      // NEW EXPORT
-        unpaidLeaves,    // NEW EXPORT
+        paidLeaves,      
+        unpaidLeaves,    
+        notJoinedDays,   
         payableDays,
         totalRegularHours: parseFloat(totalRegularHours.toFixed(1)),
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))

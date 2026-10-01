@@ -5,6 +5,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { SubscriptionTier, PlanLimits } from '../types/index';
+<<<<<<< HEAD
+=======
+
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
 
 export const BillingScreen: React.FC = () => {
   const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
@@ -29,14 +35,30 @@ export const BillingScreen: React.FC = () => {
   // Determine if the user is a client under a Reseller/Agency
   const isResellerManaged = !!profile?.resellerId;
 
+<<<<<<< HEAD
+=======
+  // Helper function to map backend plan names to frontend display names
+  const getDisplayPlanName = (plan: string | undefined) => {
+    if (!plan) return 'Unknown';
+    if (plan === 'ENTERPRISE') return 'Premium Growth Plan';
+    if (plan === 'FREE') return 'Micro-Team (Free)';
+    if (plan === 'TRIAL') return 'Free Trial (Premium Growth)';
+    if (plan === 'PRO') return 'Agency (Pro Plan)'; // Kept just in case old users are still on it
+    if (plan === 'STARTER') return 'Site Manager'; // Kept just in case old users are still on it
+    return plan;
+  };
+
+  const currentDisplayPlan = getDisplayPlanName(tenantPlan);
+
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   const orgDetails = `
 ---
 *Organization Details:*
 Name: ${profile?.companyName || 'Not Set'}
 Org ID: ${profile?.tenantId || 'Unknown'}
-Current Plan: ${tenantPlan}`;
+Current Plan: ${currentDisplayPlan}`;
 
-  const enterpriseMsg = `Hi, I am interested in upgrading to the *Enterprise Plan* for WorkForcePro. Could we discuss custom pricing and features?${orgDetails}`;
+  const enterpriseMsg = `Hi, I am interested in upgrading to the *Premium Growth Plan* for WorkForcePro. Could we discuss custom pricing and features?${orgDetails}`;
   const whatsappEnterpriseUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(enterpriseMsg)}`;
 
   const paymentMsg = `Hi, I just paid ₹${showPaymentModal.price} for the *${showPaymentModal.planName} Plan* via Razorpay. Here is my receipt/screenshot.${orgDetails}`;
@@ -99,27 +121,35 @@ Current Plan: ${tenantPlan}`;
         {tenantPlan === 'TRIAL' && trialDaysLeft !== null && (
             <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
                 <div>
-                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} Days left in Free Trial</p>
-                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all 'Enterprise' features unlocked.</p>
+                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} {trialDaysLeft === 1 ? 'Day' : 'Days'} left in {FREE_TRIAL_DAYS}-Day Free Trial</p>
+                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all Premium Growth Plan features unlocked. After {FREE_TRIAL_DAYS} days, your account moves to the Free plan unless you upgrade.</p>
                 </div>
             </div>
         )}
-        {tenantPlan === 'FREE' && trialDaysLeft === 0 && (
-             <div className="mt-2 bg-red-50 border border-red-200 p-3 rounded-xl flex items-center justify-between">
+        {tenantPlan === 'FREE' && (
+             <div className="mt-2 bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center justify-between">
                  <div>
-                     <p className="text-red-800 font-bold text-sm">Trial Expired</p>
-                     <p className="text-red-600 text-xs mt-0.5">Your account has been moved to the Free plan. Upgrade to restore premium features.</p>
+                     <p className="text-amber-800 font-bold text-sm">Free Plan Active</p>
+                     <p className="text-amber-700 text-xs mt-0.5">Your {FREE_TRIAL_DAYS}-day trial has completed and you are currently on the Free plan. Buy the Premium Growth Plan to unlock all features.</p>
                  </div>
              </div>
         )}
       </div>
 
+<<<<<<< HEAD
       {/* Current Plan Overview added for better context before conditional hiding */}
+=======
+      {/* Current Plan Overview */}
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6">
         <div className="flex justify-between items-center mb-4">
             <div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Current Plan</p>
+<<<<<<< HEAD
                 <h2 className="text-2xl font-black text-gray-900 mt-1">{tenantPlan}</h2>
+=======
+                <h2 className="text-2xl font-black text-gray-900 mt-1">{currentDisplayPlan}</h2>
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
             </div>
             <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center">
                 <CreditCard className="text-blue-600" size={24} />
@@ -177,6 +207,7 @@ Current Plan: ${tenantPlan}`;
                 buttonText="Start for Free"
                 onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
             />
+<<<<<<< HEAD
             <PlanCard 
                 title="Site Manager" 
                 price="1999" 
@@ -200,11 +231,21 @@ Current Plan: ${tenantPlan}`;
                 title="Enterprise" 
                 price="7999" 
                 strikePrice="9999"
+=======
+            
+            <PlanCard 
+                title="Premium Growth Plan" 
+                price="1999" 
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
                 desc="For large factories requiring full statutory compliance."
                 features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
                 isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
                 currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
+<<<<<<< HEAD
                 onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
+=======
+                onUpgrade={() => handleUpgradeClick('Premium Growth Plan', '1999')}
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
             />
           </div>
       )}

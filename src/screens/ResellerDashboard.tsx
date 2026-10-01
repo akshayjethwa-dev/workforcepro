@@ -7,6 +7,12 @@ import { SubscriptionTier } from '../types/index';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 
+<<<<<<< HEAD
+=======
+// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
+const FREE_TRIAL_DAYS = 7; 
+
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
 export const ResellerDashboard: React.FC = () => {
   const { user, profile, impersonateTenant } = useAuth();
   const [clients, setClients] = useState<any[]>([]);
@@ -22,8 +28,12 @@ export const ResellerDashboard: React.FC = () => {
 
   // Modals
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
+<<<<<<< HEAD
   // NEW: Add trialDays state for custom length trials
   const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: 30 });
+=======
+  const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: FREE_TRIAL_DAYS });
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
@@ -60,11 +70,18 @@ export const ResellerDashboard: React.FC = () => {
 
   const handleInviteClient = async () => {
       if (!inviteData.email || !inviteData.companyName) return alert("Fill all fields");
+<<<<<<< HEAD
       // NEW: Pass trialDays to the invite logic
       await dbService.inviteResellerClient(user!.uid, inviteData.email, inviteData.companyName, inviteData.plan, inviteData.trialDays);
       alert(`Invite sent! Once registered, they will appear here.`);
       setInviteModalOpen(false);
       setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: 30 });
+=======
+      await dbService.inviteResellerClient(user!.uid, inviteData.email, inviteData.companyName, inviteData.plan, inviteData.trialDays);
+      alert(`Invite sent! Once registered, they will appear here.`);
+      setInviteModalOpen(false);
+      setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: FREE_TRIAL_DAYS });
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   };
 
   const toggleStatus = async (id: string, currentStatus: boolean) => {
@@ -347,7 +364,11 @@ export const ResellerDashboard: React.FC = () => {
                           </select>
                       </div>
 
+<<<<<<< HEAD
                       {/* NEW: Custom Trial Duration Selector */}
+=======
+                      {/* Custom Trial Duration Selector */}
+>>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
                       {inviteData.plan === 'TRIAL' && (
                           <div>
                               <label className="text-xs font-bold text-gray-700 uppercase">Trial Duration (Days)</label>
