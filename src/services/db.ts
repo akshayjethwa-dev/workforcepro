@@ -32,6 +32,11 @@ export const dbService = {
     await setDoc(docRef, config, { merge: true });
   },
 
+  updateTenantBranding: async (tenantId: string, branding: Partial<any>) => {
+    const tenantRef = doc(db, 'tenants', tenantId);
+    await updateDoc(tenantRef, { branding });
+  },
+
   getAllTenants: async () => {
     try {
       const q = query(collection(db, 'users'), where('role', '==', 'FACTORY_OWNER'));
@@ -44,11 +49,13 @@ export const dbService = {
         
         let plan = 'FREE';
         let overrides = {};
+        let branding = {};
         if (data.tenantId) {
             const tenantDoc = await getDoc(doc(db, 'tenants', data.tenantId));
             if (tenantDoc.exists()) {
                 plan = tenantDoc.data().plan || 'FREE';
                 overrides = tenantDoc.data().overrides || {};
+                branding = tenantDoc.data().branding || {};
             }
         }
         
@@ -59,7 +66,8 @@ export const dbService = {
           isActive: data.isActive !== false, 
           joinedAt: data.createdAt || new Date().toISOString(),
           plan: plan, 
-          overrides: overrides 
+          overrides: overrides,
+          branding: branding
         };
       }));
       
@@ -83,12 +91,137 @@ export const dbService = {
 
   updateTenantPlan: async (tenantId: string, plan: SubscriptionTier) => {
     const tenantRef = doc(db, 'tenants', tenantId);
-    await updateDoc(tenantRef, { plan });
+    const updateData: any = { plan };
+    
+    // Auto-assign a 14-day trial if manually switched to TRIAL from the dropdown later
+    if (plan === 'TRIAL') {
+        const d = new Date();
+        d.setDate(d.getDate() + 14);
+        updateData.trialEndsAt = d.toISOString();
+    }
+    
+    await updateDoc(tenantRef, updateData);
   },
 
   updateTenantOverrides: async (tenantId: string, overrides: Partial<PlanLimits>) => {
     const tenantRef = doc(db, 'tenants', tenantId);
     await updateDoc(tenantRef, { overrides });
+  },
+
+  // --- RESELLER METHODS ---
+  
+  makeReseller: async (userId: string) => {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, { role: 'RESELLER' });
+    return true;
+  },
+
+  getResellers: async () => {
+    try {
+      const q = query(collection(db, 'users'), where('role', '==', 'RESELLER'));
+      const snapshot = await getDocs(q);
+      
+      const resellers = await Promise.all(snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        const clientsQ = query(
+            collection(db, 'users'), 
+            where('role', '==', 'FACTORY_OWNER'), 
+            where('resellerId', '==', docSnap.id)
+        );
+        const clientsSnap = await getDocs(clientsQ);
+        const activeClients = clientsSnap.docs.filter(d => d.data().isActive !== false).length;
+        
+        return {
+          id: docSnap.id,
+          ...data,
+          activeClients,
+          commissionRate: data.commissionRate || 150
+        };
+      }));
+      
+      return resellers;
+    } catch (error) {
+      console.error("Error fetching resellers:", error);
+      return [];
+    }
+  },
+
+  updateResellerCommission: async (userId: string, commissionRate: number) => {
+    const userRef = doc(db, 'users', userId);
+    await updateDoc(userRef, { commissionRate });
+  },
+
+  inviteResellerPartner: async (email: string, companyName: string, commissionRate: number) => {
+    await setDoc(doc(db, "invites", email), {
+      email, 
+      companyName, 
+      role: 'RESELLER',
+      commissionRate: commissionRate,
+      createdAt: new Date().toISOString()
+    });
+  },
+
+  getResellerClients: async (resellerUid: string) => {
+    try {
+      const q = query(
+          collection(db, 'users'), 
+          where('role', '==', 'FACTORY_OWNER'),
+          where('resellerId', '==', resellerUid)
+      );
+      const snapshot = await getDocs(q);
+      
+      const tenants = await Promise.all(snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        const workersQ = query(collection(db, "workers"), where("tenantId", "==", data.tenantId));
+        const workersSnap = await getDocs(workersQ);
+        
+        let plan = 'FREE';
+        let branding = {};
+        
+        if (data.tenantId) {
+            const tenantDoc = await getDoc(doc(db, 'tenants', data.tenantId));
+            if (tenantDoc.exists()) {
+                plan = tenantDoc.data().plan || 'FREE';
+                branding = tenantDoc.data().branding || {};
+            }
+        }
+        
+        return {
+          id: docSnap.id,
+          ...data,
+          workerCount: workersSnap.size,
+          isActive: data.isActive !== false, 
+          joinedAt: data.createdAt || new Date().toISOString(),
+          plan: plan,
+          branding: branding
+        };
+      }));
+      return tenants;
+    } catch (error) {
+      console.error("Error fetching reseller clients:", error);
+      return [];
+    }
+  },
+
+  // NEW: Support for Custom Trial Days
+  inviteResellerClient: async (resellerUid: string, email: string, companyName: string, plan: SubscriptionTier, trialDays: number = 30) => {
+    let trialEndsAt = null;
+    
+    if (plan === 'TRIAL') {
+        const d = new Date();
+        d.setDate(d.getDate() + trialDays);
+        trialEndsAt = d.toISOString();
+    }
+
+    await setDoc(doc(db, "invites", email), {
+      email, 
+      companyName, 
+      role: 'FACTORY_OWNER', 
+      resellerId: resellerUid, 
+      plan: plan,
+      trialEndsAt: trialEndsAt,
+      createdAt: new Date().toISOString()
+    });
   },
 
   // --- WORKER MANAGEMENT ---

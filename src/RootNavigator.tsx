@@ -17,6 +17,7 @@ import { ScreenName, Worker, KioskTerminal } from './types/index';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
 import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
+import { ResellerDashboard } from './screens/ResellerDashboard'; // NEW IMPORT
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
@@ -39,8 +40,12 @@ export const RootNavigator: React.FC = () => {
   });
 
   useEffect(() => {
-    if (user && profile && profile.role === 'SUPER_ADMIN' && currentScreen === 'DASHBOARD') {
-      setCurrentScreen('SUPER_ADMIN_DASHBOARD');
+    if (user && profile && currentScreen === 'DASHBOARD') {
+      if (profile.role === 'SUPER_ADMIN') {
+        setCurrentScreen('SUPER_ADMIN_DASHBOARD');
+      } else if (profile.role === 'RESELLER') {
+        setCurrentScreen('RESELLER_DASHBOARD'); // NEW ROUTING
+      }
     }
   }, [user, profile, currentScreen]);
 
@@ -51,7 +56,10 @@ export const RootNavigator: React.FC = () => {
       return false; 
     }
     
-    const defaultScreen = profile?.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN_DASHBOARD' : 'DASHBOARD';
+    // Default screen determination based on role
+    let defaultScreen: ScreenName = 'DASHBOARD';
+    if (profile?.role === 'SUPER_ADMIN') defaultScreen = 'SUPER_ADMIN_DASHBOARD';
+    if (profile?.role === 'RESELLER') defaultScreen = 'RESELLER_DASHBOARD'; // NEW ROUTING
     
     if (currentScreen !== defaultScreen) {
        setCurrentScreen(defaultScreen);
@@ -138,17 +146,23 @@ export const RootNavigator: React.FC = () => {
           ? <SuperAdminDashboard /> 
           : <DashboardScreen onOpenKiosk={handleOpenKiosk} />; 
 
+      // NEW RESELLER DASHBOARD ROUTING
+      case 'RESELLER_DASHBOARD': 
+        return profile?.role === 'RESELLER' 
+          ? <ResellerDashboard /> 
+          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
+
       case 'REPORTS': return <ReportsScreen />;
       case 'BILLING': return <BillingScreen />;
       
-      // NEW LEGAL SCREENS
+      // LEGAL SCREENS
       case 'TERMS': return <TermsScreen />;
       case 'PRIVACY': return <PrivacyScreen />;
       
       default: 
-        return profile?.role === 'SUPER_ADMIN' 
-          ? <SuperAdminDashboard /> 
-          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
+        if (profile?.role === 'SUPER_ADMIN') return <SuperAdminDashboard />;
+        if (profile?.role === 'RESELLER') return <ResellerDashboard />;
+        return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
     }
   };
 

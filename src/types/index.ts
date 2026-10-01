@@ -1,6 +1,7 @@
 // src/types/index.ts
 export type Role = 
   | 'SUPER_ADMIN'   // You (SaaS Owner)
+  | 'RESELLER'      // NEW: Channel Partner / Agency
   | 'FACTORY_OWNER' // Tenant Admin
   | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
   | 'WORKER';
@@ -32,6 +33,14 @@ export interface UserProfile {
   role: Role;
   tenantId: string;
   companyName?: string;
+  resellerId?: string;
+  commissionRate?: number;
+}
+
+export interface BrandingConfig {
+  appName: string;
+  logoUrl: string;        // We'll save this as a base64 string for immediate use
+  primaryColor: string;   // Hex color code
 }
 
 export interface TenantProfile {
@@ -42,6 +51,8 @@ export interface TenantProfile {
   plan: SubscriptionTier;
   trialEndsAt?: string; 
   overrides?: Partial<PlanLimits>; 
+  branding?: BrandingConfig; // NEW
+  resellerId?: string;
 }
 
 export interface ShiftConfig {
@@ -340,4 +351,4 @@ export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY';
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD';

@@ -1,17 +1,33 @@
 // src/screens/BillingScreen.tsx
-import React, { useState } from 'react';
-import { Check, X, ShieldCheck, ExternalLink, MessageCircle, Info } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Check, X, ShieldCheck, ExternalLink, MessageCircle, Info, CreditCard, Building2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { dbService } from '../services/db';
+import { SubscriptionTier, PlanLimits } from '../types/index';
 
 export const BillingScreen: React.FC = () => {
-  const { profile, tenantPlan, trialDaysLeft } = useAuth();
+  const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
+  const { branding } = useTheme();
   
+  const [globalPlans, setGlobalPlans] = useState<Record<SubscriptionTier, PlanLimits> | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState<{show: boolean, planName: string, price: string}>({show: false, planName: '', price: ''});
 
   const adminPhone = "918460852903"; // Your WhatsApp business number
   
   // YOUR ACTUAL RAZORPAY PAYMENT LINK
   const RAZORPAY_PAYMENT_LINK = "https://razorpay.me/@aapacapitalprivatelimited"; 
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      const plans = await dbService.getGlobalPlanConfig();
+      setGlobalPlans(plans);
+    };
+    fetchPlans();
+  }, []);
+
+  // Determine if the user is a client under a Reseller/Agency
+  const isResellerManaged = !!profile?.resellerId;
 
   const orgDetails = `
 ---
@@ -98,50 +114,103 @@ Current Plan: ${tenantPlan}`;
         )}
       </div>
 
-      <div className="space-y-6">
-        <PlanCard 
-            title="Micro-Team (Free)" 
-            price="0" 
-            desc="Perfect for independent contractors testing the waters."
-            features={["Up to 15 Workers", "1 Active Site", "Manual Attendance Entry", "Basic Daily Wages"]}
-            isCurrent={tenantPlan === 'FREE'}
-            currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
-            buttonText="Start for Free"
-            onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
-        />
-        <PlanCard 
-            title="Site Manager" 
-            price="1999" 
-            strikePrice="2999"
-            desc="Basic automation for single-site businesses."
-            features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Manage Public Holidays" ,"Geofencing & Offline Sync", "Payslips & Allowances"]}
-            isCurrent={tenantPlan === 'STARTER'}
-            onUpgrade={() => handleUpgradeClick('Site Manager', '1999')}
-        />
-        <PlanCard 
-            title="Agency (Pro Plan)" 
-            price="3999"
-            strikePrice="5299"
-            desc="Multi-site control with strict HR rules and anti-spoofing."
-            features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Digital ID Cards" ,"Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
-            isCurrent={tenantPlan === 'PRO'}
-            isPopular={true}
-            onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '3999')}
-        />
-        <PlanCard 
-            title="Enterprise" 
-            price="7999" 
-            strikePrice="9999"
-            desc="For large factories requiring full statutory compliance."
-            features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
-            isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
-            currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
-            onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
-        />
+      {/* Current Plan Overview added for better context before conditional hiding */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6">
+        <div className="flex justify-between items-center mb-4">
+            <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Current Plan</p>
+                <h2 className="text-2xl font-black text-gray-900 mt-1">{tenantPlan}</h2>
+            </div>
+            <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center">
+                <CreditCard className="text-blue-600" size={24} />
+            </div>
+        </div>
+        
+        <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 flex flex-wrap gap-4 mt-4 text-sm">
+            <div>
+                <p className="text-gray-500 text-xs">Worker Limit</p>
+                <p className="font-bold">{limits?.maxWorkers === 9999 ? 'Unlimited' : limits?.maxWorkers}</p>
+            </div>
+            <div>
+                <p className="text-gray-500 text-xs">Manager Limit</p>
+                <p className="font-bold">{limits?.maxManagers === 9999 ? 'Unlimited' : limits?.maxManagers}</p>
+            </div>
+            <div>
+                <p className="text-gray-500 text-xs">Kiosk Scanning</p>
+                <p className="font-bold text-green-600">{limits?.kioskEnabled ? 'Enabled' : 'Locked'}</p>
+            </div>
+        </div>
       </div>
 
+      {/* =========================================================================
+          RESELLER MANAGED VIEW (Hidden Pricing)
+          ========================================================================= */}
+      {isResellerManaged ? (
+          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 text-center mt-6">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                  <Building2 className="text-indigo-600" size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-indigo-900">Enterprise Managed Account</h3>
+              <p className="text-sm text-indigo-700 mt-2 max-w-sm mx-auto">
+                  Your subscription, limits, and billing are securely managed directly by your technology provider. 
+              </p>
+              <div className="mt-6 bg-white p-4 rounded-xl inline-block text-left shadow-sm border border-indigo-50">
+                  <p className="text-xs text-gray-500 font-bold uppercase mb-1">To upgrade your limits or features:</p>
+                  <p className="text-sm font-medium text-gray-800">
+                      Please contact the <strong>{branding?.appName || 'Support Team'}</strong> representative who set up your account.
+                  </p>
+              </div>
+          </div>
+      ) : (
+      /* =========================================================================
+         DIRECT CLIENT VIEW (Shows Pricing & Payment Buttons)
+         ========================================================================= */
+          <div className="space-y-6 mt-6">
+            <h3 className="font-bold text-gray-800">Available Upgrades</h3>
+            <PlanCard 
+                title="Micro-Team (Free)" 
+                price="0" 
+                desc="Perfect for independent contractors testing the waters."
+                features={["Up to 15 Workers", "1 Active Site", "Manual Attendance Entry", "Basic Daily Wages"]}
+                isCurrent={tenantPlan === 'FREE'}
+                currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
+                buttonText="Start for Free"
+                onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
+            />
+            <PlanCard 
+                title="Site Manager" 
+                price="1999" 
+                strikePrice="2999"
+                desc="Basic automation for single-site businesses."
+                features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Manage Public Holidays" ,"Geofencing & Offline Sync", "Payslips & Allowances"]}
+                isCurrent={tenantPlan === 'STARTER'}
+                onUpgrade={() => handleUpgradeClick('Site Manager', '1999')}
+            />
+            <PlanCard 
+                title="Agency (Pro Plan)" 
+                price="3999"
+                strikePrice="5299"
+                desc="Multi-site control with strict HR rules and anti-spoofing."
+                features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Digital ID Cards" ,"Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
+                isCurrent={tenantPlan === 'PRO'}
+                isPopular={true}
+                onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '3999')}
+            />
+            <PlanCard 
+                title="Enterprise" 
+                price="7999" 
+                strikePrice="9999"
+                desc="For large factories requiring full statutory compliance."
+                features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
+                isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
+                currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
+                onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
+            />
+          </div>
+      )}
+
       {/* RAZORPAY LINK MODAL */}
-      {showPaymentModal.show && (
+      {showPaymentModal.show && !isResellerManaged && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
             <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
                 <button onClick={() => setShowPaymentModal({show:false, planName:'', price:''})} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full text-gray-500 hover:bg-gray-200 transition-colors">
