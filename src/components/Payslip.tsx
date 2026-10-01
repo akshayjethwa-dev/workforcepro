@@ -43,16 +43,9 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
     try {
       // Force desktop width (800px) so the mobile export doesn't look squished
       const dataUrl = await toPng(element, { 
-<<<<<<< HEAD
         quality: 1.0,
         pixelRatio: 2, // High resolution
         backgroundColor: '#ffffff',
-=======
-        quality: 0.95,
-        pixelRatio: 2, // High resolution
-        backgroundColor: '#ffffff',
-        cacheBust: true,
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
         style: {
             width: '800px', 
             padding: '40px', // Add page margins
@@ -94,7 +87,6 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
       if (!pdfBase64) throw new Error('Failed to generate PDF');
 
       const fileName = `Payslip_${data.workerName.replace(/\s+/g, '_')}_${data.month}.pdf`;
-<<<<<<< HEAD
 
       if (Capacitor.isNativePlatform()) {
         await Filesystem.writeFile({
@@ -115,61 +107,6 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
     } catch (error) {
       console.error('Error downloading payslip:', error);
       alert('Failed to download the payslip. Please try again.');
-=======
-      const blob = base64ToBlob(pdfBase64, 'application/pdf');
-
-      if (Capacitor.isNativePlatform()) {
-        let fileUri = '';
-        try {
-          const savedFile = await Filesystem.writeFile({
-            path: fileName,
-            data: pdfBase64,
-            directory: Directory.Cache,
-          });
-          fileUri = savedFile.uri;
-        } catch (err) {
-          console.warn('Cache write failed, trying Documents:', err);
-          const savedFile = await Filesystem.writeFile({
-            path: fileName,
-            data: pdfBase64,
-            directory: Directory.Documents,
-          });
-          fileUri = savedFile.uri;
-        }
-
-        // Trigger native share/save dialog for maximum native mobile compatibility
-        try {
-          await Share.share({
-            title: `Payslip - ${data.workerName}`,
-            text: `Payslip for ${data.workerName} (${formattedMonth})`,
-            url: fileUri,
-            dialogTitle: 'Save or Share Payslip',
-          });
-        } catch (sErr) {
-          alert('Payslip PDF downloaded and saved to your device.');
-        }
-      } else {
-        // Web & Mobile Web fallback using Blob URL
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.download = fileName;
-        link.href = blobUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        // Fallback for iOS Safari which might block dynamic downloads
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        if (isIOS) {
-          window.open(blobUrl, '_blank');
-        }
-
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-      }
-    } catch (error: any) {
-      console.error('Error downloading payslip:', error);
-      alert('Failed to download the payslip: ' + (error.message || 'Please try again.'));
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
     } finally {
       setIsProcessing(false);
     }
