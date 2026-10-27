@@ -96,7 +96,7 @@ export const IdCardsScreen: React.FC = () => {
             {/* --- FRONT OF CARD --- */}
             <div className="id-card-print w-72 bg-white rounded-2xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col relative shrink-0 h-105">
               {/* Header */}
-              <div className="h-28 bg-linear-to-br from-indigo-700 via-indigo-600 to-blue-500 flex flex-col items-center justify-start pt-6 px-4 text-center shrink-0">
+              <div className="h-28 bg-gradient-to-br from-indigo-700 via-indigo-600 to-blue-500 flex flex-col items-center justify-start pt-6 px-4 text-center shrink-0">
                 <div className="flex items-center text-white/90 mb-1">
                    <Building2 size={14} className="mr-1.5" />
                    <span className="text-[10px] font-bold tracking-widest uppercase">Factory Access</span>
@@ -110,9 +110,19 @@ export const IdCardsScreen: React.FC = () => {
               <div className="flex justify-center -mt-12 relative z-10 shrink-0">
                 <div className="w-24 h-24 rounded-full border-4 border-white bg-slate-100 flex items-center justify-center overflow-hidden shadow-md">
                   {selectedWorker.photoUrl ? (
-                    <img src={selectedWorker.photoUrl} alt={selectedWorker.name} className="w-full h-full object-cover" />
+                    <img 
+                      src={selectedWorker.photoUrl} 
+                      alt={selectedWorker.name} 
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover" 
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none';
+                      }}
+                    />
                   ) : (
-                    <UserIcon size={32} className="text-slate-300" />
+                    <span className="text-xl font-bold text-slate-500 font-mono">
+                      {selectedWorker.name.charAt(0).toUpperCase()}
+                    </span>
                   )}
                 </div>
               </div>
@@ -253,81 +263,87 @@ export const IdCardsScreen: React.FC = () => {
   }
 
   // ==========================================
-  // VIEW 1: CLEAN MOBILE DIRECTORY LIST
+  // VIEW 1: CLEAN RESPONSIVE DIRECTORY GRID
   // ==========================================
   return (
-    <div className="p-4 sm:p-6 bg-slate-50 min-h-screen pb-24">
-      
+    <div className="space-y-6 pb-12">
       {/* Header Area */}
-      <div className="mb-6">
-        <h2 className="text-2xl font-black text-slate-900 flex items-center tracking-tight">
-          <IdCard className="mr-3 text-indigo-600" size={28} /> 
-          Digital ID Cards
-        </h2>
-        <p className="text-sm text-slate-500 font-medium mt-1">
-          Select a worker to preview and print their smart badge.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Worker ID Card Studio</h1>
+          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+            <span>Generate & print factory QR identity badges for staff</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span className="font-mono tabular-nums text-slate-600">{filteredWorkers.length} active workers</span>
+          </div>
+        </div>
       </div>
 
       {/* Clean Search Bar */}
-      <div className="relative mb-6">
-        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-          <Search className="h-5 w-5 text-slate-400" />
-        </div>
+      <div className="relative">
+        <Search className="absolute left-3.5 top-3 text-slate-400" size={17} />
         <input
           type="text"
-          placeholder="Search by name or department..."
+          placeholder="Search by worker name, role, or department..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-12 pr-4 py-3.5 bg-white border border-slate-200 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 shadow-sm transition-all"
+          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all shadow-xs"
         />
       </div>
 
-      {/* Clean List View */}
-      <div className="space-y-3">
+      {/* Responsive Dual Viewport Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filteredWorkers.map(worker => (
           <div 
             key={worker.id}
             onClick={() => setSelectedWorker(worker)}
-            className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center cursor-pointer active:scale-[0.98] active:bg-slate-50 transition-all hover:border-indigo-100 hover:shadow-md"
+            className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-all hover:border-blue-300 hover:shadow-md group"
           >
-            {/* Small Avatar */}
-            <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center">
-              {worker.photoUrl ? (
-                <img src={worker.photoUrl} alt={worker.name} className="w-full h-full object-cover" />
-              ) : (
-                <UserIcon size={20} className="text-slate-400" />
-              )}
-            </div>
-            
-            {/* Info */}
-            <div className="ml-4 flex-1 overflow-hidden">
-              <h4 className="font-bold text-slate-800 truncate">{worker.name}</h4>
-              <div className="flex items-center mt-0.5">
-                 <span className="text-xs text-indigo-600 font-bold truncate">{worker.designation || 'Staff'}</span>
-                 <span className="text-xs text-slate-300 mx-1.5">•</span>
-                 <span className="text-xs text-slate-500 truncate">{worker.department || 'General'}</span>
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center group-hover:border-blue-300 transition-colors">
+                {worker.photoUrl ? (
+                  <img 
+                    src={worker.photoUrl} 
+                    alt={worker.name} 
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover" 
+                    onError={(e) => {
+                      (e.currentTarget as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <span className="text-sm font-bold text-slate-600 font-mono">
+                    {worker.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+              
+              <div className="min-w-0">
+                <h4 className="font-bold text-sm text-slate-900 truncate group-hover:text-blue-600 transition-colors">
+                  {worker.name}
+                </h4>
+                <div className="text-xs text-slate-500 truncate mt-0.5 flex items-center gap-1.5">
+                  <span>{worker.designation || 'Staff'}</span>
+                  <span aria-hidden="true" className="text-slate-300">·</span>
+                  <span className="truncate">{worker.department || 'Floor Ops'}</span>
+                </div>
               </div>
             </div>
 
-            {/* Chevron */}
-            <div className="ml-3 w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
-               <ChevronRight size={18} className="text-slate-400" />
+            <div className="w-8 h-8 rounded-lg bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors">
+              <ChevronRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
             </div>
           </div>
         ))}
-
-        {filteredWorkers.length === 0 && (
-          <div className="bg-white rounded-3xl p-10 text-center border border-slate-200 shadow-sm flex flex-col items-center mt-6">
-            <div className="bg-slate-50 p-4 rounded-full mb-4">
-               <Search size={28} className="text-slate-400" />
-            </div>
-            <h3 className="text-lg font-black text-slate-800">No Workers Found</h3>
-            <p className="text-slate-500 text-sm mt-1">Try adjusting your search term.</p>
-          </div>
-        )}
       </div>
 
+      {filteredWorkers.length === 0 && (
+        <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 shadow-xs flex flex-col items-center">
+          <IdCard size={32} className="mx-auto mb-2 text-slate-300" />
+          <h3 className="text-sm font-bold text-slate-800">No Workers Found</h3>
+          <p className="text-xs text-slate-500 mt-1">Try clearing your search term or filter.</p>
+        </div>
+      )}
     </div>
   );
 };

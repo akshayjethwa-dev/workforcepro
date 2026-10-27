@@ -3,9 +3,10 @@ import React, { useState } from 'react';
 import { signInWithEmailAndPassword, sendPasswordResetEmail, signInAnonymously } from 'firebase/auth'; 
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore'; 
 import { auth, db } from '../lib/firebase'; 
-import { dbService } from '../services/db';
-import { Mail, Lock, Loader2, LogIn, Eye, EyeOff, MonitorSmartphone } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { Mail, Lock, Loader2, LogIn, Eye, EyeOff, MonitorSmartphone, Sparkles } from 'lucide-react';
 import { KioskTerminal } from '../types/index';
+import { dbService } from '../services/db';
 
 interface Props {
   onNavigateToRegister: () => void;
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogin }) => {
+  const { loginDemo } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pairingCode, setPairingCode] = useState('');
@@ -92,32 +94,42 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
   };
 
   return (
-    <div className="min-h-dvh bg-blue-600 flex flex-col items-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-8 my-auto shrink-0 mb-6 mt-6">
-        <div className="text-center mb-8">
-          <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${isKioskMode ? 'bg-purple-100' : 'bg-blue-100'}`}>
-            {isKioskMode ? <MonitorSmartphone className="text-purple-600" size={32} /> : <LogIn className="text-blue-600" size={32} />}
+    <div className="min-h-dvh bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 flex flex-col items-center justify-center p-4 py-8 overflow-y-auto antialiased">
+      <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-7 sm:p-8 my-auto shrink-0 border border-slate-100">
+        
+        {/* BRAND LOCKUP */}
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center mx-auto mb-3 shadow-md shadow-slate-900/30">
+            {isKioskMode ? <MonitorSmartphone className="text-blue-400" size={24} /> : <LogIn className="text-blue-400" size={24} />}
           </div>
-          <h1 className="text-2xl font-bold text-gray-800">
-            {isKioskMode ? 'Kiosk Terminal' : 'Welcome Back'}
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            {isKioskMode ? 'Kiosk Terminal Login' : 'WorkForce Pro'}
           </h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {isKioskMode ? 'Enter your 6-digit pairing code' : 'WorkForce Login'}
+          <p className="text-slate-500 text-xs mt-1">
+            {isKioskMode ? 'Enter the 6-digit pairing code assigned to this tablet' : 'Industrial Attendance & Factory Payroll'}
           </p>
         </div>
 
-        {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center font-medium">{error}</div>}
-        {successMsg && <div className="bg-green-50 text-green-600 p-3 rounded-lg text-sm mb-4 text-center font-medium">{successMsg}</div>}
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 p-3 rounded-xl text-xs mb-4 font-medium leading-relaxed">
+            {error}
+          </div>
+        )}
+        {successMsg && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3 rounded-xl text-xs mb-4 font-medium leading-relaxed">
+            {successMsg}
+          </div>
+        )}
 
-        <form onSubmit={handleLogin} className="space-y-5">
+        <form onSubmit={handleLogin} className="space-y-4">
           {isKioskMode ? (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">6-Digit Pairing Code</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">6-Digit Pairing Code</label>
               <input
                 type="text"
                 maxLength={6}
                 required
-                className="w-full text-center text-2xl tracking-widest p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none transition-all font-mono min-h-14"
+                className="w-full text-center text-3xl tracking-widest p-3.5 border border-slate-200 rounded-xl focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none transition-all font-mono tabular-nums min-h-14 bg-slate-50"
                 placeholder="------"
                 value={pairingCode}
                 onChange={(e) => setPairingCode(e.target.value.replace(/\D/g, ''))} 
@@ -126,14 +138,14 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
           ) : (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-3.5 text-gray-400" size={20} />
+                  <Mail className="absolute left-3.5 top-3.5 text-slate-400" size={17} />
                   <input
                     type="email"
                     required
-                    className="w-full pl-10 pr-4 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-12"
-                    placeholder="admin@company.com"
+                    className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none transition-all shadow-xs"
+                    placeholder="admin@factory.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
@@ -141,24 +153,33 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-1">
-                   <label className="block text-sm font-medium text-gray-700">Password</label>
-                   <button type="button" onClick={handleForgotPassword} disabled={resetLoading} className="text-xs text-blue-600 font-bold flex items-center min-h-11 px-2 -mr-2">
-                      {resetLoading ? 'Sending...' : 'Forgot Password?'}
+                <div className="flex justify-between items-center mb-1.5">
+                   <label className="block text-xs font-semibold text-slate-700">Password</label>
+                   <button 
+                     type="button" 
+                     onClick={handleForgotPassword} 
+                     disabled={resetLoading} 
+                     className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
+                   >
+                      {resetLoading ? 'Sending...' : 'Forgot?'}
                    </button>
                 </div>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3.5 text-gray-400" size={20} />
+                  <Lock className="absolute left-3.5 top-3.5 text-slate-400" size={17} />
                   <input
                     type={showPassword ? "text" : "password"}
                     required
-                    className="w-full pl-10 pr-12 py-3.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-12"
+                    className="w-full pl-10 pr-11 py-3 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 outline-none transition-all shadow-xs"
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-1 top-1 w-11 h-11 flex items-center justify-center text-gray-400 hover:text-gray-600">
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)} 
+                    className="absolute right-1 top-1 w-10 h-10 flex items-center justify-center text-slate-400 hover:text-slate-600"
+                  >
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
                 </div>
               </div>
@@ -168,30 +189,49 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
           <button
             type="submit"
             disabled={loading}
-            className={`w-full min-h-13 text-white font-bold rounded-lg shadow-lg transition-transform active:scale-95 flex items-center justify-center mt-2 ${
-              isKioskMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-gray-900 hover:bg-gray-800'
-            }`}
+            className="w-full py-3 px-4 text-white font-semibold text-xs sm:text-sm rounded-xl shadow-xs transition-all active:scale-95 flex items-center justify-center bg-slate-900 hover:bg-slate-800 disabled:opacity-60"
           >
-            {loading ? <Loader2 className="animate-spin" /> : (isKioskMode ? 'Launch Terminal' : 'Login to Dashboard')}
+            {loading ? <Loader2 className="animate-spin" size={18} /> : (isKioskMode ? 'Launch Terminal' : 'Sign In to Workspace')}
           </button>
         </form>
 
+        {/* INSTANT DEMO EXPLORATION */}
         {!isKioskMode && (
-          <div className="mt-6 pt-6 border-t border-gray-100 text-center flex flex-col items-center">
-            <p className="text-gray-500 text-sm mb-1">Don't have a factory account?</p>
-            <button onClick={onNavigateToRegister} className="text-blue-600 font-bold min-h-11 px-4 flex items-center">
-              Register New Company
+          <div className="mt-5 pt-4 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => loginDemo('FACTORY_OWNER')}
+              className="w-full py-3 px-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50 hover:from-blue-100 hover:to-indigo-100 text-slate-800 border border-blue-200/80 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-2 shadow-2xs group"
+            >
+              <Sparkles size={16} className="text-blue-600 group-hover:scale-110 transition-transform" />
+              <span>Explore Platform Demo</span>
+            </button>
+            <p className="text-[11px] text-slate-400 text-center mt-1.5">
+              Instant access with pre-loaded workers, biometric kiosk, daily muster &amp; payroll.
+            </p>
+          </div>
+        )}
+
+        {!isKioskMode && (
+          <div className="mt-4 pt-4 border-t border-slate-100 text-center flex flex-col items-center">
+            <p className="text-slate-500 text-xs mb-1">Setting up a new factory?</p>
+            <button 
+              onClick={onNavigateToRegister} 
+              className="text-blue-600 hover:text-blue-800 font-bold text-xs"
+            >
+              Register New Organization
             </button>
           </div>
         )}
       </div>
 
+      {/* KIOSK MODE TOGGLE */}
       <button 
         onClick={() => { setIsKioskMode(!isKioskMode); setError(''); setPairingCode(''); }}
-        className="text-white bg-white/20 hover:bg-white/30 px-6 min-h-13 rounded-xl font-bold transition-all flex items-center justify-center shadow-sm backdrop-blur-sm shrink-0 mb-6"
+        className="text-white/80 hover:text-white bg-white/10 hover:bg-white/15 px-5 py-2.5 rounded-xl font-semibold text-xs transition-all flex items-center justify-center shadow-xs backdrop-blur-md shrink-0 mt-3"
       >
-        {isKioskMode ? <LogIn size={18} className="mr-2"/> : <MonitorSmartphone size={18} className="mr-2"/>}
-        {isKioskMode ? 'Return to Standard Login' : 'Login as Kiosk Terminal'}
+        {isKioskMode ? <LogIn size={15} className="mr-2"/> : <MonitorSmartphone size={15} className="mr-2"/>}
+        {isKioskMode ? 'Switch to Standard Management Login' : 'Pair as Face & QR Tablet Terminal'}
       </button>
     </div>
   );

@@ -79,6 +79,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR', isOffline?: boolean}[]>([]);
   const [showExitPin, setShowExitPin] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
 
   useBackButton(() => {
     if (isDedicatedMode) return true; 
@@ -146,8 +147,14 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
           if(videoRef.current) videoRef.current.srcObject = stream; 
       })
       .catch(err => {
-          console.error("Camera Error:", err);
-          setFeedback("Camera Blocked. Check Permissions.");
+          const isPermissionIssue = err?.name === 'NotAllowedError' || (err?.message && err.message.includes('Permission dismissed'));
+          if (isPermissionIssue) {
+            console.warn("Camera permission was dismissed or denied:", err?.message || err?.name);
+            setFeedback("Camera permission dismissed. Please allow camera access.");
+          } else {
+            console.warn("Camera stream unavailable:", err);
+            setFeedback("Camera Blocked. Check Permissions.");
+          }
       });
       
     return () => {
@@ -492,12 +499,11 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
   const submitExitPin = () => {
     if (enteredPin === adminPin) {
+      setPinError(null);
       handleCleanExit(); 
     } else {
-      alert("Incorrect PIN");
-      setShowExitPin(false);
+      setPinError("Incorrect Admin PIN. Please try again.");
       setEnteredPin('');
-      processingRef.current = false;
     }
   };
 
@@ -630,12 +636,20 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
              <div className="bg-white p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl animate-in zoom-in">
                  <ShieldAlert size={40} className="text-red-500 mx-auto mb-4"/>
                  <h3 className="text-xl font-bold mb-2">Exit Kiosk Mode</h3>
-                 <p className="text-sm text-gray-500 mb-6">Enter Admin PIN to close terminal</p>
+                 <p className="text-sm text-gray-500 mb-4">Enter Admin PIN to close terminal</p>
+                 {pinError && (
+                   <p className="text-xs font-semibold text-rose-600 mb-4 bg-rose-50 py-1.5 px-3 rounded-lg border border-rose-200">
+                     {pinError}
+                   </p>
+                 )}
                  <input 
                     type="password" 
                     maxLength={4} 
                     value={enteredPin} 
-                    onChange={(e)=>setEnteredPin(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e)=>{
+                      setEnteredPin(e.target.value.replace(/\D/g, ''));
+                      if (pinError) setPinError(null);
+                    }}
                     className="w-full text-center text-3xl tracking-widest p-4 min-h-14 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
                     autoFocus
                  />

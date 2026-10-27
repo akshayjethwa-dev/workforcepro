@@ -2,8 +2,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore'; 
-import { UserProfile, SubscriptionTier, PlanLimits } from '../types/index';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { UserProfile, SubscriptionTier, PlanLimits, Role, DEFAULT_PLAN_CONFIG } from '../types/index';
 import { dbService } from '../services/db';
 
 interface AuthContextType {
@@ -18,6 +18,8 @@ interface AuthContextType {
   isImpersonating: boolean;
   impersonateTenant: (tenantId: string, companyName: string) => Promise<void>;
   stopImpersonating: () => Promise<void>;
+  loginDemo: (role?: Role) => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
@@ -29,7 +31,9 @@ const AuthContext = createContext<AuthContextType>({
     loading: true,
     isImpersonating: false, 
     impersonateTenant: async () => {}, 
-    stopImpersonating: async () => {} 
+    stopImpersonating: async () => {},
+    loginDemo: () => {},
+    logout: async () => {}
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -107,12 +111,75 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginDemo = (role: Role = 'FACTORY_OWNER') => {
+    const demoUid = role === 'SUPER_ADMIN' ? 'demo-superadmin-uid' : role === 'RESELLER' ? 'demo-reseller-uid' : 'demo-owner-uid';
+    const demoEmail = role === 'SUPER_ADMIN' ? 'superadmin@workforce.demo' : role === 'RESELLER' ? 'partner@agency.demo' : 'admin@factory.demo';
+    const demoCompany = role === 'SUPER_ADMIN' ? 'WorkForce Pro Global' : role === 'RESELLER' ? 'Apex Industrial Partners' : 'Apex Engineering Ltd.';
+
+    const demoUser = {
+      uid: demoUid,
+      email: demoEmail,
+      displayName: role === 'SUPER_ADMIN' ? 'Super Admin' : role === 'RESELLER' ? 'Partner Agency' : 'Factory Admin'
+    } as unknown as User;
+
+    const demoProfile: UserProfile = {
+      uid: demoUid,
+      email: demoEmail,
+      role: role,
+      tenantId: 'demo-tenant-id',
+      companyName: demoCompany
+    };
+
+    localStorage.setItem('workforce_demo_session', JSON.stringify({ user: demoUser, profile: demoProfile }));
+    setUser(demoUser);
+    setProfile(demoProfile);
+    setOriginalProfile(demoProfile);
+    setTenantPlan('ENTERPRISE');
+    setLimits(DEFAULT_PLAN_CONFIG.ENTERPRISE);
+    setTrialDaysLeft(14);
+    setLoading(false);
+  };
+
+  const logout = async () => {
+    localStorage.removeItem('workforce_demo_session');
+    try {
+      await auth.signOut();
+    } catch (e) {
+      console.warn("Sign out error:", e);
+    }
+    setUser(null);
+    setProfile(null);
+    setOriginalProfile(null);
+    setTenantPlan('FREE');
+    setLimits(null);
+    setTrialDaysLeft(null);
+  };
+
   useEffect(() => {
+    // Check for existing demo session first
+    const savedDemo = localStorage.getItem('workforce_demo_session');
+    if (savedDemo) {
+      try {
+        const parsed = JSON.parse(savedDemo);
+        if (parsed?.user && parsed?.profile) {
+          setUser(parsed.user);
+          setProfile(parsed.profile);
+          setOriginalProfile(parsed.profile);
+          setTenantPlan('ENTERPRISE');
+          setLimits(DEFAULT_PLAN_CONFIG.ENTERPRISE);
+          setTrialDaysLeft(14);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error("Failed to parse saved demo session", e);
+      }
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
-          setUser(firebaseUser);
-          
           if (firebaseUser) {
+            setUser(firebaseUser);
+            localStorage.removeItem('workforce_demo_session');
             const docRef = doc(db, 'users', firebaseUser.uid);
             const docSnap = await getDoc(docRef);
             
@@ -127,12 +194,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }
             }
           } else {
-            // Reset states when logged out
-            setProfile(null);
-            setOriginalProfile(null);
-            setTenantPlan('FREE');
-            setLimits(null);
-            setTrialDaysLeft(null);
+            // Only reset if not in demo session
+            if (!localStorage.getItem('workforce_demo_session')) {
+              setUser(null);
+              setProfile(null);
+              setOriginalProfile(null);
+              setTenantPlan('FREE');
+              setLimits(null);
+              setTrialDaysLeft(null);
+            }
           }
       } catch (error) {
           console.error("Critical error in auth state resolution:", error);
@@ -174,7 +244,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   return (
     <AuthContext.Provider value={{ 
       user, profile, tenantPlan, limits, trialDaysLeft, loading, 
-      isImpersonating, impersonateTenant, stopImpersonating 
+      isImpersonating, impersonateTenant, stopImpersonating,
+      loginDemo, logout
     }}>
       {!loading && children}
     </AuthContext.Provider>

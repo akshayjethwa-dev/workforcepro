@@ -3,18 +3,16 @@ import React, { useState, useEffect } from 'react';
 import { Users, Building2, Search, Power, Activity, Crown, Palette, Eye, MailPlus, IndianRupee, Download, X } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { SubscriptionTier } from '../types/index';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 
-<<<<<<< HEAD
-=======
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
-const FREE_TRIAL_DAYS = 7; 
-
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
+const FREE_TRIAL_DAYS = 7;
 export const ResellerDashboard: React.FC = () => {
   const { user, profile, impersonateTenant } = useAuth();
+  const { toast } = useToast();
   const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -28,12 +26,7 @@ export const ResellerDashboard: React.FC = () => {
 
   // Modals
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
-<<<<<<< HEAD
-  // NEW: Add trialDays state for custom length trials
-  const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: 30 });
-=======
   const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: FREE_TRIAL_DAYS });
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
@@ -69,36 +62,33 @@ export const ResellerDashboard: React.FC = () => {
   };
 
   const handleInviteClient = async () => {
-      if (!inviteData.email || !inviteData.companyName) return alert("Fill all fields");
-<<<<<<< HEAD
-      // NEW: Pass trialDays to the invite logic
+      if (!inviteData.email || !inviteData.companyName) {
+        toast.warning("Please fill in both client email and company name");
+        return;
+      }
       await dbService.inviteResellerClient(user!.uid, inviteData.email, inviteData.companyName, inviteData.plan, inviteData.trialDays);
-      alert(`Invite sent! Once registered, they will appear here.`);
-      setInviteModalOpen(false);
-      setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: 30 });
-=======
-      await dbService.inviteResellerClient(user!.uid, inviteData.email, inviteData.companyName, inviteData.plan, inviteData.trialDays);
-      alert(`Invite sent! Once registered, they will appear here.`);
+      toast.success(`Client invite sent to ${inviteData.email}`);
       setInviteModalOpen(false);
       setInviteData({ email: '', companyName: '', plan: 'TRIAL', trialDays: FREE_TRIAL_DAYS });
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   };
 
   const toggleStatus = async (id: string, currentStatus: boolean) => {
-    if(!window.confirm(`Deactivate client?`)) return;
     setClients(prev => prev.map(c => c.id === id ? { ...c, isActive: !currentStatus } : c));
     await dbService.toggleTenantStatus(id, currentStatus);
+    toast.success(`Client ${currentStatus ? 'deactivated' : 'activated'}`);
     loadData();
   };
 
   const handlePlanChange = async (tenantId: string, newPlan: SubscriptionTier) => {
     setClients(prev => prev.map(c => c.tenantId === tenantId ? { ...c, plan: newPlan } : c));
     await dbService.updateTenantPlan(tenantId, newPlan);
+    toast.success(`Plan upgraded to ${newPlan}`);
     loadData(); 
   };
 
   const handleImpersonate = (tenant: any) => {
-    if(window.confirm(`Log in as ${tenant.companyName}?`)) impersonateTenant(tenant.tenantId, tenant.companyName);
+    toast.info(`Switched to ${tenant.companyName} workspace`);
+    impersonateTenant(tenant.tenantId, tenant.companyName);
   };
 
   const openBrandingModal = (tenant: any) => {
@@ -110,6 +100,7 @@ export const ResellerDashboard: React.FC = () => {
   const saveBranding = async () => {
     await dbService.updateTenantBranding(selectedTenant.tenantId, brandingData);
     setBrandingModalOpen(false);
+    toast.success("Client branding applied");
     loadData(); 
   };
 
@@ -126,9 +117,11 @@ export const ResellerDashboard: React.FC = () => {
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
           pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
-          pdf.save(`Commission_Invoice_${new Date().toLocaleString('default', { month: 'short', year: 'numeric' })}.pdf`);
+          const filename = `Commission_Invoice_${new Date().toLocaleString('default', { month: 'short', year: 'numeric' })}.pdf`;
+          pdf.save(filename);
+          toast.success(`Downloaded ${filename}`);
       } catch (e) {
-          alert('Failed to generate invoice.');
+          toast.error("Failed to generate PDF invoice");
       } finally {
           setIsDownloading(false);
       }
@@ -364,11 +357,7 @@ export const ResellerDashboard: React.FC = () => {
                           </select>
                       </div>
 
-<<<<<<< HEAD
-                      {/* NEW: Custom Trial Duration Selector */}
-=======
                       {/* Custom Trial Duration Selector */}
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
                       {inviteData.plan === 'TRIAL' && (
                           <div>
                               <label className="text-xs font-bold text-gray-700 uppercase">Trial Duration (Days)</label>

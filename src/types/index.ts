@@ -1,11 +1,7 @@
 // src/types/index.ts
 
 export type Role = 
-<<<<<<< HEAD
-  | 'SUPER_ADMIN'   // You (SaaS Owner)
-=======
   | 'SUPER_ADMIN'   // SaaS Owner
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   | 'RESELLER'      // NEW: Channel Partner / Agency
   | 'FACTORY_OWNER' // Tenant Admin
   | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
@@ -44,11 +40,7 @@ export interface UserProfile {
 
 export interface BrandingConfig {
   appName: string;
-<<<<<<< HEAD
-  logoUrl: string;        // We'll save this as a base64 string for immediate use
-=======
   logoUrl: string;        // Base64 string for immediate use
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   primaryColor: string;   // Hex color code
 }
 
@@ -162,7 +154,16 @@ export interface Worker {
     cl: number;
     sl: number;
     pl: number;
-  }; 
+  };
+  wageType?: 'DAILY' | 'HOURLY' | 'MONTHLY';
+  dailyWage?: number;
+  hourlyWage?: number;
+  monthlySalary?: number;
+  overtimeRate?: number;
+  isActive?: boolean;
+  faceEnrolled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TimeRecord {
@@ -281,10 +282,12 @@ export interface Advance {
   id: string;
   tenantId: string;
   workerId: string;
+  workerName?: string;
   amount: number;
   date: string;
   reason: string;
-  status: 'APPROVED' | 'PENDING' | 'REPAID';
+  status?: 'APPROVED' | 'PENDING' | 'REPAID';
+  repaid?: boolean;
 }
 
 export interface AppNotification {
@@ -325,6 +328,7 @@ export interface KioskTerminal {
   name: string;
   pairingCode: string;
   adminPin: string;
+  status?: 'active' | 'pending' | 'inactive';
   createdAt: string;
 }
 

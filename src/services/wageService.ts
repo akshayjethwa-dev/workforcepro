@@ -1,5 +1,25 @@
-import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings } from '../types/index';
+import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig } from '../types/index';
 import { attendanceLogic } from './attendanceLogic'; 
+
+export const ensureWageConfig = (worker: Worker): WageConfig => {
+  if (worker.wageConfig && typeof worker.wageConfig === 'object' && typeof worker.wageConfig.amount === 'number') {
+    return worker.wageConfig;
+  }
+  const isMonthly = (worker as any).wageType === 'MONTHLY';
+  const amount = isMonthly ? ((worker as any).monthlySalary || 25000) : ((worker as any).dailyWage || 650);
+  return {
+    type: isMonthly ? 'MONTHLY' : 'DAILY',
+    amount,
+    overtimeEligible: true,
+    overtimeRatePerHour: (worker as any).overtimeRate || ((amount / 8) * 1.5),
+    workingDaysPerMonth: 26,
+    allowances: {
+      travel: 0,
+      food: 0,
+      nightShift: 0
+    }
+  };
+};
 
 export const wageService = {
 
@@ -22,7 +42,7 @@ export const wageService = {
     const netHours = record.hours?.net || record.calculatedHours?.netWorkingHours || 0;
     const otHours = record.hours?.overtime || record.calculatedHours?.overtimeHours || 0;
 
-    const config = worker.wageConfig;
+    const config = ensureWageConfig(worker);
     
     // 2. Determine Daily Rate Dynamically based on the specific month
     let dailyRate = config.amount;
@@ -111,10 +131,10 @@ export const wageService = {
     advances: Advance[],
     orgSettings: OrgSettings
   ): MonthlyPayroll => {
-    
+    const config = ensureWageConfig(worker);
     const [yearStr, monthStr] = month.split('-');
     const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
-    const totalWorkingDays = worker.wageConfig.workingDaysPerMonth || daysInMonth;
+    const totalWorkingDays = config.workingDaysPerMonth || daysInMonth;
 
     // Helper to get clean YYYY-MM-DD
     const joiningDate = (worker.joinedDate || worker.dateOfJoining || '').slice(0, 10);
@@ -201,7 +221,7 @@ export const wageService = {
             continue;
         }
 
-        const dailyRate = worker.wageConfig.type === 'MONTHLY' ? worker.wageConfig.amount / totalWorkingDays : worker.wageConfig.amount;
+        const dailyRate = config.type === 'MONTHLY' ? config.amount / totalWorkingDays : config.amount;
         
         let dwBaseWage = 0, dwOTWage = 0, dwAllowances = 0;
 
@@ -304,5 +324,15 @@ export const wageService = {
       carriedForwardAdvance: parseFloat(carriedForwardAdvance.toFixed(2)),
       status: 'DRAFT'
     };
+  },
+
+  calculateMonthlyPayroll: (
+    worker: Worker, 
+    month: string, 
+    attendanceRecords: AttendanceRecord[],
+    advances: Advance[],
+    orgSettings: OrgSettings
+  ): MonthlyPayroll => {
+    return wageService.generateMonthlyPayroll(worker, month, attendanceRecords, advances, orgSettings);
   }
 };

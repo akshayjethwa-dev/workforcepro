@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        allowedHosts: true,
       },
       plugins: [
         react(),
@@ -19,8 +20,8 @@ export default defineConfig(({ mode }) => {
             globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
             navigateFallback: '/index.html',
             cleanupOutdatedCaches: true,
-            // Add this line: Increases the cache limit to ~4MB
-            maximumFileSizeToCacheInBytes: 4000000 
+            // Increases the cache limit to 8MB for workbox service worker
+            maximumFileSizeToCacheInBytes: 8 * 1024 * 1024 
           },
           manifest: {
             name: 'WorkforcePro',

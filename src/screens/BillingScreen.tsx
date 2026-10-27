@@ -1,27 +1,22 @@
-// src/screens/BillingScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { Check, X, ShieldCheck, ExternalLink, MessageCircle, Info, CreditCard, Building2 } from 'lucide-react';
+import { Check, X, ShieldCheck, ExternalLink, MessageCircle, Info, CreditCard, Building2, Zap, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { SubscriptionTier, PlanLimits } from '../types/index';
-<<<<<<< HEAD
-=======
 
-// ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
-const FREE_TRIAL_DAYS = 7; 
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
+const FREE_TRIAL_DAYS = 7;
 
 export const BillingScreen: React.FC = () => {
   const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
+  const { toast } = useToast();
   const { branding } = useTheme();
   
   const [globalPlans, setGlobalPlans] = useState<Record<SubscriptionTier, PlanLimits> | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState<{show: boolean, planName: string, price: string}>({show: false, planName: '', price: ''});
 
-  const adminPhone = "918460852903"; // Your WhatsApp business number
-  
-  // YOUR ACTUAL RAZORPAY PAYMENT LINK
+  const adminPhone = "918460852903"; 
   const RAZORPAY_PAYMENT_LINK = "https://razorpay.me/@aapacapitalprivatelimited"; 
 
   useEffect(() => {
@@ -32,25 +27,19 @@ export const BillingScreen: React.FC = () => {
     fetchPlans();
   }, []);
 
-  // Determine if the user is a client under a Reseller/Agency
   const isResellerManaged = !!profile?.resellerId;
 
-<<<<<<< HEAD
-=======
-  // Helper function to map backend plan names to frontend display names
   const getDisplayPlanName = (plan: string | undefined) => {
     if (!plan) return 'Unknown';
     if (plan === 'ENTERPRISE') return 'Premium Growth Plan';
     if (plan === 'FREE') return 'Micro-Team (Free)';
     if (plan === 'TRIAL') return 'Free Trial (Premium Growth)';
-    if (plan === 'PRO') return 'Agency (Pro Plan)'; // Kept just in case old users are still on it
-    if (plan === 'STARTER') return 'Site Manager'; // Kept just in case old users are still on it
+    if (plan === 'PRO') return 'Agency (Pro Plan)';
+    if (plan === 'STARTER') return 'Site Manager';
     return plan;
   };
 
   const currentDisplayPlan = getDisplayPlanName(tenantPlan);
-
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
   const orgDetails = `
 ---
 *Organization Details:*
@@ -73,181 +62,218 @@ Current Plan: ${currentDisplayPlan}`;
   }: { 
     title: string, price: string, desc: string, features: string[], isCurrent: boolean, currentLabel?: string, isPopular?: boolean, buttonText?: string, onUpgrade?: () => void, strikePrice?: string 
   }) => (
-    <div className={`relative bg-white rounded-2xl p-6 border-2 ${isCurrent ? 'border-green-500 shadow-green-100' : isPopular ? 'border-indigo-500 shadow-indigo-100' : 'border-gray-100'} shadow-lg flex flex-col`}>
-      {isPopular && !isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Most Popular</div>}
-      {isCurrent && <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-500 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">{currentLabel || 'Current Plan'}</div>}
-      
-      <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-      
-      <div className="mt-2 flex items-baseline text-gray-900">
-        <span className="text-3xl font-black tracking-tight">₹{price}</span>
-        {strikePrice && <span className="text-lg text-gray-400 line-through ml-2 font-semibold">₹{strikePrice}</span>}
-        <span className="text-sm text-gray-500 ml-1 font-medium">{price === '0' ? '/forever' : '/month'}</span>
+    <div className={`relative bg-white rounded-2xl p-6 sm:p-7 border ${
+      isCurrent 
+        ? 'border-emerald-500 shadow-xs ring-1 ring-emerald-500' 
+        : isPopular 
+          ? 'border-blue-600 shadow-sm ring-1 ring-blue-600' 
+          : 'border-slate-200/80 shadow-xs'
+    } flex flex-col justify-between`}>
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+          {isPopular && !isCurrent && (
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+              Most Popular
+            </span>
+          )}
+          {isCurrent && (
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+              {currentLabel || 'Current Plan'}
+            </span>
+          )}
+        </div>
+        
+        <div className="mt-3 flex items-baseline text-slate-900 font-mono tabular-nums">
+          <span className="text-3xl font-extrabold tracking-tight">₹{price}</span>
+          {strikePrice && <span className="text-base text-slate-400 line-through ml-2">₹{strikePrice}</span>}
+          <span className="text-xs text-slate-500 ml-1 font-sans font-medium">{price === '0' ? '/forever' : '/month'}</span>
+        </div>
+        
+        <p className="text-xs text-slate-500 mt-2 leading-relaxed">{desc}</p>
+        
+        <ul className="mt-6 space-y-2.5">
+          {features.map((f, i) => (
+            <li key={i} className="flex items-start text-xs text-slate-600">
+              <Check size={15} className="text-emerald-600 mr-2 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{f}</span>
+            </li>
+          ))}
+        </ul>
       </div>
-      
-      <p className="text-xs text-gray-500 mt-2">{desc}</p>
-      
-      <ul className="mt-6 space-y-3 flex-1">
-        {features.map((f, i) => (
-          <li key={i} className="flex items-start">
-            <Check size={16} className="text-green-500 mr-2 shrink-0 mt-0.5" />
-            <span className="text-sm text-gray-600 leading-tight">{f}</span>
-          </li>
-        ))}
-      </ul>
 
-      <div className="mt-8">
+      <div className="mt-8 pt-4 border-t border-slate-100">
         {isCurrent ? (
-            <button disabled className="w-full bg-green-50 text-green-700 py-3 rounded-xl font-bold text-sm flex justify-center items-center">
-                <ShieldCheck size={18} className="mr-2"/> {currentLabel || 'Active'}
-            </button>
+          <button disabled className="w-full bg-emerald-50 text-emerald-700 py-2.5 rounded-xl font-semibold text-xs flex justify-center items-center gap-1.5 cursor-default">
+            <ShieldCheck size={16} /> 
+            <span>{currentLabel || 'Active Plan'}</span>
+          </button>
         ) : (
-            <button 
-                onClick={onUpgrade} 
-                className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex justify-center items-center ${isPopular ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg' : 'bg-gray-900 text-white hover:bg-black'}`}
-            >
-                {buttonText || `Upgrade to ${title}`}
-            </button>
+          <button 
+            onClick={onUpgrade} 
+            className={`w-full py-2.5 rounded-xl font-semibold text-xs transition-all flex justify-center items-center gap-1.5 active:scale-98 shadow-xs ${
+              isPopular 
+                ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                : 'bg-slate-900 text-white hover:bg-slate-800'
+            }`}
+          >
+            <span>{buttonText || `Upgrade to ${title}`}</span>
+            <ArrowRight size={14} />
+          </button>
         )}
       </div>
     </div>
   );
 
   return (
-    <div className="p-4 bg-gray-50 min-h-full pb-24">
-      <div className="mb-6">
-        <h2 className="text-2xl font-black text-slate-900">Subscription & Billing</h2>
-        
-        {tenantPlan === 'TRIAL' && trialDaysLeft !== null && (
-            <div className="mt-2 bg-indigo-50 border border-indigo-200 p-3 rounded-xl flex items-center justify-between">
-                <div>
-                    <p className="text-indigo-800 font-bold text-sm">{trialDaysLeft} {trialDaysLeft === 1 ? 'Day' : 'Days'} left in {FREE_TRIAL_DAYS}-Day Free Trial</p>
-                    <p className="text-indigo-600 text-xs mt-0.5">You currently have all Premium Growth Plan features unlocked. After {FREE_TRIAL_DAYS} days, your account moves to the Free plan unless you upgrade.</p>
-                </div>
-            </div>
-        )}
-        {tenantPlan === 'FREE' && (
-             <div className="mt-2 bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center justify-between">
-                 <div>
-                     <p className="text-amber-800 font-bold text-sm">Free Plan Active</p>
-                     <p className="text-amber-700 text-xs mt-0.5">Your {FREE_TRIAL_DAYS}-day trial has completed and you are currently on the Free plan. Buy the Premium Growth Plan to unlock all features.</p>
-                 </div>
-             </div>
-        )}
+    <div className="space-y-6 pb-12">
+      {/* TOOLBAR */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Subscription & Billing</h1>
+          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+            <span>Manage organization plans, quotas, and premium add-ons</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span className="font-semibold text-slate-700">{currentDisplayPlan}</span>
+          </div>
+        </div>
       </div>
 
-<<<<<<< HEAD
-      {/* Current Plan Overview added for better context before conditional hiding */}
-=======
-      {/* Current Plan Overview */}
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6">
+      {/* PLAN STATUS NOTICES */}
+      {tenantPlan === 'TRIAL' && trialDaysLeft !== null && (
+        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white p-4 sm:p-5 rounded-2xl shadow-xs border border-indigo-900/30 flex items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse" />
+              <h3 className="font-bold text-sm text-white">{trialDaysLeft} {trialDaysLeft === 1 ? 'Day' : 'Days'} Remaining in Free Organization Trial</h3>
+            </div>
+            <p className="text-xs text-indigo-100 mt-1 leading-relaxed max-w-2xl">
+              You currently enjoy all Premium Growth features unlocked. Upgrade your plan before trial expiry to maintain uninterrupted biometric kiosk attendance & statutory compliance.
+            </p>
+          </div>
+          <button 
+            onClick={() => handleUpgradeClick('Premium Growth Plan', '1999')}
+            className="bg-white hover:bg-indigo-50 text-slate-900 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-xs shrink-0 active:scale-95"
+          >
+            Upgrade Now
+          </button>
+        </div>
+      )}
+
+      {tenantPlan === 'FREE' && (
+        <div className="bg-amber-50/80 border border-amber-200 p-4 sm:p-5 rounded-2xl flex items-center justify-between gap-4 text-xs">
+          <div>
+            <h3 className="font-bold text-amber-900 text-sm">Micro-Team Free Plan Active</h3>
+            <p className="text-amber-800 text-xs mt-0.5">
+              Your trial has ended. Upgrade to the Premium Growth Plan to unlock biometric face kiosks, unlimited staff, and EPFO/ESIC compliance.
+            </p>
+          </div>
+          <button 
+            onClick={() => handleUpgradeClick('Premium Growth Plan', '1999')}
+            className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-xs shrink-0 active:scale-95"
+          >
+            Upgrade Plan
+          </button>
+        </div>
+      )}
+
+      {/* CURRENT QUOTA OVERVIEW */}
+      <div className="bg-white rounded-2xl p-5 sm:p-6 shadow-xs border border-slate-200/80">
         <div className="flex justify-between items-center mb-4">
-            <div>
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Current Plan</p>
-<<<<<<< HEAD
-                <h2 className="text-2xl font-black text-gray-900 mt-1">{tenantPlan}</h2>
-=======
-                <h2 className="text-2xl font-black text-gray-900 mt-1">{currentDisplayPlan}</h2>
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
-            </div>
-            <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center">
-                <CreditCard className="text-blue-600" size={24} />
-            </div>
+          <div>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Plan</span>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-0.5">{currentDisplayPlan}</h2>
+          </div>
+          <div className="w-11 h-11 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0 border border-blue-100">
+            <CreditCard size={20} />
+          </div>
         </div>
         
-        <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 flex flex-wrap gap-4 mt-4 text-sm">
-            <div>
-                <p className="text-gray-500 text-xs">Worker Limit</p>
-                <p className="font-bold">{limits?.maxWorkers === 9999 ? 'Unlimited' : limits?.maxWorkers}</p>
-            </div>
-            <div>
-                <p className="text-gray-500 text-xs">Manager Limit</p>
-                <p className="font-bold">{limits?.maxManagers === 9999 ? 'Unlimited' : limits?.maxManagers}</p>
-            </div>
-            <div>
-                <p className="text-gray-500 text-xs">Kiosk Scanning</p>
-                <p className="font-bold text-green-600">{limits?.kioskEnabled ? 'Enabled' : 'Locked'}</p>
-            </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-slate-100 text-xs font-mono tabular-nums">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">Staff Limit</span>
+            <span className="font-bold text-slate-900 text-sm mt-0.5 block">
+              {limits?.maxWorkers === 9999 ? 'Unlimited' : `${limits?.maxWorkers || 15} Workers`}
+            </span>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">Supervisor Seats</span>
+            <span className="font-bold text-slate-900 text-sm mt-0.5 block">
+              {limits?.maxManagers === 9999 ? 'Unlimited' : `${limits?.maxManagers || 1} Managers`}
+            </span>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">Face Scan Kiosk</span>
+            <span className={`font-bold text-sm mt-0.5 block ${limits?.kioskEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+              {limits?.kioskEnabled ? 'Enabled' : 'Locked'}
+            </span>
+          </div>
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">Statutory Returns</span>
+            <span className={`font-bold text-sm mt-0.5 block ${limits?.statutoryComplianceEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+              {limits?.statutoryComplianceEnabled ? 'EPFO / ESIC' : 'Locked'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* =========================================================================
-          RESELLER MANAGED VIEW (Hidden Pricing)
-          ========================================================================= */}
+      {/* PLAN MATRIX */}
       {isResellerManaged ? (
-          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6 text-center mt-6">
-              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                  <Building2 className="text-indigo-600" size={32} />
-              </div>
-              <h3 className="text-lg font-bold text-indigo-900">Enterprise Managed Account</h3>
-              <p className="text-sm text-indigo-700 mt-2 max-w-sm mx-auto">
-                  Your subscription, limits, and billing are securely managed directly by your technology provider. 
-              </p>
-              <div className="mt-6 bg-white p-4 rounded-xl inline-block text-left shadow-sm border border-indigo-50">
-                  <p className="text-xs text-gray-500 font-bold uppercase mb-1">To upgrade your limits or features:</p>
-                  <p className="text-sm font-medium text-gray-800">
-                      Please contact the <strong>{branding?.appName || 'Support Team'}</strong> representative who set up your account.
-                  </p>
-              </div>
+        <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-6 text-center">
+          <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-xs border border-indigo-100">
+            <Building2 className="text-indigo-600" size={26} />
           </div>
+          <h3 className="text-base font-bold text-indigo-950">Enterprise Managed Account</h3>
+          <p className="text-xs text-indigo-700 mt-1 max-w-sm mx-auto leading-relaxed">
+            Your organization subscription, limits, and billing are managed directly by your channel partner.
+          </p>
+          <div className="mt-4 bg-white p-4 rounded-xl inline-block text-left shadow-xs border border-indigo-100">
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">To request additional quota or features:</p>
+            <p className="text-xs font-medium text-slate-800">
+              Please contact your <strong>{branding?.appName || 'Authorized Partner'}</strong> administrator.
+            </p>
+          </div>
+        </div>
       ) : (
-      /* =========================================================================
-         DIRECT CLIENT VIEW (Shows Pricing & Payment Buttons)
-         ========================================================================= */
-          <div className="space-y-6 mt-6">
-            <h3 className="font-bold text-gray-800">Available Upgrades</h3>
+        <div className="space-y-4">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Available Subscription Plans</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <PlanCard 
-                title="Micro-Team (Free)" 
-                price="0" 
-                desc="Perfect for independent contractors testing the waters."
-                features={["Up to 15 Workers", "1 Active Site", "Manual Attendance Entry", "Basic Daily Wages"]}
-                isCurrent={tenantPlan === 'FREE'}
-                currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
-                buttonText="Start for Free"
-                onUpgrade={() => alert('You are already on a higher plan. Contact support to downgrade.')}
-            />
-<<<<<<< HEAD
-            <PlanCard 
-                title="Site Manager" 
-                price="1999" 
-                strikePrice="2999"
-                desc="Basic automation for single-site businesses."
-                features={["Up to 50 Workers", "1 Active Site", "Face Recognition Kiosk Mode", "Manage Public Holidays" ,"Geofencing & Offline Sync", "Payslips & Allowances"]}
-                isCurrent={tenantPlan === 'STARTER'}
-                onUpgrade={() => handleUpgradeClick('Site Manager', '1999')}
+              title="Micro-Team (Free)" 
+              price="0" 
+              desc="Best for small contracting teams and single-site pilot tests."
+              features={[
+                "Up to 15 Workers",
+                "1 Factory / Site Location",
+                "Manual Shift Attendance & Logs",
+                "Basic Daily Wage Calculation Sheet",
+                "Self-service CSV export"
+              ]}
+              isCurrent={tenantPlan === 'FREE'}
+              currentLabel={tenantPlan === 'FREE' ? 'Active Plan' : undefined}
+              buttonText="Active on Free"
+              onUpgrade={() => toast.info('You are already on a higher tier plan. Contact support for assistance.')}
             />
             <PlanCard 
-                title="Agency (Pro Plan)" 
-                price="3999"
-                strikePrice="5299"
-                desc="Multi-site control with strict HR rules and anti-spoofing."
-                features={["Up to 200 Workers", "Unlimited Sites", "Liveness Anti-Spoofing (Blink Check)", "Digital ID Cards" ,"Paid Leaves (CL/SL/PL)", "Sandwich Rule Enforcement", "Break Tracking Deductions"]}
-                isCurrent={tenantPlan === 'PRO'}
-                isPopular={true}
-                onUpgrade={() => handleUpgradeClick('Agency (Pro Plan)', '3999')}
-            />
-            <PlanCard 
-                title="Enterprise" 
-                price="7999" 
-                strikePrice="9999"
-=======
-            
-            <PlanCard 
-                title="Premium Growth Plan" 
-                price="1999" 
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
-                desc="For large factories requiring full statutory compliance."
-                features={["Unlimited Workers & Sites", "Full PF & ESIC Compliance", "Wage Ceiling Caps & Reporting", "Custom Holiday Multipliers", "Priority WhatsApp Support"]}
-                isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
-                currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
-<<<<<<< HEAD
-                onUpgrade={() => handleUpgradeClick('Enterprise Plan', '7999')}
-=======
-                onUpgrade={() => handleUpgradeClick('Premium Growth Plan', '1999')}
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
+              title="Premium Growth Plan" 
+              price="1999"
+              strikePrice="3499"
+              desc="For growing factories requiring biometric kiosk gates and official compliance."
+              features={[
+                "Unlimited Staff Personnel & Factory Sites",
+                "Face Recognition & QR Attendance Kiosk Terminals",
+                "EPFO (ECR) & ESIC Government Electronic Return Formats",
+                "Wage Breakdown with Custom Overtime Multipliers",
+                "Worker Advances (Kharchi) & Automatic Monthly Payslips",
+                "Priority WhatsApp Concierge Support"
+              ]}
+              isCurrent={tenantPlan === 'ENTERPRISE' || tenantPlan === 'TRIAL'}
+              currentLabel={tenantPlan === 'TRIAL' ? 'Active (Free Trial)' : 'Active Plan'}
+              isPopular={true}
+              onUpgrade={() => handleUpgradeClick('Premium Growth Plan', '1999')}
             />
           </div>
+        </div>
       )}
 
       {/* RAZORPAY LINK MODAL */}

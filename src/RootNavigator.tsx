@@ -28,7 +28,7 @@ import { TermsScreen } from './screens/TermsScreen';
 import { PrivacyScreen } from './screens/PrivacyScreen';
 
 export const RootNavigator: React.FC = () => {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, logout } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
@@ -138,7 +138,7 @@ export const RootNavigator: React.FC = () => {
       case 'ATTENDANCE': return <AttendanceScreen />;
       case 'DAILY_LOGS': return <DailyWageScreen />;
       case 'TEAM': return <TeamScreen />;
-      case 'SETTINGS': return <SettingsScreen />;
+      case 'SETTINGS': return <SettingsScreen onNavigate={setCurrentScreen} />;
       case 'WORKER_HISTORY': return <WorkerHistoryScreen />;
       
       case 'SUPER_ADMIN_DASHBOARD': 
@@ -167,7 +167,7 @@ export const RootNavigator: React.FC = () => {
   };
 
   return (
-    <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={() => auth.signOut()}>
+    <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={logout}>
       {renderMainScreen()}
     </Layout>
   );

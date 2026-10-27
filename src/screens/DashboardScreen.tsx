@@ -1,22 +1,28 @@
 // src/screens/DashboardScreen.tsx
 import React, { useState, useEffect } from 'react';
 import { 
-  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot
+  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot,
+  BookOpen, CheckCircle2, ArrowRight, Sparkles, X
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { AttendanceRecord, OrgSettings } from '../types/index';
+import { AttendanceRecord, OrgSettings, ScreenName } from '../types/index';
 import { AIChat } from '../components/AIChat';
+import { SetupGuideModal } from '../components/SetupGuideModal';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
+  onNavigate?: (screen: ScreenName) => void;
 }
 
-export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
+export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) => {
   const { profile, limits, user } = useAuth();
   const { branding } = useTheme(); // NEW: Pull dynamic branding
+  
+  const [showGuide, setShowGuide] = useState(false);
+  const [hideChecklist, setHideChecklist] = useState(() => localStorage.getItem('hide_factory_checklist') === 'true');
   
   const [stats, setStats] = useState({ 
       total: 0, 
@@ -184,129 +190,183 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
     setShowAIChat(true);
   };
 
-  const StatCard = ({ icon: Icon, value, label, subLabel, color, bg }: any) => (
-    <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between h-32 relative overflow-hidden">
-        <div className={`absolute top-0 right-0 p-2 rounded-bl-xl ${bg} bg-opacity-30`}>
-            <Icon className={color} size={20} />
+  const StatCard = ({ icon: Icon, value, label, subLabel, accentColor }: any) => (
+    <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between min-h-[120px] relative">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${accentColor}`}>
+          <Icon size={17} />
         </div>
-        <div>
-            <h3 className={`text-3xl font-bold ${color}`}>{value}</h3>
-            <p className="text-gray-600 text-[11px] font-bold uppercase mt-1">{label}</p>
-            {subLabel && <p className="text-gray-400 text-[10px] mt-0.5">{subLabel}</p>}
+      </div>
+      <div className="mt-2">
+        <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight">
+          {value}
         </div>
+        {subLabel && (
+          <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+            <span>{subLabel}</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 
   return (
-    <div className="p-4 space-y-6 pb-24 bg-gray-50 min-h-full">
-        <div className="flex flex-col space-y-3 sm:flex-row sm:justify-between sm:items-center">
-            
-            {/* UPDATED: Dynamic Branding Header */}
-            <div className="flex items-center">
-                {branding?.logoUrl && (
+    <div className="space-y-6 pb-12">
+        {/* PAGE TOOLBAR */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+                {branding?.logoUrl ? (
                     <img 
                         src={branding.logoUrl} 
-                        alt="Logo" 
-<<<<<<< HEAD
-                        className="h-10 w-auto max-w-[100px] object-contain mr-3 bg-white p-1 rounded-lg border border-gray-100 shadow-sm" 
-=======
-                        className="h-10 w-auto max-w-25 object-contain mr-3 bg-white p-1 rounded-lg border border-gray-100 shadow-sm" 
->>>>>>> 5cf4207d1a2bd0c954d8a62d5438ec823eb65254
+                        alt="Logo"
+                        className="h-10 w-auto max-w-[100px] object-contain bg-white p-1 rounded-xl border border-slate-200 shadow-xs" 
                     />
+                ) : (
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                        {profile?.companyName ? profile.companyName.charAt(0).toUpperCase() : 'W'}
+                    </div>
                 )}
                 <div>
-                    <h1 className="text-xl font-bold text-gray-800">
-                        {branding?.appName || profile?.companyName || 'Dashboard'}
+                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+                        {branding?.appName || profile?.companyName || 'Factory Dashboard'}
                     </h1>
-                    <p className="text-xs text-gray-500">Live Overview</p>
+                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                        <span>Live Attendance & Shift Status</span>
+                        <span aria-hidden="true" className="text-slate-300">·</span>
+                        <span className="font-mono tabular-nums text-slate-600">{stats.total} Active Personnel</span>
+                    </div>
                 </div>
             </div>
             
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2.5 self-start sm:self-auto">
                 {orgSettings?.branches && orgSettings.branches.length > 1 && (
                     <select 
-                       className="bg-white border border-gray-200 text-sm font-bold text-gray-700 py-1.5 px-3 rounded-lg shadow-sm outline-none"
+                       className="bg-white border border-slate-200 text-xs font-semibold text-slate-700 py-2 px-3 rounded-xl shadow-xs outline-none hover:border-slate-300 transition-colors"
                        value={selectedDashboardBranch} 
                        onChange={e => setSelectedDashboardBranch(e.target.value)}
                     >
-                       <option value="ALL">All Branches</option>
+                       <option value="ALL">All Branches & Godowns</option>
                        {orgSettings.branches.map(b => (
                            <option key={b.id} value={b.id}>{b.name}</option>
                        ))}
                     </select>
                 )}
-                <button onClick={refreshData} className="p-2 bg-white rounded-lg border border-gray-200 shadow-sm hover:bg-gray-100 transition-colors">
-                    <RefreshCw size={18} className={loading ? "animate-spin text-blue-600" : "text-gray-600"}/>
+                <button 
+                  onClick={() => setShowGuide(true)}
+                  className="px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-xs hover:bg-slate-50 hover:border-slate-300 text-slate-700 active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px]"
+                  title="Factory Setup & Operational Guide"
+                >
+                  <BookOpen size={15} className="text-indigo-600" />
+                  <span className="hidden sm:inline">Setup Guide</span>
+                </button>
+                <button 
+                  onClick={refreshData} 
+                  title="Refresh live metrics"
+                  className="p-2 bg-white rounded-xl border border-slate-200 shadow-xs hover:bg-slate-50 hover:border-slate-300 text-slate-600 active:scale-95 transition-all min-w-[38px] min-h-[38px] flex items-center justify-center"
+                >
+                    <RefreshCw size={17} className={loading ? "animate-spin text-blue-600" : "text-slate-600"}/>
                 </button>
             </div>
         </div>
 
-        {/* // TEMPORARILY HIDDEN AI ASSISTANT BUTTON
-        <button 
-          onClick={handleAIChatOpen}
-          className="w-full bg-linear-to-r from-purple-600 to-blue-600 text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-transform"
-        >
-          <div className="flex items-center space-x-3">
-            <div className="bg-white/20 p-2 rounded-lg">
-              <Bot size={24} className="text-white" />
+        {/* HERO KIOSK LAUNCHER & QUICK WORKSPACE ACTIONS */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2">
+                {limits?.kioskEnabled !== false ? (
+                    <div 
+                        onClick={handleKioskLaunch}
+                        className="bg-slate-900 hover:bg-slate-800 text-white rounded-2xl p-5 shadow-xs transition-all cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-slate-800 active:scale-[0.99]"
+                    >
+                        <div className="flex items-start sm:items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-blue-900/40 group-hover:scale-105 transition-transform">
+                                <PlayCircle size={26} />
+                            </div>
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <h3 className="font-bold text-base text-white tracking-tight">Launch Attendance Kiosk</h3>
+                                    <span className="text-xs text-blue-400 font-mono">· Live Station</span>
+                                </div>
+                                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                    Biometric Face Recognition & QR code check-in kiosk for factory gates & worker tablets.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition-colors">Start Terminal</span>
+                            <ChevronRight size={16} className="text-slate-400 group-hover:translate-x-1 group-hover:text-white transition-all" />
+                        </div>
+                    </div>
+                ) : (
+                    <div className="bg-slate-100 rounded-2xl p-5 border border-slate-200 flex items-center justify-between text-slate-500">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-slate-200 text-slate-600 flex items-center justify-center shrink-0">
+                                <Lock size={20} />
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-sm text-slate-700">Face Scan Kiosk (Plan Upgrade Required)</h4>
+                                <p className="text-xs text-slate-500 mt-0.5">Upgrade subscription plan to activate automated gate attendance terminals.</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
-            <div className="text-left">
-              <p className="font-bold">AI Factory Assistant</p>
-              <p className="text-purple-100 text-xs">Ask anything about your factory</p>
-            </div>
-          </div>
-          <ChevronRight className="text-purple-200 group-hover:translate-x-1 transition-transform" />
-        </button> 
-        */}
 
-        {/* UPDATED: Kiosk Button using the bg-brand dynamic class */}
-        {limits?.kioskEnabled !== false ? (
-            <button onClick={handleKioskLaunch} className="w-full bg-brand text-white rounded-xl p-4 shadow-lg flex items-center justify-between group active:scale-95 transition-all">
-                <div className="flex items-center space-x-3">
-                    <div className="bg-black/20 p-2 rounded-lg"><PlayCircle size={24} className="text-white" /></div>
-                    <div className="text-left">
-                        <p className="font-bold">Launch Attendance Kiosk</p>
-                        <p className="text-white/80 text-xs">Scan Faces for Check-In/Out</p>
+            {/* Quick Shift Summary Tile */}
+            <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
+                <div>
+                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Shift Configuration</div>
+                    <div className="text-base font-bold text-slate-900 mt-1">
+                        {orgSettings?.shifts && orgSettings.shifts.length > 0 ? orgSettings.shifts[0].name : 'Default Morning Shift'}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 font-mono tabular-nums">
+                        {orgSettings?.shifts && orgSettings.shifts.length > 0 
+                            ? `${orgSettings.shifts[0].startTime} — ${orgSettings.shifts[0].endTime}` 
+                            : '09:00 AM — 06:00 PM'}
                     </div>
                 </div>
-                <ChevronRight className="text-white/60 group-hover:translate-x-1 transition-transform" />
-            </button>
-        ) : (
-             <div className="w-full bg-gray-200 text-gray-500 rounded-xl p-4 shadow-inner flex items-center justify-between opacity-80 cursor-not-allowed">
-                <div className="flex items-center space-x-3">
-                    <div className="bg-gray-300 p-2 rounded-lg"><Lock size={24} /></div>
-                    <div className="text-left">
-                        <p className="font-bold text-gray-700">Face Scan Kiosk (Locked)</p>
-                        <p className="text-xs text-gray-500">Upgrade to Pro to unlock AI Attendance</p>
-                    </div>
+                <div className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span>Grace Period</span>
+                    <span className="font-mono font-semibold text-slate-700 tabular-nums">
+                        {orgSettings?.shifts?.[0]?.gracePeriodMins || 15} mins
+                    </span>
                 </div>
             </div>
-        )}
+        </div>
 
         {showKioskModal && (
-            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-               <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl">
-                   <h2 className="text-lg font-black text-gray-900 mb-2">Select Kiosk Location</h2>
-                   <p className="text-xs text-gray-500 mb-6">Which factory/godown is this device located at? We will only download faces for this branch to ensure maximum performance.</p>
+            <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
+               <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl border border-slate-100">
+                   <h2 className="text-base font-bold text-slate-900 mb-1">Select Kiosk Location</h2>
+                   <p className="text-xs text-slate-500 mb-5">Select factory or godown for this device terminal. Biometric face descriptors will be loaded specifically for this branch.</p>
                    
-                   <div className="space-y-3 mb-6">
+                   <div className="space-y-2 mb-6">
                        {orgSettings?.branches?.map(b => (
                            <div 
                               key={b.id} 
                               onClick={() => setSelectedKioskBranch(b.id)}
-                              className={`p-4 rounded-xl border-2 cursor-pointer flex items-center transition-all ${selectedKioskBranch === b.id ? 'border-brand bg-brand/5' : 'border-gray-100 hover:border-gray-200'}`}
+                              className={`p-3.5 rounded-xl border cursor-pointer flex items-center transition-all ${
+                                selectedKioskBranch === b.id 
+                                  ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold shadow-xs' 
+                                  : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                              }`}
                            >
-                              <MapPin size={18} className={selectedKioskBranch === b.id ? "text-brand mr-3" : "text-gray-400 mr-3"} />
-                              <span className="font-bold text-sm text-gray-800">{b.name}</span>
+                              <MapPin size={17} className={selectedKioskBranch === b.id ? "text-blue-600 mr-2.5" : "text-slate-400 mr-2.5"} />
+                              <span className="text-xs font-semibold">{b.name}</span>
                            </div>
                        ))}
                    </div>
 
-                   <div className="flex space-x-3">
-                       <button onClick={() => setShowKioskModal(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl text-sm hover:bg-gray-200">Cancel</button>
+                   <div className="flex gap-2.5">
+                       <button 
+                         onClick={() => setShowKioskModal(false)} 
+                         className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs hover:bg-slate-200 transition-colors"
+                       >
+                         Cancel
+                       </button>
                        <button 
                           onClick={() => { setShowKioskModal(false); onOpenKiosk(selectedKioskBranch); }} 
-                          className="flex-1 py-3 bg-brand text-white font-bold rounded-xl text-sm shadow-lg hover:brightness-110"
+                          className="flex-1 py-2.5 bg-blue-600 text-white font-semibold rounded-xl text-xs shadow-xs hover:bg-blue-700 transition-colors"
                        >
                           Launch Device
                        </button>
@@ -342,50 +402,51 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
         )} 
         */}
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* RESPONSIVE METRIC KPIS: 2 columns mobile, 4 columns desktop */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
             <StatCard 
                 icon={CheckCircle} 
                 value={stats.present + stats.halfDay} 
-                label="Present" 
-                subLabel={`${stats.present} Full • ${stats.halfDay} Half`}
-                color="text-green-600" 
-                bg="bg-green-100"
+                label="Present Today" 
+                subLabel={`${stats.present} Full Day · ${stats.halfDay} Half Day`}
+                accentColor="bg-emerald-50 text-emerald-600"
             />
             <StatCard 
                 icon={Timer} 
                 value={stats.pending} 
-                label="In Progress" 
-                subLabel="< 4 Hours Worked"
-                color="text-blue-600" 
-                bg="bg-blue-100"
+                label="On Shift Now" 
+                subLabel="Active Punch Timeline"
+                accentColor="bg-blue-50 text-blue-600"
             />
-             <StatCard 
+            <StatCard 
                 icon={Clock} 
                 value={stats.late} 
-                label="Late Arrival" 
-                subLabel="Impacts Salary"
-                color="text-orange-500" 
-                bg="bg-orange-100"
+                label="Late Arrivals" 
+                subLabel="Past Grace Window"
+                accentColor="bg-amber-50 text-amber-600"
             />
             <StatCard 
                 icon={XCircle} 
                 value={stats.absent} 
-                label="Absent" 
-                subLabel={`Total Staff: ${stats.total}`}
-                color="text-red-500" 
-                bg="bg-red-100"
+                label="Absent / Off" 
+                subLabel={`Staff Base: ${stats.total}`}
+                accentColor="bg-rose-50 text-rose-600"
             />
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <div className="p-4 border-b border-gray-50 flex justify-between items-center">
-                <h3 className="font-bold text-gray-800 text-sm flex items-center">
-                    <Activity size={16} className="mr-2 text-brand"/> Live Activity
-                </h3>
-                <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded-full">Today</span>
+        {/* LIVE ACTIVITY FEED */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="p-4 sm:px-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                    <Activity size={17} className="text-blue-600"/>
+                    <h3 className="font-bold text-slate-900 text-sm">Real-Time Punch Activity</h3>
+                </div>
+                <span className="text-xs font-mono text-slate-500 tabular-nums">
+                    {recentActivity.length} punches logged
+                </span>
             </div>
             
-            <div className="divide-y divide-gray-50">
+            <div className="divide-y divide-slate-100">
                 {recentActivity.map(record => {
                     const lastPunch = record.timeline && record.timeline.length > 0 
                         ? record.timeline[record.timeline.length - 1] 
@@ -398,48 +459,52 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk }) => {
                     const typeStr = lastPunch ? lastPunch.type : 'IN';
                     const isOut = typeStr === 'OUT';
 
-                    let badgeColor = 'bg-gray-100 text-gray-500';
-                    let badgeText = record.computedStatus;
+                    let statusTextColor = 'text-slate-600';
+                    let statusLabel = record.computedStatus;
 
-                    if (record.computedStatus === 'PRESENT') { badgeColor = 'bg-green-100 text-green-700'; badgeText = 'Present'; }
-                    else if (record.computedStatus === 'HALF_DAY') { badgeColor = 'bg-orange-100 text-orange-700'; badgeText = 'Half Day'; }
-                    else if (record.computedStatus === 'PENDING') { badgeColor = 'bg-blue-50 text-blue-600'; badgeText = 'Pending'; }
-                    else if (record.computedStatus === 'ABSENT') { badgeColor = 'bg-red-50 text-red-600'; badgeText = 'Absent (<4h)'; }
+                    if (record.computedStatus === 'PRESENT') { statusTextColor = 'text-emerald-700 font-semibold'; statusLabel = 'Present'; }
+                    else if (record.computedStatus === 'HALF_DAY') { statusTextColor = 'text-amber-700 font-semibold'; statusLabel = 'Half Day'; }
+                    else if (record.computedStatus === 'PENDING') { statusTextColor = 'text-blue-700 font-semibold'; statusLabel = 'In Progress'; }
+                    else if (record.computedStatus === 'ABSENT') { statusTextColor = 'text-rose-700 font-semibold'; statusLabel = 'Absent (<4h)'; }
 
                     return (
-                        <div key={record.id} className="p-3 flex items-center space-x-3 hover:bg-gray-50 transition-colors">
-                            <div className="w-9 h-9 bg-gray-100 rounded-full flex items-center justify-center font-bold text-xs text-gray-500 border border-gray-200">
-                                {record.workerName.charAt(0)}
-                            </div>
-                            <div className="flex-1">
-                                <div className="flex justify-between items-center">
-                                    <p className="text-sm font-bold text-gray-800">{record.workerName}</p>
-                                    <span className="text-xs font-mono font-medium text-gray-600">
-                                        {record.currentHours.toFixed(1)} hrs
-                                    </span>
+                        <div key={record.id} className="p-4 sm:px-6 flex items-center justify-between gap-4 hover:bg-slate-50/70 transition-colors">
+                            <div className="flex items-center gap-3.5 min-w-0">
+                                <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-sm border border-slate-200 shrink-0">
+                                    {record.workerName.charAt(0)}
                                 </div>
-                                <div className="flex justify-between items-center mt-0.5">
-                                    <p className="text-[10px] text-gray-400 flex flex-wrap items-center gap-y-1">
-                                        {isOut ? 'Checked Out' : 'Checked In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                                        {record.isLate && <span className="ml-2 text-red-500 font-bold">• LATE</span>}
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-sm font-bold text-slate-900 truncate">{record.workerName}</p>
+                                        <span className={`text-xs ${statusTextColor}`}>
+                                            · {statusLabel}
+                                        </span>
+                                    </div>
+                                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 font-mono tabular-nums">
+                                        <span>{isOut ? 'Check Out' : 'Check In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                        {record.isLate && <span className="text-rose-600 font-bold">· LATE</span>}
                                         {lastPunch?.isOutOfGeofence && (
-                                            <span className="ml-2 text-orange-600 font-bold flex items-center bg-orange-50 px-1.5 py-0.5 rounded" title="Punched outside factory radius">
-                                                <MapPin size={10} className="mr-0.5" /> OUT OF ZONE
+                                            <span className="text-amber-600 flex items-center gap-0.5" title="Punched outside factory radius">
+                                                <MapPin size={11} /> Outside Geofence
                                             </span>
                                         )}
-                                    </p>
-                                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${badgeColor}`}>
-                                        {badgeText}
-                                    </span>
+                                    </div>
                                 </div>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                                <span className="font-mono text-sm font-semibold tabular-nums text-slate-900">
+                                    {record.currentHours.toFixed(1)} hrs
+                                </span>
                             </div>
                         </div>
                     );
                 })}
                 {recentActivity.length === 0 && !loading && (
-                    <div className="p-8 text-center text-gray-400">
-                        <Clock className="mx-auto mb-2 opacity-50" size={24}/>
-                        <p className="text-xs">No attendance activity today.</p>
+                    <div className="p-10 text-center text-slate-400">
+                        <Clock className="mx-auto mb-2 text-slate-300" size={28}/>
+                        <p className="text-sm font-medium text-slate-600">No shift punches recorded yet today</p>
+                        <p className="text-xs text-slate-400 mt-1">Workers will appear here as they clock in via Face Kiosk or manual punch.</p>
                     </div>
                 )}
             </div>

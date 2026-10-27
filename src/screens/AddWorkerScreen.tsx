@@ -5,6 +5,7 @@ import {
   Camera, CheckCircle, Loader2, Clock, Calendar, Shield, AlertCircle, Lock
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
 import { Worker, ShiftConfig, Branch, OrgSettings } from '../types/index';
@@ -46,6 +47,7 @@ const DAYS_OF_WEEK = [
 
 export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialData }) => {
   const { profile, limits } = useAuth();
+  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
   
@@ -203,22 +205,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   const validateStep = (step: number): boolean => {
     if (step === 0) {
-      if (!formData.name?.trim()) { alert("Full Name is required."); return false; }
-      if (!formData.phone?.trim() || !/^\d{10}$/.test(formData.phone)) { alert("Mobile Number must be exactly 10 digits."); return false; }
-      if (!formData.gender) { alert("Gender is required."); return false; }
-      if (!formData.dob) { alert("Date of Birth is required."); return false; }
-      if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) { alert("Aadhar Number must be exactly 12 digits."); return false; }
+      if (!formData.name?.trim()) { toast.error("Full Name is required."); return false; }
+      if (!formData.phone?.trim() || !/^\d{10}$/.test(formData.phone)) { toast.error("Mobile Number must be exactly 10 digits."); return false; }
+      if (!formData.gender) { toast.error("Gender is required."); return false; }
+      if (!formData.dob) { toast.error("Date of Birth is required."); return false; }
+      if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) { toast.error("Aadhar Number must be exactly 12 digits."); return false; }
     }
     if (step === 1) {
-      if (!formData.designation?.trim()) { alert("Designation is required."); return false; }
+      if (!formData.designation?.trim()) { toast.error("Designation is required."); return false; }
     }
     if (step === 2) {
-      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { alert("Wage Amount/Gross Salary is required and must be greater than 0."); return false; }
+      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { toast.error("Wage Amount / Gross Salary is required."); return false; }
       if (formData.wageConfig?.type === 'MONTHLY' && (!formData.wageConfig?.monthlyBreakdown?.basic || formData.wageConfig.monthlyBreakdown.basic <= 0)) {
-         alert("Basic Salary is required for Monthly Wages to process PF accurately."); return false;
+         toast.error("Basic Salary is required for Monthly Wages to calculate PF accurately."); return false;
       }
       if (formData.wageConfig?.overtimeEligible && (!formData.wageConfig.overtimeRatePerHour || formData.wageConfig.overtimeRatePerHour <= 0)) {
-         alert("Overtime Rate per hour is required because Overtime is enabled."); return false; 
+         toast.error("Overtime hourly rate is required when Overtime is enabled."); return false; 
       }
     }
     return true;
@@ -230,11 +232,14 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   const handleSave = async () => {
     if (capturedImages[0] !== "EXISTING_DATA" && capturedImages.length < 5) {
-      alert("All 5 face scans are required to complete registration.");
+      toast.warning("All 5 face orientation scans are recommended for biometric accuracy.");
       return;
     }
 
-    if (!profile?.tenantId) return alert("System Error: Tenant ID missing");
+    if (!profile?.tenantId) {
+      toast.error("Organization tenant session missing. Please refresh.");
+      return;
+    }
     setSaving(true);
     
     try {
@@ -252,9 +257,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             const rawDescriptor = await faceService.getFaceDescriptor(img);
             if (rawDescriptor) {
               descriptor = rawDescriptor;
-            } else if (!confirm("Warning: Face not clearly detected. Continue?")) {
-              setSaving(false); 
-              return;
+            } else {
+              toast.warning("Face not clearly detected in capture; proceeding with photo record.");
             }
 
             const imageRef = ref(storage, `workers/${profile.tenantId}/${Date.now()}_profile.jpg`);
@@ -263,7 +267,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
           } catch (err) { 
             console.error("Image processing or upload error", err);
-            alert("Failed to process face or upload image to storage.");
+            toast.error("Failed to process face or upload image to cloud storage.");
             setSaving(false);
             return;
           }
@@ -291,8 +295,10 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       
       if (isEditing && initialData?.id) {
           await dbService.updateWorker(initialData.id, workerData);
+          toast.success(`Updated ${formData.name}'s profile`);
       } else {
           await dbService.addWorker(workerData);
+          toast.success(`Registered ${formData.name} successfully`);
           await dbService.addNotification({
               tenantId: profile.tenantId,
               title: 'New Worker Registered',
@@ -304,55 +310,73 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       }
       onSuccess();
     } catch (e: any) {
-      alert(`Error saving worker: ${e.message}`);
+      toast.error(`Error saving worker: ${e.message}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    // Mobile Optimization: 100dvh prevents UI jumping due to browser URL bars
-    <div className="bg-gray-50 min-h-dvh flex flex-col">
+    <div className="max-w-3xl mx-auto space-y-6 pb-20">
       
-      {/* Header */}
-      <div className="bg-white p-4 shadow-sm sticky top-0 z-20 flex items-center justify-between min-h-16">
-        <div className="flex items-center">
-          {/* Mobile Optimization: w-11 h-11 provides a >44px touch target */}
-          <button onClick={() => { currentStep > 0 ? setCurrentStep(c => c - 1) : onBack() }} 
-            className="w-11 h-11 flex items-center justify-center -ml-2 rounded-full hover:bg-gray-100 transition-colors">
-            <ChevronLeft className="text-gray-600" size={24}/>
+      {/* Header Toolbar */}
+      <div className="flex items-center justify-between pb-4 border-b border-slate-200/80">
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => { currentStep > 0 ? setCurrentStep(c => c - 1) : onBack(); }} 
+            className="w-10 h-10 flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs"
+            aria-label="Go Back"
+          >
+            <ChevronLeft className="text-slate-700" size={20}/>
           </button>
-          <h1 className="text-lg font-bold ml-1 text-gray-800">{isEditing ? 'Edit Worker' : 'New Registration'}</h1>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">{isEditing ? 'Edit Worker Profile' : 'Register New Personnel'}</h1>
+            <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+              <span>{STEPS[currentStep].title}</span>
+              <span aria-hidden="true" className="text-slate-300">·</span>
+              <span className="font-mono tabular-nums text-slate-600 font-medium">Step {currentStep + 1} of {STEPS.length}</span>
+            </div>
+          </div>
         </div>
-        <div className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full">
-          Step {currentStep + 1}/5
+
+        <div className="text-xs font-mono tabular-nums text-slate-500">
+          {Math.round(((currentStep + 1) / STEPS.length) * 100)}% Complete
         </div>
       </div>
 
-      {/* Progress Bar */}
-      <div className="flex justify-between px-6 py-4 bg-white border-b border-gray-100 shrink-0">
+      {/* Modern Stepper Tabs */}
+      <div className="grid grid-cols-5 gap-2 p-1 bg-slate-100/80 rounded-2xl border border-slate-200/60">
         {STEPS.map((step, idx) => {
           const Icon = step.icon;
           const isActive = idx === currentStep;
           const isCompleted = idx < currentStep;
           return (
-            <div key={step.id} className="flex flex-col items-center">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-1 transition-all ${
-                isActive ? 'bg-blue-600 text-white scale-110 shadow-lg' : 
-                isCompleted ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
-              }`}>
-                {isCompleted ? <CheckCircle size={16}/> : <Icon size={16}/>}
+            <button
+              key={step.id}
+              type="button"
+              onClick={() => {
+                // Allow navigating backwards or if step valid
+                if (idx < currentStep) setCurrentStep(idx);
+              }}
+              className={`flex flex-col sm:flex-row items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-semibold transition-all ${
+                isActive 
+                  ? 'bg-white text-blue-600 shadow-xs' 
+                  : isCompleted 
+                  ? 'text-emerald-700 hover:bg-white/50' 
+                  : 'text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <div className="shrink-0">
+                {isCompleted ? <CheckCircle size={15} className="text-emerald-600" /> : <Icon size={15} />}
               </div>
-              <span className={`text-[10px] font-bold ${isActive ? 'text-blue-600' : 'text-gray-400'}`}>
-                {step.title}
-              </span>
-            </div>
+              <span className="hidden sm:inline text-[11px] truncate">{step.title}</span>
+            </button>
           );
         })}
       </div>
 
-      {/* Mobile Optimization: pb-40 ensures we can scroll up high enough so the keyboard doesn't block inputs */}
-      <div className="flex-1 p-4 overflow-y-auto pb-40">
+      {/* Step Form Body */}
+      <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200/80 shadow-xs">
         {/* STEP 1: PERSONAL */}
         {currentStep === 0 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -819,16 +843,23 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         )}
       </div>
 
-      {/* Footer Navigation: Sticky bottom over keyboard area */}
+      {/* Footer Navigation: Clean Dual Viewport Action Strip */}
       {currentStep < 4 && (
-        <div className="p-4 bg-white border-t border-gray-100 flex justify-between sticky bottom-0 left-0 right-0 z-20 pb-safe shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-          <button onClick={() => currentStep > 0 ? setCurrentStep(c => c - 1) : onBack()} 
-            className="px-6 min-h-12 rounded-xl text-gray-500 font-bold hover:bg-gray-50 flex items-center justify-center transition-colors">
+        <div className="flex items-center justify-between pt-4 border-t border-slate-200/80">
+          <button 
+            type="button"
+            onClick={() => currentStep > 0 ? setCurrentStep(c => c - 1) : onBack()} 
+            className="px-5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 font-semibold text-xs border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs"
+          >
             {currentStep === 0 ? 'Cancel' : 'Back'}
           </button>
-          <button onClick={handleNext} 
-            className="px-8 min-h-12 bg-gray-900 text-white rounded-xl font-bold shadow-lg flex items-center justify-center hover:bg-black active:scale-95 transition-all">
-            Next <ChevronRight size={16} className="ml-1"/>
+          <button 
+            type="button"
+            onClick={handleNext} 
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+          >
+            <span>Next Step</span>
+            <ChevronRight size={15} />
           </button>
         </div>
       )}

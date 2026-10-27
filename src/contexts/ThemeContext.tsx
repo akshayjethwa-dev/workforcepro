@@ -1,7 +1,7 @@
 // src/contexts/ThemeContext.tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
 import { useAuth } from './AuthContext';
 import { BrandingConfig } from '../types/index';
 
@@ -25,26 +25,48 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    const tenantRef = doc(db, 'tenants', profile.tenantId);
-    
-    // Real-time listener for instant white-label updates
-    const unsubscribe = onSnapshot(tenantRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        const tenantBranding = data.branding as BrandingConfig;
-        setBranding(tenantBranding || null);
+    // In demo mode or unauthenticated state, avoid remote firestore calls that trigger permission-denied
+    if (profile.tenantId === 'demo-tenant-id' || profile.tenantId.startsWith('demo-') || !auth.currentUser) {
+      const demoBranding: BrandingConfig = {
+        appName: profile.companyName || 'Apex WorkForce',
+        logoUrl: '',
+        primaryColor: '#2563eb'
+      };
+      setBranding(demoBranding);
+      document.documentElement.style.setProperty('--tenant-primary', demoBranding.primaryColor);
+      return;
+    }
 
-        // Inject the CSS Variable into the root document natively
-        if (tenantBranding?.primaryColor) {
-          document.documentElement.style.setProperty('--tenant-primary', tenantBranding.primaryColor);
-        } else {
-          document.documentElement.style.removeProperty('--tenant-primary');
+    try {
+      const tenantRef = doc(db, 'tenants', profile.tenantId);
+      
+      // Real-time listener for instant white-label updates with error listener to prevent uncaught exceptions
+      const unsubscribe = onSnapshot(
+        tenantRef, 
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const tenantBranding = data.branding as BrandingConfig;
+            setBranding(tenantBranding || null);
+
+            // Inject the CSS Variable into the root document natively
+            if (tenantBranding?.primaryColor) {
+              document.documentElement.style.setProperty('--tenant-primary', tenantBranding.primaryColor);
+            } else {
+              document.documentElement.style.removeProperty('--tenant-primary');
+            }
+          }
+        },
+        (error) => {
+          console.warn("Theme real-time subscription caught permission/connection notice:", error.message);
         }
-      }
-    });
+      );
 
-    return () => unsubscribe();
-  }, [profile?.tenantId]);
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn("Could not attach theme listener:", e);
+    }
+  }, [profile?.tenantId, profile?.companyName]);
 
   return (
     <ThemeContext.Provider value={{ branding }}>

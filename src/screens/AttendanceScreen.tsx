@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, CheckCircle, Clock, Calendar, AlertCircle, LogIn, LogOut, Loader2, ChevronDown, ChevronUp, ArrowRight, MapPin, WifiOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { syncService } from '../services/syncService';
@@ -9,6 +10,7 @@ import { geoUtils } from '../utils/geo';
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
+  const { toast } = useToast();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
   const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
@@ -16,6 +18,8 @@ export const AttendanceScreen: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterTab, setFilterTab] = useState<'ALL' | 'ACTIVE' | 'COMPLETED' | 'ABSENT' | 'LEAVE'>('ALL');
 
   // Track offline status for the UI
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -189,7 +193,9 @@ export const AttendanceScreen: React.FC = () => {
                 });
             } catch(e) { console.warn("Offline: Geofence notification not sent"); }
             
-            if (!isOfflinePunch) alert(`Warning: Punch recorded outside the ${settings.baseLocation?.radius}m factory radius!`);
+            if (!isOfflinePunch) {
+                toast.warning(`Punch recorded outside the ${settings.baseLocation?.radius || 100}m factory radius`);
+            }
         }
 
         if (finalRecord.lateStatus.isLate && !existingRecord?.lateStatus?.isLate) {
@@ -206,12 +212,14 @@ export const AttendanceScreen: React.FC = () => {
         }
 
         if (isOfflinePunch) {
-            alert(`Queued Offline: ${worker.name} punched ${type}. It will sync automatically.`);
+            toast.info(`Queued offline: ${worker.name} punched ${type}. Syncs automatically.`);
+        } else {
+            toast.success(`${worker.name}: Punched ${type} successfully`);
         }
 
     } catch (e) {
         console.error("Punch Error", e);
-        alert("System Error: Failed to process punch");
+        toast.error("Failed to process punch. Please verify network status.");
     } finally {
         setActionLoading(null);
     }
@@ -219,7 +227,6 @@ export const AttendanceScreen: React.FC = () => {
 
   const markOnLeave = async (worker: Worker) => {
       if (!profile?.tenantId) return;
-      if (!window.confirm(`Mark ${worker.name} as ON LEAVE (Unpaid Quick Action)?`)) return;
 
       const todayDate = new Date().toISOString().split('T')[0];
       const recordId = `${profile.tenantId}_${worker.id}_${todayDate}`;
@@ -238,16 +245,17 @@ export const AttendanceScreen: React.FC = () => {
           leaveInfo: {
              type: 'LWP',
              isPaid: false,
-             reason: 'Quick Action (Mobile)'
+             reason: 'Quick Action (Admin)'
           }
       };
 
       try {
           await dbService.markAttendance(leaveRecord);
+          toast.success(`Marked ${worker.name} as On Leave (LWP)`);
       } catch (error) {
           console.warn("Network unreachable. Queuing leave offline...");
           await syncService.savePunchOffline(leaveRecord);
-          alert(`Queued Offline: Marked ${worker.name} on Leave. Will sync automatically.`);
+          toast.info(`Queued offline: Marked ${worker.name} on Leave`);
       }
 
       setAttendanceMap(prev => ({ ...prev, [worker.id]: leaveRecord }));
@@ -262,34 +270,168 @@ export const AttendanceScreen: React.FC = () => {
       });
   };
 
-  if (loading) return (
-     <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-     </div>
-  );
+  // Clean Skeleton Loading State
+  if (loading) {
+    return (
+      <div className="space-y-6 pb-12 animate-pulse">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-2">
+            <div className="h-7 bg-slate-200 rounded-lg w-52" />
+            <div className="h-4 bg-slate-100 rounded-lg w-40" />
+          </div>
+          <div className="h-9 bg-slate-200 rounded-xl w-32" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs space-y-2">
+              <div className="h-3 bg-slate-200 rounded w-20" />
+              <div className="h-7 bg-slate-200 rounded w-12" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {[1, 2, 3, 4, 5, 6].map(i => (
+            <div key={i} className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 bg-slate-200 rounded-xl shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-slate-200 rounded w-32" />
+                  <div className="h-3 bg-slate-100 rounded w-24" />
+                </div>
+              </div>
+              <div className="h-10 bg-slate-100 rounded-xl" />
+              <div className="grid grid-cols-5 gap-2 pt-2 border-t border-slate-100">
+                <div className="col-span-2 h-9 bg-slate-200 rounded-xl" />
+                <div className="col-span-2 h-9 bg-slate-200 rounded-xl" />
+                <div className="col-span-1 h-9 bg-slate-200 rounded-xl" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Filter workers
+  const filteredWorkers = workers.filter(worker => {
+    const matchesSearch = worker.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          worker.phone.includes(searchTerm) ||
+                          (worker.designation && worker.designation.toLowerCase().includes(searchTerm.toLowerCase()));
+    
+    if (!matchesSearch) return false;
+
+    const record = attendanceMap[worker.id];
+    const sortedTimeline = [...(record?.timeline || [])].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const lastPunch = sortedTimeline[sortedTimeline.length - 1];
+    const isInside = lastPunch?.type === 'IN';
+    const isOnLeave = record?.status === 'ON_LEAVE';
+
+    if (filterTab === 'ACTIVE') return isInside;
+    if (filterTab === 'COMPLETED') return record?.status === 'PRESENT' || record?.status === 'HALF_DAY';
+    if (filterTab === 'LEAVE') return isOnLeave;
+    if (filterTab === 'ABSENT') return !isInside && (!record || record.status === 'ABSENT');
+
+    return true;
+  });
+
+  // Calculate live counts
+  let activeInsideCount = 0;
+  let presentCompletedCount = 0;
+  let leaveCount = 0;
+  let notStartedCount = 0;
+
+  workers.forEach(w => {
+    const r = attendanceMap[w.id];
+    const timeline = r?.timeline || [];
+    const lastP = timeline[timeline.length - 1];
+    if (lastP?.type === 'IN') activeInsideCount++;
+    else if (r?.status === 'PRESENT' || r?.status === 'HALF_DAY') presentCompletedCount++;
+    else if (r?.status === 'ON_LEAVE') leaveCount++;
+    else notStartedCount++;
+  });
 
   return (
-    <div className="p-4 bg-gray-50 min-h-screen pb-24">
-      <div className="flex justify-between items-center mb-6">
-          <div>
-            <h2 className="text-xl font-bold text-gray-800 flex items-center">
-                Manual Entry
-                {/* FIXED: Wrapped the icon in a span to hold the title attribute */}
-                {isOffline && (
-                    <span title="Offline Mode">
-                        <WifiOff size={16} className="ml-2 text-amber-500" />
-                    </span>
-                )}
-            </h2>
-            <p className="text-xs text-gray-500">{new Date().toLocaleDateString('en-IN', {weekday: 'long', day:'numeric', month:'long'})}</p>
+    <div className="space-y-6 pb-12">
+      
+      {/* TOOLBAR */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Attendance Register</h1>
+            {isOffline && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 text-xs font-semibold rounded-md border border-amber-200" title="Offline Mode Active">
+                <WifiOff size={13} /> Offline Cache
+              </span>
+            )}
           </div>
-          <div className="text-xs font-bold bg-white px-3 py-1 rounded-full shadow-sm text-gray-600">
-             Staff: {workers.length}
+          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+            <span>Shift Attendance & Manual Punches</span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span className="font-mono tabular-nums text-slate-600">{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
           </div>
+        </div>
+
+        {/* METRIC STRIP (Tabular figures) */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono tabular-nums">
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-slate-500 text-[11px] font-sans">On Floor:</span>
+            <span className="font-bold text-slate-900">{activeInsideCount}</span>
+          </div>
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <span className="text-slate-500 text-[11px] font-sans">Finished:</span>
+            <span className="font-bold text-slate-900">{presentCompletedCount}</span>
+          </div>
+          <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            <span className="text-slate-500 text-[11px] font-sans">Pending:</span>
+            <span className="font-bold text-slate-900">{notStartedCount}</span>
+          </div>
+        </div>
       </div>
 
-      <div className="space-y-3">
-        {workers.map(worker => {
+      {/* SEARCH AND STATUS FILTER CONTROLS */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex-1 relative">
+          <input 
+            type="text" 
+            placeholder="Search worker name or phone number..." 
+            className="w-full pl-3.5 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all shadow-xs"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* Segmented Filter Buttons (conforming to Section 1A interactive filter controls) */}
+        <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl shrink-0 overflow-x-auto">
+          {[
+            { id: 'ALL', label: 'All Staff' },
+            { id: 'ACTIVE', label: `On Floor (${activeInsideCount})` },
+            { id: 'COMPLETED', label: `Done (${presentCompletedCount})` },
+            { id: 'ABSENT', label: 'Not In' },
+            { id: 'LEAVE', label: `Leave (${leaveCount})` }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setFilterTab(tab.id as any)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap active:scale-95 ${
+                filterTab === tab.id 
+                  ? 'bg-white text-slate-900 shadow-xs' 
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* RESPONSIVE DUAL-VIEWPORT GRID: 1 column on mobile, 2 columns on desktop */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {filteredWorkers.map(worker => {
             const record = attendanceMap[worker.id];
             
             const sortedTimeline = [...(record?.timeline || [])].sort(
@@ -301,125 +443,151 @@ export const AttendanceScreen: React.FC = () => {
             const isOnLeave = record?.status === 'ON_LEAVE';
             const isExpanded = expandedLogs.has(worker.id);
             
-            let statusLabel = 'ABSENT';
-            let statusColor = 'bg-gray-100 text-gray-500';
+            let statusLabel = 'NOT IN';
+            let statusTextColor = 'text-slate-500';
 
             if (isOnLeave) {
                 statusLabel = record?.leaveInfo?.isPaid ? 'PAID LEAVE' : 'ON LEAVE';
-                statusColor = record?.leaveInfo?.isPaid ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700';
+                statusTextColor = 'text-indigo-700 font-bold';
             } else if (isInside) {
-                statusLabel = 'IN PROGRESS';
-                statusColor = 'bg-blue-50 text-blue-600 animate-pulse';
+                statusLabel = 'PUNCHED IN (ON FLOOR)';
+                statusTextColor = 'text-emerald-700 font-bold';
             } else if (record?.status === 'PRESENT') {
-                statusLabel = 'PRESENT';
-                statusColor = 'bg-green-100 text-green-700';
+                statusLabel = 'PRESENT (COMPLETED)';
+                statusTextColor = 'text-emerald-700 font-bold';
             } else if (record?.status === 'HALF_DAY') {
                 statusLabel = 'HALF DAY';
-                statusColor = 'bg-orange-100 text-orange-700';
+                statusTextColor = 'text-amber-700 font-bold';
             } else if (record?.status === 'WEEKLY_OFF') {
                 statusLabel = 'WEEKLY OFF';
-                statusColor = 'bg-slate-200 text-slate-700';
+                statusTextColor = 'text-slate-600';
             } else if (record?.status === 'PUBLIC_HOLIDAY') {
-                statusLabel = 'HOLIDAY';
-                statusColor = 'bg-purple-100 text-purple-700';
+                statusLabel = 'PUBLIC HOLIDAY';
+                statusTextColor = 'text-purple-700 font-bold';
             } else if (record?.status === 'HOLIDAY_WORKED') {
                 statusLabel = 'HOLIDAY OT';
-                statusColor = 'bg-green-200 text-green-800 font-black';
+                statusTextColor = 'text-emerald-800 font-extrabold';
             }
 
             return (
-                <div key={worker.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                        <div className="flex items-center space-x-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${isInside ? 'bg-green-500' : 'bg-gray-300'}`}>
-                                {worker.name.charAt(0)}
-                            </div>
-                            <div>
-                                <p className="font-bold text-gray-800">{worker.name}</p>
-                                <p className="text-xs text-gray-500">{worker.designation}</p>
-                            </div>
-                        </div>
-                        
-                        <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${statusColor}`}>
-                            {statusLabel}
-                        </div>
+                <div 
+                  key={worker.id} 
+                  className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+                >
+                    <div>
+                      {/* HEADER ROW */}
+                      <div className="flex justify-between items-start gap-3">
+                          <div className="flex items-center gap-3.5 min-w-0">
+                              <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-sm text-white shrink-0 overflow-hidden relative ${isInside ? 'bg-emerald-600' : 'bg-slate-700'}`}>
+                                {worker.photoUrl ? (
+                                  <img 
+                                    src={worker.photoUrl} 
+                                    alt={worker.name} 
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                ) : (
+                                  <span>{worker.name.charAt(0)}</span>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                  <p className="font-bold text-sm text-slate-900 truncate">{worker.name}</p>
+                                  <div className="text-xs text-slate-500 truncate flex items-center gap-1.5 mt-0.5">
+                                      <span>{worker.designation || 'Worker'}</span>
+                                      <span aria-hidden="true" className="text-slate-300">·</span>
+                                      <span className="font-mono tabular-nums">{worker.phone}</span>
+                                  </div>
+                              </div>
+                          </div>
+                          
+                          <div className={`text-xs uppercase tracking-wide shrink-0 ${statusTextColor}`}>
+                              {statusLabel}
+                          </div>
+                      </div>
+
+                      {/* TIMELINE PREVIEW */}
+                      {record && !isOnLeave && sortedTimeline.length > 0 && (
+                          <div className="bg-slate-50/80 p-3.5 rounded-xl text-xs mt-4 border border-slate-100">
+                             <div 
+                                className={`flex justify-between items-center text-slate-700 font-semibold cursor-pointer ${isExpanded ? 'border-b border-slate-200 pb-2 mb-2' : ''}`}
+                                onClick={() => toggleExpand(worker.id)}
+                             >
+                                 <div className="flex items-center gap-2">
+                                     <span className="font-mono tabular-nums font-bold text-slate-900">
+                                       Net: {record.hours.net.toFixed(1)} hrs
+                                     </span>
+                                     <span className="text-[11px] text-slate-500 font-mono">
+                                       · {sortedTimeline.length} punches
+                                     </span>
+                                 </div>
+                                 <div className="flex items-center text-blue-600 text-xs">
+                                     <span className="mr-1 text-[11px]">{isExpanded ? 'Hide' : 'Timeline'}</span>
+                                     {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                                 </div>
+                             </div>
+
+                             {!isExpanded ? (
+                                 <div className="flex justify-between items-center text-slate-600 mt-2 font-mono tabular-nums text-xs">
+                                     <div>
+                                         <span className="text-[10px] uppercase text-slate-400 block font-sans">First Punch In</span>
+                                         <span className="font-bold text-slate-800">
+                                             {sortedTimeline.find(p => p.type === 'IN') 
+                                                 ? new Date(sortedTimeline.find(p => p.type === 'IN')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
+                                                 : '--:--'}
+                                         </span>
+                                     </div>
+                                     <ArrowRight size={14} className="text-slate-300"/>
+                                     <div className="text-right">
+                                         <span className="text-[10px] uppercase text-slate-400 block font-sans">Latest Status</span>
+                                         <span className="font-bold text-slate-800">
+                                              {sortedTimeline.slice().reverse().find(p => p.type === 'OUT') 
+                                                 ? new Date(sortedTimeline.slice().reverse().find(p => p.type === 'OUT')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
+                                                 : <span className="text-emerald-700 font-bold">Inside Floor</span>}
+                                         </span>
+                                     </div>
+                                 </div>
+                             ) : (
+                                 <div className="space-y-1.5 mt-2 max-h-48 overflow-y-auto">
+                                     {sortedTimeline.map((punch, idx) => {
+                                         const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN' || punch.device.includes('Admin');
+                                         return (
+                                             <div key={idx} className="flex justify-between items-center text-slate-600 bg-white p-2 rounded-lg border border-slate-100 text-xs font-mono tabular-nums">
+                                                  <div className="flex items-center gap-1.5">
+                                                      <span className={`w-2 h-2 rounded-full ${punch.type === 'IN' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                      <span className="font-bold font-sans uppercase text-[11px]">{punch.type}</span>
+                                                      {isRegulated && (
+                                                          <span className="text-[10px] text-blue-600 font-sans">· Admin</span>
+                                                      )}
+                                                      {punch.isOutOfGeofence && (
+                                                          <span className="text-[10px] text-amber-600 font-sans flex items-center gap-0.5">
+                                                              <MapPin size={10} /> Out of Zone
+                                                          </span>
+                                                      )}
+                                                  </div>
+                                                  <span className="font-bold text-slate-800">
+                                                      {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                                                  </span>
+                                             </div>
+                                         );
+                                     })}
+                                 </div>
+                             )}
+                          </div>
+                      )}
                     </div>
 
-                    {record && !isOnLeave && sortedTimeline.length > 0 && (
-                        <div className="bg-gray-50 p-3 rounded-lg text-xs mb-4">
-                           <div 
-                              className={`flex justify-between items-center text-gray-700 font-bold cursor-pointer ${isExpanded ? 'border-b border-gray-200 pb-2 mb-2' : ''}`}
-                              onClick={() => toggleExpand(worker.id)}
-                           >
-                               <div className="flex items-center space-x-2">
-                                   <span>Net: {record.hours.net.toFixed(1)} hrs</span>
-                                   <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded-full text-gray-600">{sortedTimeline.length} Punches</span>
-                               </div>
-                               <div className="flex items-center text-blue-600">
-                                   {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                               </div>
-                           </div>
-
-                           {!isExpanded ? (
-                               <div className="flex justify-between items-center text-gray-500 mt-2">
-                                   <div className="flex flex-col">
-                                       <span className="text-[9px] uppercase font-bold text-gray-400">First In</span>
-                                       <span className="font-bold text-gray-700">
-                                           {sortedTimeline.find(p => p.type === 'IN') 
-                                               ? new Date(sortedTimeline.find(p => p.type === 'IN')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
-                                               : '--:--'}
-                                       </span>
-                                   </div>
-                                   <ArrowRight size={14} className="text-gray-300"/>
-                                   <div className="flex flex-col text-right">
-                                       <span className="text-[9px] uppercase font-bold text-gray-400">Last Out</span>
-                                       <span className="font-bold text-gray-700">
-                                            {sortedTimeline.slice().reverse().find(p => p.type === 'OUT') 
-                                               ? new Date(sortedTimeline.slice().reverse().find(p => p.type === 'OUT')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) 
-                                               : <span className="text-green-600">Active</span>}
-                                       </span>
-                                   </div>
-                               </div>
-                           ) : (
-                               <div className="space-y-2 mt-3">
-                                   {sortedTimeline.map((punch, idx) => {
-                                       const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN' || punch.device.includes('Admin');
-                                       return (
-                                           <div key={idx} className="flex justify-between items-center text-gray-600 bg-white p-2 rounded border border-gray-100">
-                                                <div className="flex items-center flex-wrap gap-1">
-                                                    <div className={`w-2 h-2 rounded-full mr-1 ${punch.type === 'IN' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                                    <span className="font-bold uppercase tracking-wide mr-1">{punch.type}</span>
-                                                    {isRegulated && (
-                                                        <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold">Admin</span>
-                                                    )}
-                                                    {punch.isOutOfGeofence && (
-                                                        <span 
-                                                            className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded uppercase font-bold flex items-center" 
-                                                            title="Outside Geofence"
-                                                        >
-                                                            <MapPin size={10} className="mr-0.5"/> Out of Zone
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <span className="font-mono font-bold text-gray-800">
-                                                    {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                                                </span>
-                                           </div>
-                                       );
-                                   })}
-                               </div>
-                           )}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-5 gap-2 mt-auto">
+                    {/* ACTIONS STRIP */}
+                    <div className="grid grid-cols-5 gap-2 mt-4 pt-3 border-t border-slate-100">
                         <button 
                             onClick={() => handlePunch(worker, 'IN')}
                             disabled={isInside || actionLoading === worker.id} 
-                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
+                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-xl text-xs font-semibold transition-all active:scale-95 ${
                                 isInside 
-                                ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
-                                : 'bg-green-600 text-white border-green-600 hover:bg-green-700 shadow-sm'
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
                             }`}
                         >
                             {actionLoading === worker.id ? <Loader2 className="animate-spin" size={14}/> : <><LogIn size={14} className="mr-1.5"/> Check In</>}
@@ -428,10 +596,10 @@ export const AttendanceScreen: React.FC = () => {
                         <button 
                             onClick={() => handlePunch(worker, 'OUT')}
                             disabled={!isInside || actionLoading === worker.id}
-                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-lg text-xs font-bold border transition-all ${
+                            className={`col-span-2 flex items-center justify-center py-2.5 rounded-xl text-xs font-semibold transition-all active:scale-95 ${
                                 !isInside
-                                ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' 
-                                : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
                             }`}
                         >
                              {actionLoading === worker.id ? <Loader2 className="animate-spin" size={14}/> : <><LogOut size={14} className="mr-1.5"/> Check Out</>}
@@ -439,20 +607,21 @@ export const AttendanceScreen: React.FC = () => {
                         
                         <button 
                             onClick={() => markOnLeave(worker)}
-                            className="col-span-1 flex items-center justify-center py-2 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 border border-transparent"
-                            title="Mark LWP (Quick Action)"
+                            className="col-span-1 flex items-center justify-center py-2 rounded-xl text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors"
+                            title="Mark Leave (LWP)"
                         >
-                            <Calendar size={16} />
+                            <Calendar size={15} />
                         </button>
                     </div>
                 </div>
             );
         })}
 
-        {workers.length === 0 && !loading && (
-            <div className="text-center py-10 text-gray-400">
-                <AlertCircle className="mx-auto mb-2" />
-                <p>No workers found.</p>
+        {filteredWorkers.length === 0 && !loading && (
+            <div className="col-span-full text-center py-12 bg-white rounded-2xl border border-dashed border-slate-200">
+                <AlertCircle className="mx-auto mb-2 text-slate-300" size={24} />
+                <p className="text-sm font-semibold text-slate-700">No personnel found for this view</p>
+                <p className="text-xs text-slate-400 mt-1">Try switching filter tabs or checking worker names.</p>
             </div>
         )}
       </div>
