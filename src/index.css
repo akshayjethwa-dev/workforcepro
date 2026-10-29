@@ -1,14 +1,10 @@
 @import "tailwindcss";
 
-@theme {
-  /* Dynamic tenant brand color with fallback */
+/* Safe area CSS variables and tenant brand variables */
+:root {
   --color-brand: var(--tenant-primary, #2563eb);
   --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-/* Safe area CSS variables for Capacitor / Android edge-to-edge / PWA */
-:root {
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);

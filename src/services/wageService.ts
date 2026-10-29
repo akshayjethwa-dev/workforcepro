@@ -1,19 +1,40 @@
 import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig } from '../types/index';
 import { attendanceLogic } from './attendanceLogic'; 
+import { statutoryEngine } from './statutoryEngine';
 
 export const ensureWageConfig = (worker: Worker): WageConfig => {
-  if (worker.wageConfig && typeof worker.wageConfig === 'object' && typeof worker.wageConfig.amount === 'number') {
-    return worker.wageConfig;
+  const isMonthly = (worker as any).wageType === 'MONTHLY' || 
+                    worker.wageConfig?.type === 'MONTHLY' || 
+                    worker.category === 'Monthly';
+
+  let resolvedAmount = 0;
+  if (worker.wageConfig && typeof worker.wageConfig.amount === 'number' && worker.wageConfig.amount > 0) {
+    resolvedAmount = worker.wageConfig.amount;
+  } else if (typeof worker.dailyWage === 'number' && worker.dailyWage > 0 && !isMonthly) {
+    resolvedAmount = worker.dailyWage;
+  } else if (typeof worker.monthlySalary === 'number' && worker.monthlySalary > 0) {
+    resolvedAmount = worker.monthlySalary;
+  } else if (typeof (worker as any).wageAmount === 'number' && (worker as any).wageAmount > 0) {
+    resolvedAmount = (worker as any).wageAmount;
+  } else if (typeof (worker as any).amount === 'number' && (worker as any).amount > 0) {
+    resolvedAmount = (worker as any).amount;
+  } else {
+    // Standard factory fallback rate
+    resolvedAmount = isMonthly ? 25000 : 650;
   }
-  const isMonthly = (worker as any).wageType === 'MONTHLY';
-  const amount = isMonthly ? ((worker as any).monthlySalary || 25000) : ((worker as any).dailyWage || 650);
+
+  const overtimeEligible = worker.wageConfig?.overtimeEligible ?? true;
+  const overtimeRatePerHour = worker.wageConfig?.overtimeRatePerHour || 
+                              (worker as any).overtimeRate || 
+                              ((resolvedAmount / 8) * 1.5);
+
   return {
     type: isMonthly ? 'MONTHLY' : 'DAILY',
-    amount,
-    overtimeEligible: true,
-    overtimeRatePerHour: (worker as any).overtimeRate || ((amount / 8) * 1.5),
-    workingDaysPerMonth: 26,
-    allowances: {
+    amount: resolvedAmount,
+    overtimeEligible,
+    overtimeRatePerHour,
+    workingDaysPerMonth: worker.wageConfig?.workingDaysPerMonth || 26,
+    allowances: worker.wageConfig?.allowances || {
       travel: 0,
       food: 0,
       nightShift: 0
@@ -45,27 +66,28 @@ export const wageService = {
     const config = ensureWageConfig(worker);
     
     // 2. Determine Daily Rate Dynamically based on the specific month
+    const isMonthly = config.type === 'MONTHLY';
     let dailyRate = config.amount;
-    if (config.type === 'MONTHLY') {
-      const [yearStr, monthStr] = record.date.split('-');
-      // new Date(year, month, 0) gives the exact number of days in that month!
+    if (isMonthly) {
+      const dateParts = (record.date || '').slice(0, 10).split('-');
+      const yearStr = dateParts[0] || '2026';
+      const monthStr = dateParts[1] || '10';
       const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
-      // Use explicit workingDaysPerMonth if set, otherwise fallback to exact calendar days (e.g., 28, 30, 31)
       dailyRate = config.amount / (config.workingDaysPerMonth || daysInMonth);
     }
 
     // 3. Calculate Base Wage WITH HOLIDAY & LEAVE RULES
     let baseWage = 0;
-    if (record.status === 'PRESENT' || record.status === 'WEEKLY_OFF' || record.status === 'PUBLIC_HOLIDAY') {
+    if (record.status === 'PRESENT') {
       baseWage = dailyRate; // Fully paid days
+    } else if (record.status === 'WEEKLY_OFF' || record.status === 'PUBLIC_HOLIDAY') {
+      baseWage = isMonthly ? dailyRate : 0;
     } else if (record.status === 'HALF_DAY') {
       baseWage = dailyRate * 0.5;
     } else if (record.status === 'HOLIDAY_WORKED') {
-      // Apply factory's holiday double-pay rule (defaults to 2.0x)
       const multiplier = orgSettings?.holidayPayMultiplier ?? 2.0;
       baseWage = dailyRate * multiplier; 
     } else if (record.status === 'ON_LEAVE') {
-      // NEW LEAVE LOGIC: Pay full day ONLY if it's a Paid Leave (CL, SL, PL)
       baseWage = record.leaveInfo?.isPaid ? dailyRate : 0;
     } else if (record.status === 'ABSENT' || record.status === 'UNPAID_HOLIDAY') {
       baseWage = 0; // Unpaid days
@@ -143,35 +165,54 @@ export const wageService = {
     const dailyStatuses = new Map<number, string>();
     const dailyRecords = new Map<number, AttendanceRecord>();
 
+    const isMonthly = config.type === 'MONTHLY';
+
     // Pass 1: Plot the calendar and establish base statuses
     for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${yearStr}-${monthStr}-${day.toString().padStart(2, '0')}`;
         
-        // 1. Check if worker was employed on this date
-        if ((joiningDate && dateStr < joiningDate) || (exitDate && dateStr > exitDate)) {
+        // Find if an attendance record exists for this date
+        const record = attendanceRecords.find(a => 
+          a.workerId === worker.id && 
+          (a.date || '').slice(0, 10) === dateStr
+        );
+
+        // Check if worker was employed on this date ONLY if no explicit attendance record exists
+        if (!record && ((joiningDate && dateStr < joiningDate) || (exitDate && dateStr > exitDate))) {
             dailyStatuses.set(day, 'NOT_EMPLOYED');
             continue;
         }
 
-        const record = attendanceRecords.find(a => a.date === dateStr && a.workerId === worker.id);
         const isPubHol = orgSettings.holidays?.find(h => h.date === dateStr);
         const isWeekOff = attendanceLogic.isWeeklyOff(dateStr, worker, orgSettings);
 
         let status = 'ABSENT';
-        if (record && record.timeline && record.timeline.length > 0) {
-            // Worked on this day
-            status = (isPubHol || isWeekOff) ? 'HOLIDAY_WORKED' : record.status;
+        if (record) {
+          const hasPunches = (record.timeline && record.timeline.length > 0) || !!record.inTime;
+          const isPresent = record.status === 'PRESENT' || record.status === 'HALF_DAY' || record.status === 'HOLIDAY_WORKED' || hasPunches;
+
+          if (isPresent) {
+            status = (isPubHol || isWeekOff) ? 'HOLIDAY_WORKED' : (record.status === 'HALF_DAY' ? 'HALF_DAY' : 'PRESENT');
             dailyRecords.set(day, { ...record, status: status as any });
+          } else if (record.status === 'ON_LEAVE') {
+            status = 'ON_LEAVE';
+            dailyRecords.set(day, record);
+          } else if (record.status === 'WEEKLY_OFF') {
+            status = 'WEEKLY_OFF';
+          } else if (record.status === 'PUBLIC_HOLIDAY') {
+            status = 'PUBLIC_HOLIDAY';
+          } else {
+            status = 'ABSENT';
+          }
         } else {
-            // Did not Work on this day
-            if (record && record.status === 'ON_LEAVE') {
-                status = 'ON_LEAVE';
-                dailyRecords.set(day, record); // Keep record so we can check if it's Paid/Unpaid later
-            } else if (isPubHol) {
-                status = isPubHol.isPaid ? 'PUBLIC_HOLIDAY' : 'UNPAID_HOLIDAY';
-            } else if (isWeekOff) {
-                status = 'WEEKLY_OFF';
-            }
+          // Did not work or no record on this day
+          if (isPubHol) {
+            status = isPubHol.isPaid ? 'PUBLIC_HOLIDAY' : 'UNPAID_HOLIDAY';
+          } else if (isWeekOff) {
+            status = 'WEEKLY_OFF';
+          } else {
+            status = 'ABSENT';
+          }
         }
         dailyStatuses.set(day, status);
     }
@@ -221,17 +262,28 @@ export const wageService = {
             continue;
         }
 
-        const dailyRate = config.type === 'MONTHLY' ? config.amount / totalWorkingDays : config.amount;
+        const dailyRate = isMonthly ? config.amount / totalWorkingDays : config.amount;
         
         let dwBaseWage = 0, dwOTWage = 0, dwAllowances = 0;
 
-        if (status === 'PRESENT') { presentDays++; dwBaseWage = dailyRate; } 
-        else if (status === 'HALF_DAY') { halfDays++; dwBaseWage = dailyRate * 0.5; } 
-        else if (status === 'ABSENT' || status === 'UNPAID_HOLIDAY') { absentDays++; } 
-        else if (status === 'WEEKLY_OFF') { weeklyOffs++; dwBaseWage = dailyRate; } 
-        else if (status === 'PUBLIC_HOLIDAY') { publicHolidays++; dwBaseWage = dailyRate; } 
-        else if (status === 'HOLIDAY_WORKED') { holidayWorkedDays++; dwBaseWage = dailyRate * (orgSettings.holidayPayMultiplier || 2.0); }
-        else if (status === 'ON_LEAVE') {
+        if (status === 'PRESENT') { 
+          presentDays++; 
+          dwBaseWage = dailyRate; 
+        } else if (status === 'HALF_DAY') { 
+          halfDays++; 
+          dwBaseWage = dailyRate * 0.5; 
+        } else if (status === 'ABSENT' || status === 'UNPAID_HOLIDAY') { 
+          absentDays++; 
+        } else if (status === 'WEEKLY_OFF') { 
+          weeklyOffs++; 
+          dwBaseWage = isMonthly ? dailyRate : 0; 
+        } else if (status === 'PUBLIC_HOLIDAY') { 
+          publicHolidays++; 
+          dwBaseWage = isMonthly ? dailyRate : 0; 
+        } else if (status === 'HOLIDAY_WORKED') { 
+          holidayWorkedDays++; 
+          dwBaseWage = dailyRate * (orgSettings.holidayPayMultiplier || 2.0); 
+        } else if (status === 'ON_LEAVE') {
             const lRec = dailyRecords.get(day);
             if (lRec?.leaveInfo?.isPaid) {
                 paidLeaves++;
@@ -247,11 +299,13 @@ export const wageService = {
         if (record && record.timeline && record.timeline.length > 0) {
             // Recalculate precisely using the engine if they worked
             const dw = wageService.calculateDailyWage(worker, record, orgSettings);
-            dwBaseWage = dw.breakdown.baseWage; 
+            dwBaseWage = dw.breakdown.baseWage || dwBaseWage; 
             dwOTWage = dw.breakdown.overtimeWage;
             dwAllowances = dw.breakdown.allowances;
             totalRegularHours += dw.meta.hoursWorked - dw.meta.overtimeHours;
             totalOvertimeHours += dw.meta.overtimeHours;
+        } else if (status === 'PRESENT' || status === 'HALF_DAY' || status === 'HOLIDAY_WORKED') {
+            totalRegularHours += status === 'HALF_DAY' ? 4 : 8;
         }
 
         totalBasic += dwBaseWage;
@@ -260,8 +314,10 @@ export const wageService = {
     }
 
     const gross = totalBasic + totalOTPay + totalAllowances;
-    // The exact total of days they are receiving pay for (now including Paid Leaves)
-    const payableDays = presentDays + (halfDays * 0.5) + weeklyOffs + publicHolidays + holidayWorkedDays + paidLeaves;
+    // Exact total of days they are receiving pay for
+    const payableDays = isMonthly 
+      ? (presentDays + (halfDays * 0.5) + weeklyOffs + publicHolidays + holidayWorkedDays + paidLeaves)
+      : (presentDays + (halfDays * 0.5) + holidayWorkedDays + paidLeaves);
 
     // Deductions
     const monthAdvances = advances.filter(a => a.workerId === worker.id && a.date.startsWith(month) && a.status === 'APPROVED');
@@ -270,12 +326,49 @@ export const wageService = {
 
     monthAdvances.forEach(adv => {
         advanceTotal += adv.amount;
-        deductionDetails.push({ description: `Advance (${adv.date})`, amount: adv.amount });
+        deductionDetails.push({ description: `Kharchi Advance (${adv.date})`, amount: adv.amount });
     });
 
-    const totalDeductions = advanceTotal;
+    // Compute Indian Statutory Deductions (PF, ESI, State PT, TDS)
+    const statutoryResult = statutoryEngine.computeStatutoryDeductions(
+      worker,
+      totalBasic,
+      gross,
+      totalOTPay,
+      totalAllowances,
+      month,
+      orgSettings
+    );
 
-    // Carry Forward Logic (If Advances taken exceed Gross Earned)
+    // Add statutory deductions as distinct line items
+    if (statutoryResult.statutory.employeePf > 0) {
+      deductionDetails.push({
+        description: `Provident Fund (EPF 12%${statutoryResult.statutory.isPfCapped ? ' Capped' : ''})`,
+        amount: statutoryResult.statutory.employeePf
+      });
+    }
+    if (statutoryResult.statutory.employeeEsi > 0) {
+      deductionDetails.push({
+        description: `Employee State Insurance (ESI 0.75%)`,
+        amount: statutoryResult.statutory.employeeEsi
+      });
+    }
+    if (statutoryResult.statutory.professionalTax > 0) {
+      deductionDetails.push({
+        description: `Professional Tax (${statutoryResult.statutory.state})`,
+        amount: statutoryResult.statutory.professionalTax
+      });
+    }
+    if (statutoryResult.statutory.tds > 0) {
+      deductionDetails.push({
+        description: `TDS Income Tax (${statutoryResult.statutory.taxRegime} Regime)`,
+        amount: statutoryResult.statutory.tds
+      });
+    }
+
+    const totalDeductions = advanceTotal + statutoryResult.totalEmployeeDeductions;
+
+    // Carry Forward Logic (If Advances & Deductions taken exceed Gross Earned)
     const rawNetPayable = gross - totalDeductions;
     const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
     const finalNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
@@ -317,9 +410,11 @@ export const wageService = {
         advances: advanceTotal,
         processingFee: 0,
         canteen: 0,
-        total: totalDeductions,
+        total: parseFloat(totalDeductions.toFixed(2)),
         details: deductionDetails
       },
+      statutory: statutoryResult.statutory,
+      employerCostToCompany: parseFloat(statutoryResult.employerCostToCompany.toFixed(2)),
       netPayable: parseFloat(finalNetPayable.toFixed(2)),
       carriedForwardAdvance: parseFloat(carriedForwardAdvance.toFixed(2)),
       status: 'DRAFT'

@@ -4,7 +4,7 @@ import {
   Search, Users, CalendarCheck, IndianRupee, Settings, Shield, 
   Building2, CreditCard, PieChart, IdCard, UserPlus, Camera, 
   HelpCircle, ArrowRight, CornerDownLeft, Sparkles, X, History,
-  Layers, BookOpen, FileSpreadsheet
+  Layers, BookOpen, FileSpreadsheet, Inbox
 } from 'lucide-react';
 import { ScreenName, Role } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
@@ -78,6 +78,15 @@ export const CommandPalette: React.FC<Props> = ({ isOpen, onClose, onNavigate, o
       shortcut: 'G D',
       action: () => { onNavigate('DASHBOARD'); onClose(); },
       keywords: ['home', 'overview', 'summary', 'live', 'stats']
+    },
+    {
+      id: 'nav-inbox',
+      title: 'Action Inbox (Approvals & Exceptions)',
+      category: 'Navigation',
+      icon: Inbox,
+      shortcut: 'G I',
+      action: () => { onNavigate('INBOX'); onClose(); },
+      keywords: ['inbox', 'pending', 'approvals', 'exceptions', 'kharchi', 'advances', 'conflicts', 'actions']
     },
     {
       id: 'nav-workers',

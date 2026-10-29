@@ -53,7 +53,9 @@ const DEMO_TENANTS = [
 
 export const normalizeWorker = (w: any): Worker => {
   const isMonthly = w.wageType === 'MONTHLY' || w.wageConfig?.type === 'MONTHLY' || w.category === 'Monthly';
-  const amount = w.wageConfig?.amount ?? (isMonthly ? (w.monthlySalary || 28000) : (w.dailyWage || 650));
+  const rawAmount = typeof w.wageConfig?.amount === 'number' && w.wageConfig.amount > 0 ? w.wageConfig.amount : null;
+  const fallbackAmount = isMonthly ? (w.monthlySalary || 25000) : (w.dailyWage || 650);
+  const amount = rawAmount || fallbackAmount;
   return {
     ...w,
     status: w.status || 'ACTIVE',
@@ -61,7 +63,7 @@ export const normalizeWorker = (w: any): Worker => {
     gender: w.gender || 'Male',
     dob: w.dob || '1995-01-01',
     joinedDate: w.joinedDate || w.dateOfJoining || '2025-01-01',
-    wageConfig: w.wageConfig?.amount ? w.wageConfig : {
+    wageConfig: {
       type: isMonthly ? 'MONTHLY' : 'DAILY',
       amount,
       overtimeEligible: w.wageConfig?.overtimeEligible ?? true,
@@ -833,9 +835,25 @@ export const dbService = {
   // --- ATTENDANCE ---
   getTodayAttendance: async (tenantId: string) => {
     if (!tenantId) return [];
-    if (tenantId === 'demo-tenant-id') return getStoredDemoAttendance(tenantId);
+    
+    let localList: AttendanceRecord[] = [];
+    const today = new Date().toISOString().split('T')[0];
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const raw = localStorage.getItem('demo_attendance_today');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          localList = parsed.filter(r => r.tenantId === tenantId && (r.date || '').slice(0, 10) === today);
+        }
+      }
+    } catch {}
+
+    if (tenantId === 'demo-tenant-id') {
+      const all = getStoredDemoAttendance(tenantId);
+      return all.filter(r => (r.date || '').slice(0, 10) === today);
+    }
+
+    try {
       const q = query(
         getAttendanceRef(), 
         where("tenantId", "==", tenantId),
@@ -843,24 +861,65 @@ export const dbService = {
       );
       const snapshot = await getDocs(q);
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
-      if (list.length > 0) return list;
-      return [];
+      
+      const recordMap = new Map<string, AttendanceRecord>();
+      localList.forEach(r => {
+        if (r.workerId) recordMap.set(r.workerId, r);
+      });
+      list.forEach(r => {
+        if (r.workerId) recordMap.set(r.workerId, r);
+      });
+
+      const merged = Array.from(recordMap.values());
+      return merged.length > 0 ? merged : localList;
     } catch {
-      return getStoredDemoAttendance(tenantId);
+      return localList.length > 0 ? localList : getStoredDemoAttendance(tenantId);
     }
   },
 
-  getAttendanceHistory: async (tenantId: string) => {
+  getAttendanceHistory: async (tenantId: string): Promise<AttendanceRecord[]> => {
     if (!tenantId) return [];
-    if (tenantId === 'demo-tenant-id') return getStoredDemoAttendance(tenantId);
+    
+    let localList: AttendanceRecord[] = [];
+    try {
+      const raw = localStorage.getItem('demo_attendance_today');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          localList = parsed.filter(r => r.tenantId === tenantId);
+        }
+      }
+    } catch {}
+
+    if (tenantId === 'demo-tenant-id') {
+      return getStoredDemoAttendance(tenantId);
+    }
+
     try {
       const q = query(getAttendanceRef(), where("tenantId", "==", tenantId));
       const snapshot = await getDocs(q);
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
-      if (list.length > 0) return list;
-      return [];
-    } catch {
-      return getStoredDemoAttendance(tenantId);
+      const firestoreList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
+      
+      const recordMap = new Map<string, AttendanceRecord>();
+      // Seed with local records
+      localList.forEach(r => {
+        if (r.workerId && r.date) {
+          recordMap.set(`${r.workerId}_${r.date.slice(0, 10)}`, r);
+        }
+      });
+      // Merge with Firestore records
+      firestoreList.forEach(r => {
+        if (r.workerId && r.date) {
+          recordMap.set(`${r.workerId}_${r.date.slice(0, 10)}`, r);
+        }
+      });
+
+      const merged = Array.from(recordMap.values());
+      if (merged.length > 0) return merged;
+      return localList.length > 0 ? localList : [];
+    } catch (e) {
+      console.warn("getAttendanceHistory Firestore fallback:", e);
+      return localList.length > 0 ? localList : getStoredDemoAttendance(tenantId);
     }
   },
 
@@ -920,6 +979,21 @@ export const dbService = {
       const newAdv: Advance = { ...advance, id: 'adv-' + Date.now() };
       setStoredDemoAdvances([newAdv, ...current]);
       return newAdv.id;
+    }
+  },
+
+  updateAdvanceStatus: async (advanceId: string, status: 'APPROVED' | 'PENDING' | 'REPAID'): Promise<void> => {
+    try {
+      const demoList = getStoredDemoAdvances();
+      const idx = demoList.findIndex(a => a.id === advanceId);
+      if (idx >= 0) {
+        demoList[idx].status = status;
+        if (status === 'REPAID') demoList[idx].repaid = true;
+        setStoredDemoAdvances(demoList);
+      }
+      await updateDoc(doc(db, "advances", advanceId), { status, repaid: status === 'REPAID' });
+    } catch (e) {
+      console.warn("updateAdvanceStatus fallback:", e);
     }
   },
 

@@ -21,6 +21,7 @@ import { ResellerDashboard } from './screens/ResellerDashboard'; // NEW IMPORT
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
+import { InboxScreen } from './screens/inboxScreen';
 import { useBackButton } from './hooks/useBackButton';
 
 // LEGAL & SUPPORT SCREENS
@@ -127,7 +128,8 @@ export const RootNavigator: React.FC = () => {
 
   const renderMainScreen = () => {
     switch (currentScreen) {
-      case 'DASHBOARD': return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
+      case 'DASHBOARD': return <DashboardScreen onOpenKiosk={handleOpenKiosk} onNavigate={setCurrentScreen} />;
+      case 'INBOX': return <InboxScreen onNavigate={setCurrentScreen} />;
       case 'WORKERS': 
         return <WorkersScreen 
                   onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}

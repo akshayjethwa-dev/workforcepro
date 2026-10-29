@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, 
   History, FileText, CreditCard, PieChart, IdCard, Headset, FileCheck, 
-  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen
+  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { ScreenName } from '../types/index';
 import { dbService } from '../services/db';
+import { inboxService } from '../services/inboxService';
 import { auth } from '../lib/firebase';
 
 interface Props {
@@ -37,6 +38,15 @@ export const Sidebar: React.FC<Props> = ({
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
+
+  useEffect(() => {
+    if (profile?.tenantId) {
+      inboxService.getPendingCount(profile.tenantId, profile)
+        .then(count => setInboxCount(count))
+        .catch(() => {});
+    }
+  }, [profile?.tenantId, currentScreen]);
 
   const handleSupportClick = () => {
     const adminPhone = "918460852903"; 
@@ -178,6 +188,12 @@ export const Sidebar: React.FC<Props> = ({
                 Core Operations
               </div>
               <NavItem icon={Home} label="Overview Dashboard" screen="DASHBOARD" />
+              <NavItem 
+                icon={Inbox} 
+                label="Action Inbox" 
+                screen="INBOX" 
+                badge={inboxCount > 0 ? `${inboxCount}` : undefined} 
+              />
               <NavItem icon={Users} label="Workers Directory" screen="WORKERS" />
               <NavItem icon={Clock} label="Attendance Logs" screen="ATTENDANCE" />
               <NavItem icon={Camera} label="Kiosk Scanner" screen="ATTENDANCE_KIOSK" badge="Live" />

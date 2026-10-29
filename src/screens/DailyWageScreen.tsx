@@ -1,3 +1,12 @@
+import { Mic, MicOff, PlusCircle } from 'lucide-react';
+import { useVoiceDictation } from '../hooks/useVoiceDictation';
+import { ConstrainedVoiceInput } from '../components/ConstrainedVoiceInput';
+import { FrontlineNumericStepper } from '../components/FrontlineNumericStepper';
+import { useToast } from '../contexts/ToastContext';
+import { FRONTLINE_TOUCH, triggerFrontlineHaptic } from "../utils/frontlineTouch";
+import { FrontlineWipeOverlay } from "../components/FrontlineWipeOverlay";
+import { FrontlineErgonomicsModal } from "../components/FrontlineErgonomicsModal";
+import { ShieldCheck } from "lucide-react";
 import React, { useState, useEffect } from 'react';
 import { 
   Calendar, ChevronLeft, ChevronRight, Clock, IndianRupee, Search, 
@@ -17,8 +26,29 @@ export const DailyWageScreen: React.FC = () => {
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isErgonomicsModalOpen, setIsErgonomicsModalOpen] = useState(false);
+  const [isAuditOverlayActive, setIsAuditOverlayActive] = useState(false);
+  const [isThumbReachMode, setIsThumbReachMode] = useState(false);
+  const [isScreenLockedForWipe, setIsScreenLockedForWipe] = useState(false);
 
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const { toast } = useToast();
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState('ALL');
+  
+  // Advance (Kharchi) Modal state
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState(500);
+  const [advanceReason, setAdvanceReason] = useState('Weekly Grocery / Ration');
+  const [advanceNotes, setAdvanceNotes] = useState('');
+
+  // Voice Search Dictation
+  const {
+    isListening: isWageSearchListening,
+    startListening: startWageSearchListening,
+    stopListening: stopWageSearchListening,
+  } = useVoiceDictation({
+    onResult: (text) => setSearchTerm(text),
+  });
 
   useEffect(() => {
     const loadData = async () => {
@@ -62,9 +92,11 @@ export const DailyWageScreen: React.FC = () => {
     );
   }
 
+  const activeDetailWorker = selectedWorkerId ? workers.find(w => w.id === selectedWorkerId) : null;
+
   // --- DRILL DOWN VIEW FOR A SPECIFIC WORKER ---
-  if (selectedWorkerId) {
-    const worker = workers.find(w => w.id === selectedWorkerId);
+  if (selectedWorkerId && activeDetailWorker) {
+    const worker = activeDetailWorker;
     
     const workerWages = dailyWages.filter(w => w.workerId === selectedWorkerId && w.date.startsWith(selectedMonth));
     const workerAdvances = advances.filter(a => a.workerId === selectedWorkerId && a.date.startsWith(selectedMonth));
@@ -79,16 +111,33 @@ export const DailyWageScreen: React.FC = () => {
     const totalOTPay = workerWages.reduce((acc, curr) => acc + curr.breakdown.overtimeWage, 0);
 
     return (
-      <div className="space-y-6 pb-12">
+      <div className="space-y-6 pb-12 relative">
+        <FrontlineWipeOverlay 
+          onLockChange={setIsScreenLockedForWipe} 
+          corner="top-right" 
+          showCornerTrigger={true}
+        />
+        <FrontlineErgonomicsModal
+          isOpen={isErgonomicsModalOpen}
+          onClose={() => setIsErgonomicsModalOpen(false)}
+          activeScreenName="Daily Wage Screen"
+          isAuditOverlayActive={isAuditOverlayActive}
+          onToggleAuditOverlay={() => setIsAuditOverlayActive(!isAuditOverlayActive)}
+          isThumbReachMode={isThumbReachMode}
+          onToggleThumbReachMode={() => setIsThumbReachMode(!isThumbReachMode)}
+        />
         {/* TOP BREADCRUMB & MONTH TOOLBAR */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button 
-              onClick={() => setSelectedWorkerId(null)} 
-              className="p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 rounded-xl transition-all active:scale-95"
-              title="Back to all wage logs"
+              onClick={() => {
+                triggerFrontlineHaptic('light');
+                setSelectedWorkerId(null);
+              }} 
+              className="min-w-[56px] min-h-[56px] rounded-2xl bg-white border-2 border-slate-300 hover:border-slate-400 active:scale-95 flex items-center justify-center text-slate-800 shadow-xs cursor-pointer transition-all"
+              title="Back to all wage logs (Frontline 56px)"
             >
-              <ArrowLeft size={20} />
+              <ArrowLeft size={22} strokeWidth={2.5} />
             </button>
             <div>
               <div className="flex items-center gap-2">
@@ -101,12 +150,21 @@ export const DailyWageScreen: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-start sm:self-auto">
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            <button
+              onClick={() => setIsErgonomicsModalOpen(true)}
+              type="button"
+              className="min-h-[56px] px-3.5 py-2 rounded-2xl bg-white hover:bg-slate-50 active:scale-95 text-slate-800 font-bold text-xs border-2 border-slate-300 hover:border-emerald-500 shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+              title="Audit Touch Targets"
+            >
+              <ShieldCheck size={18} className="text-emerald-600" />
+              <span className="hidden sm:inline">Frontline Audit</span>
+            </button>
             <input 
               type="month" 
               value={selectedMonth} 
               onChange={(e) => setSelectedMonth(e.target.value)} 
-              className="bg-white border border-slate-200 text-xs font-semibold text-slate-700 py-2 px-3 rounded-xl shadow-xs outline-none focus:border-blue-600 transition-colors cursor-pointer"
+              className="min-h-[56px] bg-white border-2 border-slate-300 text-xs sm:text-sm font-bold text-slate-800 py-2.5 px-4 rounded-2xl shadow-xs outline-none focus:border-blue-600 transition-colors cursor-pointer"
             />
           </div>
         </div>
@@ -130,6 +188,23 @@ export const DailyWageScreen: React.FC = () => {
               )}
             </div>
 
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 border-t sm:border-t-0 sm:border-l border-slate-800 pt-4 sm:pt-0 sm:pl-6">
+              <button
+                type="button"
+                onClick={() => {
+                  triggerFrontlineHaptic('light');
+                  setIsAdvanceModalOpen(true);
+                  setAdvanceAmount(500);
+                  setAdvanceReason('Weekly Grocery / Ration');
+                  setAdvanceNotes('');
+                }}
+                className="min-h-[56px] px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs sm:text-sm border-2 border-amber-300 shadow-md flex items-center gap-2 cursor-pointer transition-all"
+                title="Record Advance (Kharchi) without typing"
+              >
+                <PlusCircle size={18} />
+                <span>Record Advance</span>
+              </button>
+            </div>
             <div className="grid grid-cols-3 gap-4 text-left sm:text-right border-t sm:border-t-0 sm:border-l border-slate-800 pt-4 sm:pt-0 sm:pl-6">
               <div>
                 <span className="text-[11px] text-slate-400 block">Days Worked</span>
@@ -267,7 +342,21 @@ export const DailyWageScreen: React.FC = () => {
   const totalOTPayMonth = monthWages.reduce((acc, curr) => acc + curr.breakdown.overtimeWage, 0);
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 relative">
+      <FrontlineWipeOverlay 
+        onLockChange={setIsScreenLockedForWipe} 
+        corner="top-right" 
+        showCornerTrigger={true}
+      />
+      <FrontlineErgonomicsModal
+        isOpen={isErgonomicsModalOpen}
+        onClose={() => setIsErgonomicsModalOpen(false)}
+        activeScreenName="Daily Wage Screen"
+        isAuditOverlayActive={isAuditOverlayActive}
+        onToggleAuditOverlay={() => setIsAuditOverlayActive(!isAuditOverlayActive)}
+        isThumbReachMode={isThumbReachMode}
+        onToggleThumbReachMode={() => setIsThumbReachMode(!isThumbReachMode)}
+      />
       {/* TOOLBAR */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -405,9 +494,12 @@ export const DailyWageScreen: React.FC = () => {
                 </div>
               </div>
 
-              <div className="mt-3.5 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-blue-600 font-semibold group-hover:text-blue-700">
-                <span>View Daily Sheets</span>
-                <ChevronRight size={15} className="group-hover:translate-x-0.5 transition-transform" />
+              <div className="mt-4 pt-3 border-t border-slate-100 min-h-[56px] flex items-center justify-between text-sm text-blue-600 font-bold group-hover:text-blue-700">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-600" />
+                  View Daily Wage Sheet
+                </span>
+                <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
               </div>
             </div>
           );
@@ -419,6 +511,128 @@ export const DailyWageScreen: React.FC = () => {
           <User size={32} className="mx-auto mb-2 text-slate-300" />
           <p className="text-sm font-medium text-slate-600">No matching workers found</p>
           <p className="text-xs text-slate-400 mt-1">Try clearing your search term or adjusting filters.</p>
+        </div>
+      )}
+      {/* CONSTRAINED ADVANCE (KHARCHI) MODAL (Stepper + Option Chips + Large Voice Notes) */}
+      {isAdvanceModalOpen && activeDetailWorker && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full border-2 border-slate-200 shadow-2xl overflow-hidden my-auto animate-in zoom-in-95">
+            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">
+                  Frontline Constrained Input
+                </span>
+                <h3 className="text-lg font-black text-white mt-0.5">Record Advance Deduction (Kharchi)</h3>
+                <p className="text-xs text-slate-400">{activeDetailWorker.name} ({activeDetailWorker.designation || 'Staff'})</p>
+              </div>
+              <button
+                onClick={() => setIsAdvanceModalOpen(false)}
+                className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-5">
+              {/* Stepper for Amount */}
+              <FrontlineNumericStepper
+                label="Advance Amount (₹)"
+                value={advanceAmount}
+                onChange={setAdvanceAmount}
+                min={100}
+                max={50000}
+                step={500}
+                prefix="₹"
+                presets={[500, 1000, 2000, 5000]}
+              />
+
+              {/* Predefined Reason Option Chips */}
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-600 font-mono block mb-2">
+                  Predefined Deduction Reason:
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[
+                    'Weekly Grocery / Ration',
+                    'Medical / Health Urgent',
+                    'Travel / Transport Fare',
+                    'Family Emergency',
+                    'Tool Replacement / Repair',
+                    'Festival Advance'
+                  ].map(reason => (
+                    <button
+                      key={reason}
+                      type="button"
+                      onClick={() => {
+                        triggerFrontlineHaptic('light');
+                        setAdvanceReason(reason);
+                      }}
+                      className={`min-h-[48px] p-3 rounded-2xl text-xs font-bold border-2 text-left transition-all cursor-pointer ${
+                        advanceReason === reason
+                          ? 'bg-amber-50 text-amber-950 border-amber-500 shadow-xs'
+                          : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      {reason}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Large-Format Voice Dictation Notes (>= 18px font) */}
+              <ConstrainedVoiceInput
+                value={advanceNotes}
+                onChange={setAdvanceNotes}
+                label="Disbursement Notes (Voice / Chips)"
+                placeholder="Tap Voice Input to speak notes or select chips below..."
+                optionChips={[
+                  'Handed in Cash by Supervisor',
+                  'UPI Transfer Verified',
+                  'Receipt Signed with Thumbprint',
+                  'Adjust against next pay cycle'
+                ]}
+              />
+
+              {/* Actions (>= 56px height) */}
+              <div className="flex gap-3.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAdvanceModalOpen(false)}
+                  className="flex-1 min-h-[56px] rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold border-2 border-slate-300 text-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!profile?.tenantId || !activeDetailWorker) return;
+                    triggerFrontlineHaptic('confirm');
+                    try {
+                      const newAdv: Omit<Advance, 'id'> = {
+                        tenantId: profile.tenantId,
+                        workerId: activeDetailWorker.id,
+                        workerName: activeDetailWorker.name,
+                        amount: advanceAmount,
+                        date: new Date().toISOString().split('T')[0],
+                        reason: advanceNotes ? `${advanceReason}: ${advanceNotes}` : advanceReason,
+                        repaid: false,
+                        status: 'APPROVED'
+                      };
+                      await dbService.addAdvance(newAdv);
+                      setAdvances(prev => [...prev, { ...newAdv, id: 'adv-' + Date.now() }]);
+                      setIsAdvanceModalOpen(false);
+                      toast.success(`Recorded ₹${advanceAmount.toLocaleString()} advance for ${activeDetailWorker.name}`);
+                    } catch (e) {
+                      toast.error('Failed to record advance');
+                    }
+                  }}
+                  className="flex-1 min-h-[56px] rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black border-2 border-amber-400 text-sm active:scale-95 transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Confirm Advance</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

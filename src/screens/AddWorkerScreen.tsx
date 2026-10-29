@@ -273,12 +273,25 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           }
       }
 
+      const isMonthlyWage = formData.wageConfig?.type === 'MONTHLY';
+      const wageAmount = (formData.wageConfig?.amount && formData.wageConfig.amount > 0) 
+        ? formData.wageConfig.amount 
+        : (isMonthlyWage ? 25000 : 650);
+
       const workerData: any = {
         ...formData,
         tenantId: profile.tenantId,
         photoUrl: mainPhotoUrl, 
         faceDescriptor: descriptor, 
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        wageType: isMonthlyWage ? 'MONTHLY' : 'DAILY',
+        dailyWage: !isMonthlyWage ? wageAmount : undefined,
+        monthlySalary: isMonthlyWage ? wageAmount : undefined,
+        wageConfig: {
+          ...(formData.wageConfig || {}),
+          type: isMonthlyWage ? 'MONTHLY' : 'DAILY',
+          amount: wageAmount
+        }
       };
 
       // FIREBASE SAFETY: Remove leaveBalances if the override toggle is OFF

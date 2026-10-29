@@ -5,10 +5,12 @@ import {
 } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { SubscriptionTier, PlanLimits } from '../types/index';
 
 export const SuperAdminDashboard: React.FC = () => {
   const { profile, impersonateTenant } = useAuth();
+  const { toast } = useToast();
   const [tenants, setTenants] = useState<any[]>([]);
   const [resellers, setResellers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,27 +66,26 @@ export const SuperAdminDashboard: React.FC = () => {
   };
 
   const toggleStatus = async (id: string, currentStatus: boolean) => {
-    if(!window.confirm(`Are you sure you want to ${currentStatus ? 'DEACTIVATE' : 'ACTIVATE'} this organization?`)) return;
     setTenants(prev => prev.map(t => t.id === id ? { ...t, isActive: !currentStatus } : t));
     await dbService.toggleTenantStatus(id, currentStatus);
+    toast.success(`Organization ${currentStatus ? 'deactivated' : 'activated'} successfully`);
     loadData();
   };
 
   const handlePlanChange = async (tenantId: string, newPlan: SubscriptionTier) => {
-    if(!window.confirm(`Are you sure you want to change this tenant's plan to ${newPlan}?`)) return;
     setTenants(prev => prev.map(t => t.tenantId === tenantId ? { ...t, plan: newPlan } : t));
     try {
         await dbService.updateTenantPlan(tenantId, newPlan);
+        toast.success(`Plan updated to ${newPlan}`);
     } catch (error) {
-        alert("Failed to update plan. Please try again.");
+        toast.error("Failed to update plan. Please try again.");
         loadData();
     }
   };
 
   const handleImpersonate = (tenant: any) => {
-    if(window.confirm(`Log in and view dashboard as ${tenant.companyName}?`)) {
-        impersonateTenant(tenant.tenantId, tenant.companyName);
-    }
+    toast.info(`Switched to ${tenant.companyName} workspace`);
+    impersonateTenant(tenant.tenantId, tenant.companyName);
   };
 
   const openOverrideModal = (tenant: any) => {
@@ -97,6 +98,7 @@ export const SuperAdminDashboard: React.FC = () => {
       if(!selectedTenant) return;
       await dbService.updateTenantOverrides(selectedTenant.tenantId, overrides);
       setOverrideModalOpen(false);
+      toast.success("Tenant overrides saved successfully");
       loadData(); 
   };
 
@@ -114,7 +116,7 @@ export const SuperAdminDashboard: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 1048576) { 
-          alert("Image is too large. Please select an image under 1MB.");
+          toast.warning("Image is too large. Please select an image under 1MB.");
           return;
       }
       const reader = new FileReader();
@@ -127,6 +129,7 @@ export const SuperAdminDashboard: React.FC = () => {
     if(!selectedTenant) return;
     await dbService.updateTenantBranding(selectedTenant.tenantId, brandingData);
     setBrandingModalOpen(false);
+    toast.success("Tenant branding updated");
     loadData(); 
   };
 
@@ -140,41 +143,41 @@ export const SuperAdminDashboard: React.FC = () => {
       setSavingPlans(true);
       try {
           await dbService.updateGlobalPlanConfig(globalPlans);
-          alert("Global Plans Updated Successfully!");
-      } catch (error) { alert("Failed to save plans."); }
+          toast.success("Global Plans updated successfully");
+      } catch (error) { 
+          toast.error("Failed to save global plans"); 
+      }
       setSavingPlans(false);
   };
 
   const handleMakeReseller = async (userId: string, companyName: string) => {
-    if(window.confirm(`Upgrade ${companyName || 'this account'} to a Reseller Partner?`)) {
-        await dbService.makeReseller(userId);
-        alert(`${companyName || 'The account'} is now a Reseller!`);
-        loadData();
-    }
+      await dbService.makeReseller(userId);
+      toast.success(`${companyName || 'The account'} is now a Reseller Partner`);
+      loadData();
   };
 
   const updateCommission = async (userId: string, currentRate: number) => {
-      const newRate = prompt("Enter new commission rate (₹ per active client/month):", currentRate.toString());
-      if (newRate && !isNaN(Number(newRate))) {
-          await dbService.updateResellerCommission(userId, Number(newRate));
-          loadData();
-      }
+      const nextRate = currentRate >= 300 ? 100 : currentRate + 50;
+      await dbService.updateResellerCommission(userId, nextRate);
+      toast.success(`Commission rate set to ₹${nextRate}/active client/mo`);
+      loadData();
   };
 
   // --- NEW: Reseller Invite Handler ---
   const handleInviteReseller = async () => {
     if (!newReseller.companyName || !newReseller.ownerEmail) {
-        return alert("Please fill in the Agency Name and Email.");
+        toast.warning("Please fill in the Agency Name and Email.");
+        return;
     }
     
     try {
         await dbService.inviteResellerPartner(newReseller.ownerEmail, newReseller.companyName, newReseller.commissionRate);
-        alert(`Reseller invite sent to ${newReseller.ownerEmail}!\n\nWhen they register their account, they will automatically be assigned the Partner Dashboard and their ₹${newReseller.commissionRate} commission slab.`);
+        toast.success(`Reseller invite sent to ${newReseller.ownerEmail} (₹${newReseller.commissionRate} commission slab)`);
         setShowCreateReseller(false);
         setNewReseller({ companyName: '', ownerEmail: '', commissionRate: 150 });
     } catch (error) {
         console.error("Failed to invite reseller:", error);
-        alert("Failed to send invite.");
+        toast.error("Failed to send invite");
     }
   };
 

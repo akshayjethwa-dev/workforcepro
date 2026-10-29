@@ -308,6 +308,14 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                  </table>
             </div>
 
+            {/* ESI Dropped Note if Gross exceeded threshold */}
+            {data.statutory?.esiDroppedNote && (
+              <div className="mb-4 p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+                <span className="font-bold shrink-0">Statutory Notice:</span>
+                <span>{data.statutory.esiDroppedNote}</span>
+              </div>
+            )}
+
             {/* Deductions Table */}
             <div className="mb-6">
                  <table className="w-full text-sm">
@@ -329,6 +337,28 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                      </tbody>
                  </table>
             </div>
+
+            {/* Employer Statutory Contributions & CTC Breakdown */}
+            {data.statutory && (
+              <div className="mb-6 border border-gray-200 rounded-lg p-3 bg-gray-50/80">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-bold text-xs uppercase text-gray-600">Employer Contributions (Company Liability)</span>
+                  <span className="font-bold text-xs text-gray-800">Total: ₹{data.statutory.totalEmployerStatutory.toFixed(2)}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
+                  <div>EPF (3.67%): <span className="font-mono font-semibold">₹{data.statutory.employerEpf.toFixed(2)}</span></div>
+                  <div>EPS (8.33% Capped): <span className="font-mono font-semibold">₹{data.statutory.employerEps.toFixed(2)}</span></div>
+                  <div>EDLI (0.5%): <span className="font-mono font-semibold">₹{data.statutory.employerEdli.toFixed(2)}</span></div>
+                  <div>Admin (0.5%): <span className="font-mono font-semibold">₹{data.statutory.employerAdminCharges.toFixed(2)}</span></div>
+                  <div>Employer ESI (3.25%): <span className="font-mono font-semibold">₹{data.statutory.employerEsi.toFixed(2)}</span></div>
+                  <div>Jurisdiction State: <span className="font-semibold text-gray-900">{data.statutory.state}</span></div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-gray-200 flex justify-between text-xs font-bold text-gray-800">
+                  <span>Gross Cost To Company (CTC):</span>
+                  <span className="font-mono text-sm text-indigo-700">₹{(data.employerCostToCompany || (data.earnings.gross + data.statutory.totalEmployerStatutory)).toLocaleString('en-IN', {minimumFractionDigits: 2})}</span>
+                </div>
+              </div>
+            )}
 
             {/* Net Pay */}
             <div className="bg-gray-900 text-white p-4 rounded-lg flex justify-between items-center mb-8 mt-4">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, Search, ArrowRight, Clock, AlertCircle, Edit, X, PlusCircle, ChevronDown, ChevronUp, IndianRupee, MapPin, Umbrella, Loader2, Lock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
 import { attendanceLogic } from '../services/attendanceLogic';
@@ -8,6 +9,7 @@ import { Worker, AttendanceRecord, Punch, OrgSettings, Advance } from '../types/
 
 export const WorkerHistoryScreen: React.FC = () => {
   const { profile, limits } = useAuth();
+  const { toast } = useToast();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
@@ -213,10 +215,10 @@ export const WorkerHistoryScreen: React.FC = () => {
         
         const updatedDocs = await dbService.getAttendanceHistory(tenantId);
         setAttendanceHistory(updatedDocs.filter(r => r.workerId === selectedWorkerId && r.date.startsWith(selectedMonth)).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-
+        toast.success(`Applied ${leaveModal.type.toUpperCase()} leave for ${selectedWorker.name}`);
     } catch (e) {
         console.error(e);
-        alert("Failed to apply leave.");
+        toast.error("Failed to apply leave. Please check permissions.");
     } finally {
         setSavingRegulation(false);
     }
@@ -269,10 +271,10 @@ export const WorkerHistoryScreen: React.FC = () => {
       });
       
       setEditingRecord(null);
-
+      toast.success("Punch regulated and daily hours recalculated");
     } catch (error) {
       console.error("Failed to regulate punch:", error);
-      alert("Failed to save the regulated punch.");
+      toast.error("Failed to save the regulated punch");
     } finally {
       setSavingRegulation(false);
     }
@@ -309,16 +311,31 @@ export const WorkerHistoryScreen: React.FC = () => {
       }
   };
 
-  if (loading) return <div className="p-10 text-center">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="space-y-6 pb-20 animate-pulse">
+        <div className="h-7 bg-slate-200 rounded-lg w-48" />
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="h-4 bg-slate-200 rounded w-28" />
+          <div className="h-11 bg-slate-100 rounded-xl" />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-4 bg-gray-50 min-h-screen pb-24 relative">
-      <h1 className="text-xl font-bold text-gray-800 mb-6">Worker History</h1>
+    <div className="space-y-6 pb-24 relative">
+      <div>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Worker Attendance & Wage Ledger</h1>
+        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+          <span>Individual audit trails, missed punch regulation & leave administration</span>
+        </div>
+      </div>
 
       {/* FILTERS */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6 space-y-4">
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase">Select Worker</label>
+            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Select Worker</label>
             <div className="relative mt-1">
                 <select 
                     className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none appearance-none font-bold"

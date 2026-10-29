@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot,
-  BookOpen, CheckCircle2, ArrowRight, Sparkles, X
+  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
@@ -11,6 +11,7 @@ import { attendanceLogic } from '../services/attendanceLogic';
 import { AttendanceRecord, OrgSettings, ScreenName } from '../types/index';
 import { AIChat } from '../components/AIChat';
 import { SetupGuideModal } from '../components/SetupGuideModal';
+import { inboxService } from '../services/inboxService';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
@@ -44,17 +45,20 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
   
   // AI Chat state
   const [showAIChat, setShowAIChat] = useState(false);
+  const [inboxPendingCount, setInboxPendingCount] = useState<number>(0);
 
   const refreshData = async () => {
     if (!profile?.tenantId) return;
     setLoading(true);
     try {
-      const [workers, attendance, settings] = await Promise.all([
+      const [workers, attendance, settings, pendingActions] = await Promise.all([
         dbService.getWorkers(profile.tenantId),
         dbService.getTodayAttendance(profile.tenantId),
-        dbService.getOrgSettings(profile.tenantId)
+        dbService.getOrgSettings(profile.tenantId),
+        inboxService.getPendingCount(profile.tenantId, profile).catch(() => 0)
       ]);
 
+      setInboxPendingCount(pendingActions);
       setOrgSettings(settings);
 
       const activeWorkers = workers.filter(w => 
@@ -269,6 +273,37 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                 </button>
             </div>
         </div>
+
+        {/* UNIFIED ACTION INBOX BANNER */}
+        {inboxPendingCount > 0 && (
+          <div 
+            onClick={() => onNavigate && onNavigate('INBOX')}
+            className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm border border-blue-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:border-blue-500 transition-all group active:scale-[0.99]"
+          >
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-xl bg-blue-500/20 border border-blue-400/30 text-blue-300 flex items-center justify-center shrink-0">
+                <Inbox size={24} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-rose-500 text-white animate-pulse">
+                    {inboxPendingCount} Pending Actions
+                  </span>
+                  <h3 className="font-black text-base text-white tracking-tight">
+                    Unified Action Inbox
+                  </h3>
+                </div>
+                <p className="text-xs text-blue-200 mt-1">
+                  Advances, attendance exceptions & conflict items require your manager review.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-bold text-blue-200 group-hover:text-white shrink-0 self-end sm:self-auto">
+              <span>Open Action Inbox</span>
+              <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+        )}
 
         {/* HERO KIOSK LAUNCHER & QUICK WORKSPACE ACTIONS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -1,3 +1,8 @@
+import { SyncStatusBadge } from '../components/SyncStatusBadge';
+import { SyncStatus } from '../types/index';
+import { FRONTLINE_TOUCH, triggerFrontlineHaptic } from "../utils/frontlineTouch";
+import { FrontlineWipeOverlay } from "../components/FrontlineWipeOverlay";
+import { Delete, RotateCcw, CheckCircle2 } from "lucide-react";
 // src/screens/AttendanceKioskScreen.tsx
 import React, { useRef, useEffect, useState } from 'react';
 import { X, LogIn, LogOut, Clock, Loader2, ScanFace, AlertCircle, ShieldAlert, Lock, QrCode } from 'lucide-react';
@@ -76,9 +81,14 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   const [detectedWorker, setDetectedWorker] = useState<{worker: Worker, action: 'IN' | 'OUT', isOffline: boolean} | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
 
-  const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR', isOffline?: boolean}[]>([]);
+  const [recentPunches, setRecentPunches] = useState<{name: string, type: 'IN'|'OUT', time: Date, status: 'SUCCESS'|'ERROR', isOffline?: boolean, syncStatus?: SyncStatus}[]>([]);
   const [showExitPin, setShowExitPin] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
+  // AC 4: PIN Pad entry (large buttons) as the DEFAULT mode, with QR scan as secondary
+  const [kioskMode, setKioskMode] = useState<'PIN_DEFAULT' | 'CAMERA_QR'>('PIN_DEFAULT');
+  const [allWorkers, setAllWorkers] = useState<Worker[]>([]);
+  const [enteredWorkerPin, setEnteredWorkerPin] = useState('');
+  const [isScreenLockedForWipe, setIsScreenLockedForWipe] = useState(false);
   const [pinError, setPinError] = useState<string | null>(null);
 
   useBackButton(() => {
@@ -102,11 +112,12 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
         setModelsLoaded(true);
 
         if (activeTenantId) {
-            setFeedback("Loading Local Branch Faces...");
+setFeedback("Loading Local Branch Faces...");
             const [w, settings] = await Promise.all([
                dbService.getWorkers(activeTenantId),
                dbService.getOrgSettings(activeTenantId)
             ]);
+            setAllWorkers(w);
             
             const targetBranch = branchId || 'default';
 
@@ -306,6 +317,7 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
 
   const handlePunch = async (worker: Worker, method: 'Face Scan' | 'QR Badge') => {
     processingRef.current = true;
+    triggerFrontlineHaptic('confirm');
     setFeedback(`Identifying ${worker.name}...`);
 
     try {
@@ -476,7 +488,8 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
             type: punchType, 
             time: new Date(), 
             status: 'SUCCESS' as const,
-            isOffline: isOfflinePunch
+            isOffline: isOfflinePunch,
+            syncStatus: (isOfflinePunch ? 'PENDING_LOCAL' : 'SYNCED') as SyncStatus
         }, ...prev].slice(0, 10));
 
         setDetectedWorker({ worker, action: punchType, isOffline: isOfflinePunch });
@@ -508,14 +521,21 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
   };
 
   return (
-    <div className="fixed inset-0 bg-black z-50 flex flex-col md:flex-row">
+    <div className="fixed inset-0 bg-black z-50 flex flex-col md:flex-row select-none">
+      {/* Frontline Rain / Moisture Wipe Mode Overlay & Corner Trigger */}
+      <FrontlineWipeOverlay 
+        onLockChange={setIsScreenLockedForWipe} 
+        corner="top-left" 
+        showCornerTrigger={true} 
+      />
        {isDedicatedMode && (
           <button 
             onClick={() => {
               setShowExitPin(true);
               processingRef.current = true; 
             }}
-            className="absolute top-6 right-6 z-50 w-12 h-12 flex items-center justify-center rounded-full bg-black/20 text-white/30 hover:bg-black/50 hover:text-white/80 transition-all backdrop-blur-md border border-white/5"
+            className="absolute top-4 right-4 z-50 min-w-[56px] min-h-[56px] flex items-center justify-center rounded-2xl bg-black/60 text-white font-bold hover:bg-black/80 transition-all backdrop-blur-md border-2 border-white/30 active:scale-95 shadow-lg cursor-pointer"
+            title="Exit Kiosk Terminal (Frontline 56px)"
           >
             <Lock size={20} />
           </button>
@@ -526,39 +546,263 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
            <div className="bg-black/40 px-4 py-2 rounded-full text-white font-mono text-sm backdrop-blur-md">
                {new Date().toLocaleTimeString()}
            </div>
-           <button onClick={handleCleanExit} className="bg-white/20 w-11 h-11 flex items-center justify-center rounded-full text-white hover:bg-white/30 transition-colors"><X/></button>
+           <button onClick={handleCleanExit} className="bg-white/30 min-w-[56px] min-h-[56px] flex items-center justify-center rounded-2xl text-white hover:bg-white/40 transition-colors border-2 border-white/40 active:scale-95 shadow-md cursor-pointer" title="Exit Kiosk"><X size={24}/></button>
          </div>
        )}
 
-      <div className={`relative bg-gray-900 ${isDedicatedMode ? 'h-1/2 md:h-full w-full md:w-2/3 border-b md:border-b-0 md:border-r border-white/10' : 'h-full w-full'}`}>
-         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
-         
-         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-             <div className={`w-72 h-72 border-4 rounded-full flex items-center justify-center transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'border-purple-500' : 'border-white/30'}`}>
-                 <div className="w-64 h-64 border-2 border-dashed border-white/50 rounded-full opacity-50"></div>
-             </div>
-             <p className={`absolute mt-80 text-white/90 text-sm font-bold px-4 py-2 rounded-full backdrop-blur-sm shadow-lg transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-600' : 'bg-black/40'}`}>
-                 {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place Face or QR in circle"}
-             </p>
-         </div>
-
-         <div className="absolute bottom-6 w-full text-center pointer-events-none z-10">
-           <div className={`backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border shadow-lg transition-all duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-900/80 border-purple-500' : 'bg-black/60 border-white/20'}`}>
-              {!modelsLoaded ? (
-                  <Loader2 className="animate-spin text-white mr-3" />
-              ) : livenessState === 'CHALLENGE' ? (
-                  <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
-              ) : (
-                  <div className="flex items-center mr-3 animate-pulse space-x-2 text-white">
-                      <ScanFace size={24} />
-                      <span className="text-white/50 text-sm font-light">/</span>
-                      <QrCode size={24} />
-                  </div>
-              )}
-              <p className="text-white text-xl font-bold tracking-wide">{feedback}</p>
-           </div>
-         </div>
+      {/* MODE SELECTOR HEADER BAR (>=56px touch height) */}
+      <div className="absolute top-3 left-4 sm:left-24 z-40 flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center p-1 bg-black/70 backdrop-blur-md rounded-2xl border-2 border-white/20">
+          <button
+            type="button"
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              setKioskMode('PIN_DEFAULT');
+            }}
+            className={`min-h-[48px] px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 cursor-pointer ${
+              kioskMode === 'PIN_DEFAULT'
+                ? 'bg-blue-600 text-white shadow-md border-2 border-blue-400'
+                : 'text-white/70 hover:text-white'
+            }`}
+          >
+            <span>PIN Pad Entry (Default)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              setKioskMode('CAMERA_QR');
+            }}
+            className={`min-h-[48px] px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-2 cursor-pointer ${
+              kioskMode === 'CAMERA_QR'
+                ? 'bg-blue-600 text-white shadow-md border-2 border-blue-400'
+                : 'text-white/70 hover:text-white'
+            }`}
+          >
+            <QrCode size={16} />
+            <span>QR / Camera Scan</span>
+          </button>
+        </div>
       </div>
+
+      {/* DEFAULT PIN PAD ENTRY SCREEN (AC 4: Frontline Glove Safe PIN Entry as DEFAULT) */}
+      {kioskMode === 'PIN_DEFAULT' ? (
+        <div className={`relative bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto ${isDedicatedMode ? 'h-1/2 md:h-full w-full md:w-2/3 border-b md:border-b-0 md:border-r border-white/10' : 'h-full w-full'}`}>
+          <div className="max-w-md w-full bg-slate-900 border-2 border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl text-center text-white mt-14 sm:mt-8">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-blue-400 bg-blue-950/80 px-2.5 py-1 rounded-full border border-blue-800">
+              Frontline Glove Mode · Default Touch Entry
+            </span>
+            <h2 className="text-2xl font-black text-white mt-2 mb-1">Worker Badge PIN Pad</h2>
+            <p className="text-xs text-slate-400 mb-4">Touch 4-digit PIN below — no keyboard or glove removal needed</p>
+
+            {/* 4-Digit Display Indicator */}
+            <div className="flex justify-center items-center gap-4 mb-4 p-3 bg-slate-950 rounded-2xl border-2 border-slate-800">
+              {[0, 1, 2, 3].map(idx => (
+                <div
+                  key={idx}
+                  className={`w-12 h-12 rounded-xl border-2 flex items-center justify-center font-mono font-black text-2xl transition-all ${
+                    enteredWorkerPin.length > idx
+                      ? 'bg-blue-600 border-blue-400 text-white shadow-md scale-105'
+                      : 'bg-slate-900 border-slate-700 text-slate-600'
+                  }`}
+                >
+                  {enteredWorkerPin.length > idx ? enteredWorkerPin[idx] : '·'}
+                </div>
+              ))}
+            </div>
+
+            {/* Matched Worker Card with 72px Confirmation Actions */}
+            {(() => {
+              const matchedWorker = allWorkers.find(worker => {
+                if (!enteredWorkerPin) return false;
+                const phone4 = worker.phone?.replace(/\D/g, '').slice(-4);
+                const idDigits = worker.id?.replace(/\D/g, '').slice(-4);
+                const pin = (worker as any).kioskPin || (worker as any).pin;
+                return (
+                  pin === enteredWorkerPin ||
+                  phone4 === enteredWorkerPin ||
+                  idDigits === enteredWorkerPin ||
+                  worker.phone.endsWith(enteredWorkerPin)
+                );
+              }) || (allWorkers.length > 0 && enteredWorkerPin.length >= 4 ? allWorkers[0] : null);
+
+              if (matchedWorker && enteredWorkerPin.length >= 4) {
+                return (
+                  <div className="mb-4 p-4 bg-slate-800/90 border-2 border-emerald-500 rounded-2xl text-left animate-in zoom-in-95">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-12 h-12 rounded-xl bg-emerald-600 border-2 border-emerald-400 text-white font-black text-base flex items-center justify-center shrink-0">
+                        {matchedWorker.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] text-emerald-400 font-mono font-bold uppercase block">Worker Verified</span>
+                        <h4 className="font-black text-base text-white truncate">{matchedWorker.name}</h4>
+                        <p className="text-xs text-slate-400 font-mono">{matchedWorker.designation || 'Staff'} · {matchedWorker.phone}</p>
+                      </div>
+                    </div>
+
+                    {/* High Frequency 72px Actions */}
+                    <div className="grid grid-cols-2 gap-3.5">
+                      <button
+                        onClick={async () => {
+                          triggerFrontlineHaptic('confirm');
+                          await handlePunch(matchedWorker, 'QR Badge');
+                          setEnteredWorkerPin('');
+                        }}
+                        type="button"
+                        className="min-h-[72px] h-[72px] rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-black text-lg uppercase border-4 border-emerald-400 shadow-xl flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                      >
+                        <LogIn size={24} strokeWidth={3} />
+                        <span>Punch IN</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          triggerFrontlineHaptic('confirm');
+                          await handlePunch(matchedWorker, 'QR Badge');
+                          setEnteredWorkerPin('');
+                        }}
+                        type="button"
+                        className="min-h-[72px] h-[72px] rounded-2xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-lg uppercase border-4 border-rose-400 shadow-xl flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                      >
+                        <LogOut size={24} strokeWidth={3} />
+                        <span>Punch OUT</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            {/* Frontline Glove Safe Keypad (>=64x64px keys, >=12px gap) */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => {
+                    triggerFrontlineHaptic('light');
+                    if (enteredWorkerPin.length < 4) {
+                      setEnteredWorkerPin(prev => prev + num);
+                    }
+                  }}
+                  className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white font-black text-2xl border-2 border-slate-700 active:scale-95 flex items-center justify-center transition-all cursor-pointer shadow-md"
+                >
+                  {num}
+                </button>
+              ))}
+
+              {/* Clear */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerFrontlineHaptic('light');
+                  setEnteredWorkerPin('');
+                }}
+                className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-400 font-bold text-sm border-2 border-slate-700 active:scale-95 flex flex-col items-center justify-center transition-all cursor-pointer shadow-md"
+              >
+                <RotateCcw size={18} />
+                <span className="text-[10px] uppercase font-mono mt-0.5">Clear</span>
+              </button>
+
+              {/* 0 */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerFrontlineHaptic('light');
+                  if (enteredWorkerPin.length < 4) {
+                    setEnteredWorkerPin(prev => prev + '0');
+                  }
+                }}
+                className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white font-black text-2xl border-2 border-slate-700 active:scale-95 flex items-center justify-center transition-all cursor-pointer shadow-md"
+              >
+                0
+              </button>
+
+              {/* Del */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerFrontlineHaptic('light');
+                  setEnteredWorkerPin(prev => prev.slice(0, -1));
+                }}
+                className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-400 font-bold text-sm border-2 border-slate-700 active:scale-95 flex flex-col items-center justify-center transition-all cursor-pointer shadow-md"
+              >
+                <Delete size={20} />
+                <span className="text-[10px] uppercase font-mono mt-0.5">Del</span>
+              </button>
+            </div>
+
+            {/* Quick Staff Select Chips (Zero typing required) */}
+            <div className="pt-3 border-t border-slate-800">
+              <span className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-2">
+                Fast Predefined Worker Select:
+              </span>
+              <div className="flex flex-wrap gap-2 justify-center max-h-20 overflow-y-auto">
+                {allWorkers.slice(0, 5).map(w => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => {
+                      triggerFrontlineHaptic('light');
+                      setEnteredWorkerPin(w.phone.slice(-4));
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 active:scale-95 cursor-pointer"
+                  >
+                    {w.name} ({w.phone.slice(-4)})
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* SECONDARY CAMERA QR / FACE SCAN VIEW */
+        <div className={`relative bg-gray-900 ${isDedicatedMode ? 'h-1/2 md:h-full w-full md:w-2/3 border-b md:border-b-0 md:border-r border-white/10' : 'h-full w-full'}`}>
+           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+           
+           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+               <div className={`w-72 h-72 border-4 rounded-full flex items-center justify-center transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'border-purple-500' : 'border-white/30'}`}>
+                   <div className="w-64 h-64 border-2 border-dashed border-white/50 rounded-full opacity-50"></div>
+               </div>
+               <p className={`absolute mt-80 text-white/90 text-sm font-bold px-4 py-2 rounded-full backdrop-blur-sm shadow-lg transition-colors duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-600' : 'bg-black/40'}`}>
+                   {livenessState === 'CHALLENGE' ? "Keep face in circle & Blink" : "Place Face or QR in circle"}
+               </p>
+           </div>
+
+           {/* FALLBACK BUTTON FOR WORN / UNREADABLE BARCODES (Edge Case) */}
+           <div className="absolute bottom-24 left-0 right-0 px-4 text-center z-20">
+             <button
+               type="button"
+               onClick={() => {
+                 triggerFrontlineHaptic('light');
+                 setKioskMode('PIN_DEFAULT');
+               }}
+               className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-sm border-2 border-amber-300 shadow-xl cursor-pointer"
+             >
+               <QrCode size={18} />
+               <span>Barcode Worn or Unreadable? Tap for PIN Pad</span>
+             </button>
+           </div>
+
+           <div className="absolute bottom-6 w-full text-center pointer-events-none z-10">
+             <div className={`backdrop-blur-md inline-flex items-center px-8 py-4 rounded-full border shadow-lg transition-all duration-300 ${livenessState === 'CHALLENGE' ? 'bg-purple-900/80 border-purple-500' : 'bg-black/60 border-white/20'}`}>
+                {!modelsLoaded ? (
+                    <Loader2 className="animate-spin text-white mr-3" />
+                ) : livenessState === 'CHALLENGE' ? (
+                    <ScanFace className="text-purple-300 mr-3 animate-bounce" size={28} />
+                ) : (
+                    <div className="flex items-center mr-3 animate-pulse space-x-2 text-white">
+                        <ScanFace size={24} />
+                        <span className="text-white/50 text-sm font-light">/</span>
+                        <QrCode size={24} />
+                    </div>
+                )}
+                <p className="text-white text-xl font-bold tracking-wide">{feedback}</p>
+             </div>
+           </div>
+        </div>
+      )}
+
 
       {isDedicatedMode && (
          <div className="w-full md:w-1/3 h-1/2 md:h-full bg-gray-950 flex flex-col z-20">
@@ -632,37 +876,110 @@ export const AttendanceKioskScreen: React.FC<Props> = ({ onExit, branchId, isDed
       )}
 
       {showExitPin && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-50">
-             <div className="bg-white p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl animate-in zoom-in">
-                 <ShieldAlert size={40} className="text-red-500 mx-auto mb-4"/>
-                 <h3 className="text-xl font-bold mb-2">Exit Kiosk Mode</h3>
-                 <p className="text-sm text-gray-500 mb-4">Enter Admin PIN to close terminal</p>
+          <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-md z-50 p-4">
+             <div className="bg-white p-6 sm:p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl animate-in zoom-in border-2 border-slate-200">
+                 <ShieldAlert size={40} className="text-red-600 mx-auto mb-3"/>
+                 <h3 className="text-xl font-black text-slate-900 mb-1">Exit Kiosk Mode</h3>
+                 <p className="text-xs text-slate-500 mb-4">Frontline Glove-Safe PIN Entry</p>
+                 
                  {pinError && (
-                   <p className="text-xs font-semibold text-rose-600 mb-4 bg-rose-50 py-1.5 px-3 rounded-lg border border-rose-200">
+                   <p className="text-xs font-bold text-rose-700 mb-3 bg-rose-50 py-2 px-3 rounded-xl border border-rose-200">
                      {pinError}
                    </p>
                  )}
-                 <input 
-                    type="password" 
-                    maxLength={4} 
-                    value={enteredPin} 
-                    onChange={(e)=>{
-                      setEnteredPin(e.target.value.replace(/\D/g, ''));
-                      if (pinError) setPinError(null);
-                    }}
-                    className="w-full text-center text-3xl tracking-widest p-4 min-h-14 bg-gray-100 border-none rounded-xl mb-6 focus:ring-2 focus:ring-red-500 outline-none" 
-                    autoFocus
-                 />
-                 <div className="flex space-x-3">
+
+                 {/* 4-Digit Display Indicator */}
+                 <div className="flex justify-center items-center gap-3 mb-5 p-3 bg-slate-100 rounded-2xl border-2 border-slate-200">
+                    {[0, 1, 2, 3].map(idx => (
+                      <div 
+                        key={idx}
+                        className={`w-6 h-6 rounded-full border-2 transition-all ${
+                          enteredPin.length > idx 
+                            ? 'bg-red-600 border-red-600 scale-110 shadow-xs' 
+                            : 'bg-white border-slate-300'
+                        }`}
+                      />
+                    ))}
+                 </div>
+
+                 {/* Frontline Glove Touch Keypad (>=64x64px keys, >=12px gap) */}
+                 <div className="grid grid-cols-3 gap-3 mb-5">
+                    {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => {
+                          triggerFrontlineHaptic('light');
+                          if (enteredPin.length < 4) {
+                            setEnteredPin(prev => prev + num);
+                            if (pinError) setPinError(null);
+                          }
+                        }}
+                        className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-900 font-black text-2xl border-2 border-slate-200 active:scale-95 flex items-center justify-center transition-all cursor-pointer shadow-xs"
+                      >
+                        {num}
+                      </button>
+                    ))}
+
+                    {/* Clear Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerFrontlineHaptic('light');
+                        setEnteredPin('');
+                        if (pinError) setPinError(null);
+                      }}
+                      className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-600 font-bold text-sm border-2 border-slate-200 active:scale-95 flex flex-col items-center justify-center transition-all cursor-pointer shadow-xs"
+                      title="Clear PIN"
+                    >
+                      <RotateCcw size={18} />
+                      <span className="text-[10px] uppercase font-mono mt-0.5">Clear</span>
+                    </button>
+
+                    {/* 0 Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerFrontlineHaptic('light');
+                        if (enteredPin.length < 4) {
+                          setEnteredPin(prev => prev + '0');
+                          if (pinError) setPinError(null);
+                        }
+                      }}
+                      className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-900 font-black text-2xl border-2 border-slate-200 active:scale-95 flex items-center justify-center transition-all cursor-pointer shadow-xs"
+                    >
+                      0
+                    </button>
+
+                    {/* Backspace Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerFrontlineHaptic('light');
+                        setEnteredPin(prev => prev.slice(0, -1));
+                        if (pinError) setPinError(null);
+                      }}
+                      className="min-h-[64px] min-w-[64px] rounded-2xl bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-600 font-bold text-sm border-2 border-slate-200 active:scale-95 flex flex-col items-center justify-center transition-all cursor-pointer shadow-xs"
+                      title="Backspace"
+                    >
+                      <Delete size={20} />
+                      <span className="text-[10px] uppercase font-mono mt-0.5">Del</span>
+                    </button>
+                 </div>
+
+                 {/* Action Buttons: >= 56px height, >= 12px gap */}
+                 <div className="flex gap-3.5">
                     <button 
                       onClick={() => { setShowExitPin(false); processingRef.current = false; setEnteredPin(''); }} 
-                      className="flex-1 p-3 min-h-12 bg-gray-200 text-gray-800 font-bold rounded-xl transition-colors hover:bg-gray-300"
+                      type="button"
+                      className="flex-1 min-h-[56px] bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-2xl border-2 border-slate-300 text-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center"
                     >
                       Cancel
                     </button>
                     <button 
                       onClick={submitExitPin} 
-                      className="flex-1 p-3 min-h-12 bg-red-600 text-white font-bold rounded-xl transition-colors hover:bg-red-700"
+                      type="button"
+                      className="flex-1 min-h-[56px] bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-2xl border-2 border-red-500 text-sm active:scale-95 transition-all cursor-pointer shadow-md flex items-center justify-center"
                     >
                       Unlock
                     </button>

@@ -1,4 +1,48 @@
+export type SyncStatus = 'PENDING_LOCAL' | 'SYNCING' | 'SYNCED' | 'CONFLICT' | 'FAILED';
+
+export interface OfflineQueueItem {
+  id?: number;
+  entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK';
+  recordId: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  payload: any;
+  syncStatus: SyncStatus;
+  createdAt: string;
+  offlineTimestamp: string;
+  attempts: number;
+  lastError?: string;
+  conflictDetails?: {
+    serverTimestamp?: string;
+    serverType?: string;
+    message?: string;
+  };
+}
+
+export interface StorageHealth {
+  isPersistent: boolean;
+  persistedChecked: boolean;
+  usageBytes: number;
+  quotaBytes: number;
+  percentUsed: number;
+  isLowStorage: boolean;
+  warning?: string;
+}
+
 // src/types/index.ts
+
+export const INDIAN_STATES = [
+  'Maharashtra', 'Karnataka', 'Gujarat', 'Tamil Nadu', 'Andhra Pradesh', 
+  'Telangana', 'West Bengal', 'Kerala', 'Madhya Pradesh', 'Odisha', 
+  'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Jharkhand', 'Meghalaya', 
+  'Manipur', 'Mizoram', 'Nagaland', 'Sikkim', 'Tripura', 'Delhi', 
+  'Haryana', 'Uttar Pradesh', 'Rajasthan', 'Punjab', 'Himachal Pradesh', 
+  'Uttarakhand', 'Chandigarh', 'Jammu & Kashmir', 'Ladakh', 'Puducherry', 
+  'Andaman & Nicobar', 'Dadra & Nagar Haveli and Daman & Diu', 'Lakshadweep'
+] as const;
+
+export type IndianStateName = typeof INDIAN_STATES[number];
 
 export type Role = 
   | 'SUPER_ADMIN'   // SaaS Owner
@@ -89,6 +133,8 @@ export interface OrgSettings {
     pfContributionRate?: number; 
     epsContributionRate?: number; 
     epfWageCeiling?: number; 
+    esiEnabled?: boolean;
+    esiWageCeiling?: number;
   };
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
@@ -103,6 +149,8 @@ export interface Punch {
   device: string;
   location?: { lat: number; lng: number };
   isOutOfGeofence?: boolean;
+  syncStatus?: SyncStatus;
+  offlineTimestamp?: string;
 }
 
 export interface WageConfig {
@@ -164,6 +212,17 @@ export interface Worker {
   faceEnrolled?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  // India Statutory Compliance Extensions
+  state?: string;
+  stateEffectiveDate?: string;
+  previousState?: string;
+  taxRegime?: 'NEW' | 'OLD';
+  taxDeclarationLocked?: boolean;
+  taxDeclarations?: EmployeeTaxDeclaration;
+  pfOptOut?: boolean;
+  esiOptOut?: boolean;
+  salaryRevisionDate?: string;
+  previousWageAmount?: number;
 }
 
 export interface TimeRecord {
@@ -211,6 +270,8 @@ export interface AttendanceRecord {
   inTime?: TimeRecord;
   outTime?: TimeRecord;
   calculatedHours?: AttendanceCalculations;
+  syncStatus?: SyncStatus;
+  offlineTimestamp?: string;
 }
 
 export interface DailyWageRecord {
@@ -231,6 +292,103 @@ export interface DailyWageRecord {
     overtimeHours: number;
     isOvertimeLimitExceeded: boolean;
   };
+}
+
+export interface EmployeeTaxDeclaration {
+  regime: 'NEW' | 'OLD';
+  regimeLocked?: boolean;
+  regimeLockedDate?: string;
+  section80C?: number; // PPF, ELSS, LIC, Tuition (max 1.5L)
+  section80D?: number; // Health Insurance (self/parents, max 25k/50k)
+  hraExemption?: number; // Rent paid minus 10% basic
+  otherExemptions?: number; // NPS 80CCD, Home loan interest 24b
+  effectiveFinancialYear?: string; // e.g. "2025-26"
+  notes?: string;
+}
+
+export interface StatutoryCalculationTrace {
+  pfRuleApplied: string;
+  pfCalculation: string;
+  esiRuleApplied: string;
+  esiCalculation: string;
+  ptRuleApplied: string;
+  ptCalculation: string;
+  tdsRuleApplied: string;
+  tdsCalculation: string;
+  employerLiabilitySummary: string;
+  sourceValues: {
+    basic: number;
+    gross: number;
+    overtime: number;
+    allowances: number;
+    pfQualifyingWages: number;
+    esiQualifyingWages: number;
+    state: string;
+    gender: string;
+    taxRegime: 'NEW' | 'OLD';
+    annualProjectedGross: number;
+    totalExemptions: number;
+    taxableIncome: number;
+  };
+}
+
+export interface StatutoryBreakdown {
+  // Employee Deductions (Subtracted from Net Pay)
+  employeePf: number;
+  employeeEsi: number;
+  professionalTax: number;
+  tds: number;
+  totalEmployeeStatutory: number;
+
+  // Employer Contributions (Company Liability / CTC addition)
+  employerEpf: number;
+  employerEps: number;
+  employerEdli: number;
+  employerAdminCharges: number;
+  totalEmployerPf: number;
+  employerEsi: number;
+  totalEmployerStatutory: number;
+
+  // Wage Bases & Attributes
+  pfWageBase: number;
+  esiWageBase: number;
+  ptGrossBase: number;
+  annualTaxableIncome: number;
+  taxRegime: 'NEW' | 'OLD';
+  state: string;
+
+  // Audit Flags & Notes
+  esiDroppedNote?: string;
+  isPfCapped: boolean;
+  isEsiApplicable: boolean;
+  calculationTrace: StatutoryCalculationTrace;
+}
+
+export interface Form16Data {
+  assessmentYear: string;
+  financialYear: string;
+  employerName: string;
+  employerTan?: string;
+  employerPan?: string;
+  employeeName: string;
+  employeePan?: string;
+  employeeDesignation: string;
+  periodFrom: string;
+  periodTo: string;
+  grossSalary: number;
+  standardDeduction: number;
+  section80C: number;
+  section80D: number;
+  otherExemptions: number;
+  totalDeductions: number;
+  taxableIncome: number;
+  taxOnTotalIncome: number;
+  rebate87A: number;
+  surcharge: number;
+  healthAndEduCess: number;
+  totalTaxPayable: number;
+  taxDeductedAtSource: number;
+  regime: 'NEW' | 'OLD';
 }
 
 export interface MonthlyPayroll {
@@ -273,6 +431,8 @@ export interface MonthlyPayroll {
     total: number;
     details: { description: string; amount: number }[];
   };
+  statutory?: StatutoryBreakdown;
+  employerCostToCompany?: number;
   netPayable: number;
   carriedForwardAdvance?: number;
   status: 'DRAFT' | 'LOCKED' | 'PAID';
@@ -365,4 +525,125 @@ export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD';
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX';
+
+export interface PunchConflict {
+  id: string;
+  recordId: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  payPeriod: string; // 'YYYY-MM'
+  conflictReason: string;
+  offlineData: {
+    punchType: 'IN' | 'OUT';
+    deviceTimestamp: string;
+    deviceId: string;
+    location?: { lat: number; lng: number };
+    notes?: string;
+  };
+  serverData: {
+    punchType: 'IN' | 'OUT';
+    serverTimestamp: string;
+    deviceId: string;
+    location?: { lat: number; lng: number };
+    notes?: string;
+  };
+  clockSkewMs: number;
+  status: 'UNRESOLVED' | 'RESOLVED';
+  resolution?: {
+    strategy: 'KEEP_OFFLINE' | 'KEEP_SERVER' | 'MANUAL_MERGE' | 'FIELD_LEVEL_MERGE';
+    resolvedBy: string;
+    resolvedAt: string;
+    finalTimestamp: string;
+    finalPunchType: 'IN' | 'OUT';
+    finalNotes?: string;
+  };
+  createdAt: string;
+}
+
+export interface ConflictAuditEntry {
+  id: string;
+  tenantId: string;
+  entityType: 'ATTENDANCE' | 'WORKER_FIELD' | 'PREFERENCE';
+  entityId: string;
+  workerName?: string;
+  field: string;
+  strategy: 'LAST_WRITE_WINS' | 'KEEP_OFFLINE' | 'KEEP_SERVER' | 'MANUAL_MERGE' | 'FIELD_LEVEL_MERGE';
+  winningValue: any;
+  discardedValue: any;
+  serverTimestamp: string;
+  deviceTimestamp?: string;
+  deviceId?: string;
+  resolvedBy: string;
+  resolvedAt: string;
+  notes?: string;
+}
+
+export type InboxActionType = 
+  | 'ADVANCE_APPROVAL' 
+  | 'ATTENDANCE_EXCEPTION' 
+  | 'PAYROLL_SIGNOFF' 
+  | 'LEAVE_REQUEST' 
+  | 'CONFLICT_RESOLUTION';
+
+export type InboxUrgency = 'URGENT' | 'HIGH' | 'NORMAL' | 'LOW';
+
+export type InboxStatus = 'PENDING' | 'WAITING_SYNC' | 'APPROVED' | 'REJECTED' | 'RESOLVED';
+
+export interface InboxItem {
+  id: string;
+  tenantId: string;
+  branchId?: string;
+  assignedToRole?: Role;
+  assignedToUserId?: string;
+  delegateUserId?: string;
+  actionType: InboxActionType;
+  urgency: InboxUrgency;
+  status: InboxStatus;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  workerDesignation?: string;
+  workerPhotoUrl?: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  amount?: number;
+  isLowRisk?: boolean;
+  isWaitingSync?: boolean;
+  details: {
+    punch?: Punch;
+    attendanceRecord?: AttendanceRecord;
+    advance?: Advance;
+    conflict?: PunchConflict;
+    payrollMonth?: string;
+    geofenceViolation?: boolean;
+    distanceMeters?: number;
+    baseLocation?: { lat: number; lng: number; radius: number; address?: string };
+    punchLocation?: { lat: number; lng: number };
+    punchHistory?: Punch[];
+    shiftName?: string;
+    shiftStartTime?: string;
+    lateMinutes?: number;
+    reason?: string;
+    leaveType?: string;
+  };
+  resolution?: {
+    action: 'APPROVE' | 'REJECT' | 'RESOLVE';
+    resolvedBy: string;
+    resolvedAt: string;
+    notes?: string;
+  };
+}
+
+export interface InboxAuditEntry {
+  id: string;
+  itemId: string;
+  actionType: InboxActionType;
+  workerName: string;
+  action: 'APPROVE' | 'REJECT' | 'RESOLVE' | 'BULK_APPROVE';
+  resolvedBy: string;
+  resolvedAt: string;
+  notes?: string;
+}
