@@ -1,10 +1,11 @@
 // src/screens/IdCardsScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { Printer, IdCard, Loader2, User as UserIcon, Search, Building2, ChevronRight, ArrowLeft, Lock } from 'lucide-react';
+import { Printer, IdCard, Loader2, User as UserIcon, Search, Building2, ChevronRight, ArrowLeft, Lock, QrCode } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { Worker } from '../types';
+import { LiveQrBadgeModal } from '../components/LiveQrBadgeModal';
 
 export const IdCardsScreen: React.FC = () => {
   const { profile, limits } = useAuth();
@@ -14,6 +15,7 @@ export const IdCardsScreen: React.FC = () => {
   
   // State to hold the currently selected worker for printing
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
+  const [showLiveBadge, setShowLiveBadge] = useState(false);
 
   useEffect(() => {
     if (profile?.tenantId) {
@@ -197,15 +199,33 @@ export const IdCardsScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Sticky Print Button at Bottom (Hidden on Print) */}
-        <div className="bg-white p-4 border-t border-slate-200 no-print sticky bottom-0 pb-safe">
+        {/* Action Buttons at Bottom (Hidden on Print) */}
+        <div className="bg-white p-4 border-t border-slate-200 no-print sticky bottom-0 pb-safe flex flex-col sm:flex-row gap-3">
            <button 
-              onClick={handlePrint}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-4 rounded-xl font-black flex items-center justify-center shadow-lg shadow-indigo-200 active:scale-95 transition-all"
+              type="button"
+              onClick={() => setShowLiveBadge(true)}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3.5 rounded-xl font-black flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer"
            >
-              <Printer size={20} className="mr-2" /> Print ID Cards
+              <QrCode size={18} className="mr-2" /> Live Rotating QR (≤ 60s)
+           </button>
+           <button 
+              type="button"
+              onClick={handlePrint}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3.5 rounded-xl font-black flex items-center justify-center shadow-md active:scale-95 transition-all cursor-pointer"
+           >
+              <Printer size={18} className="mr-2" /> Print ID Cards
            </button>
         </div>
+
+        {/* Live Rotating QR Badge Modal */}
+        {selectedWorker && profile?.tenantId && (
+          <LiveQrBadgeModal
+            isOpen={showLiveBadge}
+            onClose={() => setShowLiveBadge(false)}
+            worker={selectedWorker}
+            tenantId={profile.tenantId}
+          />
+        )}
 
         {/* BULLETPROOF PRINT ISOLATION CSS */}
         <style dangerouslySetInnerHTML={{__html: `

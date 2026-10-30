@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and authentication identity mapping with role-based access control",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "RESELLER", "FACTORY_OWNER", "SUPERVISOR", "KIOSK"] },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "resellerId": { "type": "string", "maxLength": 128 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Tenant organization record with subscription tier, branding, and soft-delete tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "companyName": { "type": "string", "maxLength": 256 },
+        "resellerId": { "type": "string", "maxLength": 128 },
+        "plan": { "type": "string", "enum": ["FREE", "STARTER", "PRO", "ENTERPRISE", "TRIAL"] },
+        "isActive": { "type": "boolean" },
+        "deletedAt": { "type": "string" },
+        "deletedBy": { "type": "string", "maxLength": 128 },
+        "recoveryExpiresAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "companyName", "plan"]
+    },
+    "Worker": {
+      "title": "Worker",
+      "description": "Worker profile partitioned strictly by tenantId",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "wageType": { "type": "string", "enum": ["DAILY", "MONTHLY", "PIECE_RATE"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "TERMINATED"] },
+        "isActive": { "type": "boolean" },
+        "deletedAt": { "type": "string" }
+      },
+      "required": ["id", "tenantId", "name", "wageType"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Attendance punch record partitioned strictly by tenantId",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "workerId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["PRESENT", "ABSENT", "HALF_DAY", "WEEKLY_OFF", "ON_LEAVE", "HOLIDAY"] },
+        "deletedAt": { "type": "string" }
+      },
+      "required": ["id", "tenantId", "workerId", "date", "status"]
+    },
+    "Advance": {
+      "title": "Advance",
+      "description": "Wage advance or kharchi record partitioned strictly by tenantId",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "workerId": { "type": "string", "maxLength": 128 },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REPAID", "REJECTED"] }
+      },
+      "required": ["id", "tenantId", "workerId", "amount", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security and data access audit trail entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 256 },
+        "userRole": { "type": "string", "maxLength": 64 },
+        "action": { "type": "string", "maxLength": 128 },
+        "resource": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["SUCCESS", "DENIED", "ERROR"] },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "tenantId", "userId", "action", "resource", "status", "timestamp"]
+    },
+    "SecurityAlert": {
+      "title": "SecurityAlert",
+      "description": "Security incident notification for Super Admin review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "maxLength": 64 },
+        "severity": { "type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"] },
+        "message": { "type": "string", "maxLength": 1000 },
+        "actorId": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 256 },
+        "actorRole": { "type": "string", "maxLength": 64 },
+        "targetTenantId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["ACTIVE", "RESOLVED", "DISMISSED"] },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "type", "severity", "message", "actorId", "targetTenantId", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles with role and tenant assignment"
+    },
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Tenant organization accounts and soft-delete states"
+    },
+    "/workers/{workerId}": {
+      "schema": "Worker",
+      "description": "Worker profiles strictly isolated by tenantId"
+    },
+    "/attendance/{attId}": {
+      "schema": "Attendance",
+      "description": "Attendance logs strictly isolated by tenantId"
+    },
+    "/advances/{advId}": {
+      "schema": "Advance",
+      "description": "Wage advances strictly isolated by tenantId"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Immutable security audit logs"
+    },
+    "/security_alerts/{alertId}": {
+      "schema": "SecurityAlert",
+      "description": "Super admin security incident alerts"
+    }
+  }
+}

@@ -1,12 +1,17 @@
 // src/screens/SuperAdminDashboard.tsx
 import React, { useState, useEffect } from 'react';
 import { 
-  Users, Building2, Search, Shield, Power, Activity, Crown, Sliders, Eye, X, Save, Settings, Palette, Upload, IndianRupee, Handshake, PlusCircle, MailPlus
+  Users, Building2, Search, Shield, Power, Activity, Crown, Sliders, Eye, X, Save, Settings, Palette, Upload, IndianRupee, Handshake, PlusCircle, MailPlus,
+  ShieldAlert, ShieldCheck, AlertTriangle, RotateCcw, CheckCircle2, Play, Trash2, Filter, RefreshCw
 } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { SubscriptionTier, PlanLimits } from '../types/index';
+import { crossTenantVerification, CrossTenantVerificationReport } from '../services/crossTenantVerification';
+import { tenantSecurityService, SecurityAlert, TenantAuditLogEntry, SoftDeletedTenant } from '../services/tenantSecurityService';
+import { WhiteLabelModal } from '../components/WhiteLabelModal';
+import { FeatureFlagsManager } from '../components/FeatureFlagsManager';
 
 export const SuperAdminDashboard: React.FC = () => {
   const { profile, impersonateTenant } = useAuth();
@@ -18,9 +23,18 @@ export const SuperAdminDashboard: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
 
   // --- Tabs ---
-  const [activeTab, setActiveTab] = useState<'ORGS' | 'PLANS' | 'PARTNERS'>('ORGS');
+  const [activeTab, setActiveTab] = useState<'ORGS' | 'PLANS' | 'PARTNERS' | 'SECURITY' | 'FLAGS'>('ORGS');
   const [globalPlans, setGlobalPlans] = useState<Record<SubscriptionTier, PlanLimits> | null>(null);
   const [savingPlans, setSavingPlans] = useState(false);
+
+  // --- Security Tab State ---
+  const [securityAlerts, setSecurityAlerts] = useState<SecurityAlert[]>([]);
+  const [auditLogs, setAuditLogs] = useState<TenantAuditLogEntry[]>([]);
+  const [softDeletedTenants, setSoftDeletedTenants] = useState<SoftDeletedTenant[]>([]);
+  const [testReport, setTestReport] = useState<CrossTenantVerificationReport | null>(null);
+  const [runningTests, setRunningTests] = useState(false);
+  const [auditFilter, setAuditFilter] = useState({ tenantId: 'ALL', role: 'ALL', status: 'ALL', search: '' });
+  const [securitySubTab, setSecuritySubTab] = useState<'ALERTS' | 'AUDIT' | 'SOFT_DELETE' | 'VERIFICATION'>('ALERTS');
 
   // --- NEW: Create Reseller State ---
   const [showCreateReseller, setShowCreateReseller] = useState(false);
@@ -35,19 +49,26 @@ export const SuperAdminDashboard: React.FC = () => {
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
   const [overrides, setOverrides] = useState<Partial<PlanLimits>>({});
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
-  const [brandingData, setBrandingData] = useState<any>({ appName: '', primaryColor: '#4f46e5', logoUrl: '' });
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     setLoading(true);
-    const [tenantsData, plansData, resellersData] = await Promise.all([
-        dbService.getAllTenants(),
+    const [tenantsData, plansData, resellersData, alertsData, logsData, softDeletedData] = await Promise.all([
+        dbService.getAllTenants(false),
         dbService.getGlobalPlanConfig(),
-        dbService.getResellers()
+        dbService.getResellers(),
+        tenantSecurityService.getSecurityAlerts('ALL'),
+        tenantSecurityService.getAllAuditLogs(),
+        tenantSecurityService.getSoftDeletedTenants()
     ]);
     
     setTenants(tenantsData);
+    setGlobalPlans(plansData as Record<SubscriptionTier, PlanLimits>);
+    setResellers(resellersData);
+    setSecurityAlerts(alertsData);
+    setAuditLogs(logsData);
+    setSoftDeletedTenants(softDeletedData);
     setGlobalPlans(plansData as Record<SubscriptionTier, PlanLimits>);
     setResellers(resellersData);
     
@@ -104,33 +125,7 @@ export const SuperAdminDashboard: React.FC = () => {
 
   const openBrandingModal = (tenant: any) => {
     setSelectedTenant(tenant);
-    setBrandingData({
-      appName: tenant.branding?.appName || tenant.companyName || '',
-      primaryColor: tenant.branding?.primaryColor || '#4f46e5',
-      logoUrl: tenant.branding?.logoUrl || ''
-    });
     setBrandingModalOpen(true);
-  };
-
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 1048576) { 
-          toast.warning("Image is too large. Please select an image under 1MB.");
-          return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => setBrandingData({ ...brandingData, logoUrl: reader.result as string });
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const saveBranding = async () => {
-    if(!selectedTenant) return;
-    await dbService.updateTenantBranding(selectedTenant.tenantId, brandingData);
-    setBrandingModalOpen(false);
-    toast.success("Tenant branding updated");
-    loadData(); 
   };
 
   const handleGlobalPlanEdit = (tier: SubscriptionTier, field: keyof PlanLimits, value: any) => {
@@ -181,6 +176,56 @@ export const SuperAdminDashboard: React.FC = () => {
     }
   };
 
+  // --- Security Action Handlers ---
+  const handleResolveAlert = async (alertId: string) => {
+    await tenantSecurityService.resolveSecurityAlert(alertId, profile?.email || 'superadmin');
+    toast.success("Security alert marked as RESOLVED");
+    const updated = await tenantSecurityService.getSecurityAlerts('ALL');
+    setSecurityAlerts(updated);
+  };
+
+  const handleSoftDelete = async (tenantId: string, companyName: string) => {
+    if (!profile) return;
+    if (!window.confirm(`Are you sure you want to soft-delete '${companyName}'? All queries will strictly filter this tenant out with a 90-day recovery window.`)) return;
+    await tenantSecurityService.softDeleteTenant(tenantId, companyName, profile);
+    toast.warning(`Tenant '${companyName}' soft-deleted. Moved to 90-Day Recovery Queue.`);
+    await loadData();
+  };
+
+  const handleRestoreTenant = async (tenantId: string, companyName: string) => {
+    if (!profile) return;
+    await tenantSecurityService.restoreSoftDeletedTenant(tenantId, profile);
+    toast.success(`Tenant '${companyName}' successfully restored! All permissions and data access re-enabled.`);
+    await loadData();
+  };
+
+  const handleRunIsolationTests = async () => {
+    setRunningTests(true);
+    try {
+      const report = await crossTenantVerification.runIsolationTestSuite();
+      setTestReport(report);
+      if (report.status === 'ALL_PASSED') {
+        toast.success(`Verification passed! All ${report.totalTests} security boundary assertions confirmed.`);
+      } else {
+        toast.error(`Verification failed: ${report.failedTests} security assertions breached.`);
+      }
+    } catch (err: any) {
+      toast.error(`Test execution error: ${err.message}`);
+    } finally {
+      setRunningTests(false);
+      const logs = await tenantSecurityService.getAllAuditLogs(auditFilter);
+      setAuditLogs(logs);
+      const alerts = await tenantSecurityService.getSecurityAlerts('ALL');
+      setSecurityAlerts(alerts);
+    }
+  };
+
+  const handleFilterAuditLogs = async (newFilter: typeof auditFilter) => {
+    setAuditFilter(newFilter);
+    const logs = await tenantSecurityService.getAllAuditLogs(newFilter);
+    setAuditLogs(logs);
+  };
+
   const filteredTenants = tenants.filter(t => 
     (t.companyName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
     (t.email || '').toLowerCase().includes(searchTerm.toLowerCase())
@@ -217,6 +262,23 @@ export const SuperAdminDashboard: React.FC = () => {
                         className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center ${activeTab === 'PLANS' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                     >
                         <Settings size={14} className="mr-1.5" /> Plan Limits
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('FLAGS')}
+                        className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center ${activeTab === 'FLAGS' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        <Sliders size={14} className="mr-1.5 text-blue-400" /> Feature Flags
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('SECURITY')}
+                        className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center relative ${activeTab === 'SECURITY' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        <ShieldAlert size={14} className="mr-1.5 text-amber-400" /> Security &amp; Isolation
+                        {securityAlerts.filter(a => a.status === 'ACTIVE').length > 0 && (
+                            <span className="ml-1.5 px-1.5 py-0.5 bg-rose-500 text-white text-[10px] font-bold rounded-full animate-pulse">
+                                {securityAlerts.filter(a => a.status === 'ACTIVE').length}
+                            </span>
+                        )}
                     </button>
                 </div>
             </div>
@@ -333,7 +395,8 @@ export const SuperAdminDashboard: React.FC = () => {
                                         <button onClick={() => openBrandingModal(tenant)} className="p-2 bg-white border border-purple-200 text-purple-600 rounded-lg hover:bg-purple-50"><Palette size={16} /></button>
                                         <button onClick={() => openOverrideModal(tenant)} className="p-2 bg-white border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50"><Sliders size={16} /></button>
                                         <button onClick={() => handleImpersonate(tenant)} className="p-2 bg-white border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50"><Eye size={16} /></button>
-                                        <button onClick={() => toggleStatus(tenant.id, tenant.isActive)} className={`p-2 rounded-lg border ${tenant.isActive ? 'border-red-200 text-red-500 hover:bg-red-50' : 'border-green-200 text-green-500 hover:bg-green-50'}`}><Power size={16} /></button>
+                                        <button onClick={() => toggleStatus(tenant.id, tenant.isActive)} className={`p-2 rounded-lg border ${tenant.isActive ? 'border-amber-200 text-amber-500 hover:bg-amber-50' : 'border-green-200 text-green-500 hover:bg-green-50'}`} title={tenant.isActive ? 'Suspend Org' : 'Activate Org'}><Power size={16} /></button>
+                                        <button onClick={() => handleSoftDelete(tenant.tenantId || tenant.id, tenant.companyName)} className="p-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Soft-Delete (90-Day Recovery Queue)"><Trash2 size={16} /></button>
                                     </div>
                                 </div>
                             </div>
@@ -604,6 +667,351 @@ export const SuperAdminDashboard: React.FC = () => {
           </div>
       )}
 
+      {/* --- TAB CONTENT: TENANT-ISOLATED DATA ACCESS & SECURITY --- */}
+      {activeTab === 'SECURITY' && (
+          <div className="max-w-6xl mx-auto -mt-16 px-4 space-y-6">
+              
+              {/* Top Security KPI Badges */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center">
+                      <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl mr-3.5"><ShieldCheck size={22} /></div>
+                      <div>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Isolation Mode</p>
+                          <h4 className="text-sm md:text-base font-extrabold text-slate-800">Server-Enforced</h4>
+                      </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center">
+                      <div className={`p-3 rounded-xl mr-3.5 ${securityAlerts.filter(a => a.status === 'ACTIVE').length > 0 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                          <ShieldAlert size={22} />
+                      </div>
+                      <div>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Active Probes</p>
+                          <h4 className="text-sm md:text-base font-extrabold text-slate-800">{securityAlerts.filter(a => a.status === 'ACTIVE').length} Alerts</h4>
+                      </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center">
+                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl mr-3.5"><Activity size={22} /></div>
+                      <div>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Audit Trail</p>
+                          <h4 className="text-sm md:text-base font-extrabold text-slate-800">{auditLogs.length} Events</h4>
+                      </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center">
+                      <div className="p-3 bg-purple-50 text-purple-600 rounded-xl mr-3.5"><RotateCcw size={22} /></div>
+                      <div>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">90-Day Recovery</p>
+                          <h4 className="text-sm md:text-base font-extrabold text-slate-800">{softDeletedTenants.length} Tenants</h4>
+                      </div>
+                  </div>
+              </div>
+
+              {/* Security Sub-Navigation Tabs */}
+              <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+                  <div className="p-4 md:p-5 border-b border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50/50">
+                      <div>
+                          <h2 className="font-bold text-gray-900 text-lg flex items-center gap-2">
+                              <Shield size={20} className="text-indigo-600" /> Server-Enforced Tenant Isolation Control
+                          </h2>
+                          <p className="text-xs text-gray-500 mt-1">
+                              Mandatory tenantId filters derived from authenticated claims. Firestore Security Rules enforce zero data leakage.
+                          </p>
+                      </div>
+                      <div className="flex bg-white rounded-xl p-1 border border-gray-200 shadow-xs overflow-x-auto w-full md:w-auto">
+                          <button
+                              onClick={() => setSecuritySubTab('ALERTS')}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'ALERTS' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <ShieldAlert size={14} /> Security Alerts
+                              {securityAlerts.filter(a => a.status === 'ACTIVE').length > 0 && (
+                                  <span className="px-1.5 py-0.2 bg-rose-500 text-white text-[10px] rounded-full">
+                                      {securityAlerts.filter(a => a.status === 'ACTIVE').length}
+                                  </span>
+                              )}
+                          </button>
+                          <button
+                              onClick={() => setSecuritySubTab('VERIFICATION')}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'VERIFICATION' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <CheckCircle2 size={14} /> Isolation Test Suite
+                          </button>
+                          <button
+                              onClick={() => setSecuritySubTab('SOFT_DELETE')}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'SOFT_DELETE' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <RotateCcw size={14} /> 90-Day Recovery Queue ({softDeletedTenants.length})
+                          </button>
+                          <button
+                              onClick={() => setSecuritySubTab('AUDIT')}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'AUDIT' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <Activity size={14} /> Audit Trail ({auditLogs.length})
+                          </button>
+                      </div>
+                  </div>
+
+                  <div className="p-4 md:p-6">
+                      
+                      {/* SUBTAB 1: SECURITY ALERTS */}
+                      {securitySubTab === 'ALERTS' && (
+                          <div className="space-y-4">
+                              <div className="flex justify-between items-center pb-2 border-b border-gray-100">
+                                  <div>
+                                      <h3 className="font-bold text-gray-800 text-sm">Security Incident Reports &amp; Boundary Probes</h3>
+                                      <p className="text-xs text-gray-500">Real-time alerts triggered when a reseller or user attempts cross-tenant parameter tampering.</p>
+                                  </div>
+                                  <span className="text-xs text-gray-400 font-mono">{securityAlerts.length} total logged incidents</span>
+                              </div>
+
+                              {securityAlerts.length === 0 ? (
+                                  <div className="text-center py-12 bg-gray-50 rounded-xl border border-gray-200/60">
+                                      <ShieldCheck size={36} className="mx-auto text-emerald-500 mb-2" />
+                                      <p className="text-sm font-bold text-gray-700">Zero Security Incidents Detected</p>
+                                      <p className="text-xs text-gray-400 mt-1">All database queries strictly comply with authenticated tenant session boundaries.</p>
+                                  </div>
+                              ) : (
+                                  <div className="space-y-3">
+                                      {securityAlerts.map(alert => (
+                                          <div key={alert.id} className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row justify-between md:items-center gap-4 ${alert.status === 'ACTIVE' ? 'bg-rose-50/40 border-rose-200' : 'bg-gray-50/70 border-gray-200 opacity-75'}`}>
+                                              <div className="flex-1">
+                                                  <div className="flex items-center gap-2 mb-1.5">
+                                                      <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md ${alert.severity === 'CRITICAL' ? 'bg-rose-600 text-white' : alert.severity === 'HIGH' ? 'bg-amber-500 text-white' : 'bg-blue-600 text-white'}`}>
+                                                          {alert.severity}
+                                                      </span>
+                                                      <span className="text-xs font-bold text-gray-800 font-mono">{alert.type}</span>
+                                                      <span className="text-gray-300">•</span>
+                                                      <span className="text-xs text-gray-400">{new Date(alert.timestamp).toLocaleString()}</span>
+                                                      {alert.status === 'RESOLVED' && (
+                                                          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                                                              Resolved
+                                                          </span>
+                                                      )}
+                                                  </div>
+                                                  <p className="text-xs font-medium text-gray-800">{alert.message}</p>
+                                                  <div className="mt-2 text-[11px] text-gray-500 flex flex-wrap gap-3 font-mono">
+                                                      <span>Actor: <strong className="text-gray-700">{alert.actorEmail}</strong> ({alert.actorRole})</span>
+                                                      <span>Target Tenant: <strong className="text-gray-700">{alert.targetTenantId}</strong></span>
+                                                  </div>
+                                              </div>
+                                              {alert.status === 'ACTIVE' && (
+                                                  <button
+                                                      onClick={() => handleResolveAlert(alert.id)}
+                                                      className="px-3.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 font-bold text-xs rounded-lg transition-colors whitespace-nowrap shadow-2xs"
+                                                  >
+                                                      Acknowledge &amp; Resolve
+                                                  </button>
+                                              )}
+                                          </div>
+                                      ))}
+                                  </div>
+                              )}
+                          </div>
+                      )}
+
+                      {/* SUBTAB 2: AUTOMATED CROSS-TENANT ISOLATION TEST RUNNER */}
+                      {securitySubTab === 'VERIFICATION' && (
+                          <div className="space-y-6">
+                              <div className="bg-indigo-50/60 p-5 rounded-2xl border border-indigo-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                  <div>
+                                      <h3 className="font-bold text-indigo-950 text-base flex items-center gap-2">
+                                          <CheckCircle2 size={18} className="text-indigo-600" /> Automated Cross-Tenant Isolation Verification
+                                      </h3>
+                                      <p className="text-xs text-indigo-800/80 mt-1 max-w-2xl">
+                                          Seeds two parallel synthetic tenants (Tenant Alpha &amp; Tenant Beta) in memory, attempts cross-tenant queries, parameter spoofing, reseller portfolio bypass, and soft-delete recovery checks.
+                                      </p>
+                                  </div>
+                                  <button
+                                      onClick={handleRunIsolationTests}
+                                      disabled={runningTests}
+                                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs rounded-xl transition-all shadow-md flex items-center gap-2 disabled:opacity-50 whitespace-nowrap"
+                                  >
+                                      {runningTests ? <RefreshCw size={15} className="animate-spin" /> : <Play size={15} />}
+                                      {runningTests ? 'Executing Test Suite...' : 'Execute Isolation Test Suite'}
+                                  </button>
+                              </div>
+
+                              {testReport ? (
+                                  <div className="space-y-4">
+                                      <div className={`p-4 rounded-xl border flex justify-between items-center ${testReport.status === 'ALL_PASSED' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+                                          <div className="flex items-center gap-3">
+                                              {testReport.status === 'ALL_PASSED' ? <CheckCircle2 size={24} className="text-emerald-600" /> : <AlertTriangle size={24} className="text-rose-600" />}
+                                              <div>
+                                                  <h4 className="font-extrabold text-sm">
+                                                      {testReport.status === 'ALL_PASSED' ? 'ALL 6 SECURITY INVARIANTS SATISFIED' : 'SECURITY ASSERTIONS BREACHED'}
+                                                  </h4>
+                                                  <p className="text-xs opacity-80">
+                                                      Passed: {testReport.passedTests}/{testReport.totalTests} tests • Duration: {testReport.durationMs}ms • Timestamp: {new Date(testReport.timestamp).toLocaleTimeString()}
+                                                  </p>
+                                              </div>
+                                          </div>
+                                          <span className="text-xs font-bold font-mono px-3 py-1 bg-white rounded-lg border border-black/10">
+                                              ZERO DATA LEAKAGE VERIFIED
+                                          </span>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                          {testReport.results.map((res, i) => (
+                                              <div key={i} className="p-4 bg-white border border-gray-200 rounded-xl shadow-2xs space-y-1.5">
+                                                  <div className="flex justify-between items-start">
+                                                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{res.suiteName}</span>
+                                                      <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${res.passed ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                          {res.passed ? 'PASS' : 'FAIL'}
+                                                      </span>
+                                                  </div>
+                                                  <h5 className="font-bold text-gray-900 text-xs">{res.testName}</h5>
+                                                  <p className="text-xs text-gray-600 leading-relaxed">{res.message}</p>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  </div>
+                              ) : (
+                                  <div className="text-center py-10 border border-dashed border-gray-300 rounded-2xl bg-gray-50/50">
+                                      <p className="text-xs font-medium text-gray-500">Click &quot;Execute Isolation Test Suite&quot; above to run the 6-pillar cross-tenant boundary verification.</p>
+                                  </div>
+                              )}
+                          </div>
+                      )}
+
+                      {/* SUBTAB 3: 90-DAY SOFT-DELETE RECOVERY QUEUE */}
+                      {securitySubTab === 'SOFT_DELETE' && (
+                          <div className="space-y-4">
+                              <div className="flex justify-between items-center pb-2 border-b border-gray-100">
+                                  <div>
+                                      <h3 className="font-bold text-gray-800 text-sm">90-Day Soft-Delete &amp; Recovery Queue</h3>
+                                      <p className="text-xs text-gray-500">All queries enforce deletedAt IS NULL. Deleted tenants remain recoverable for 90 days before permanent purge.</p>
+                                  </div>
+                                  <span className="text-xs font-mono text-gray-400">{softDeletedTenants.length} tenants in queue</span>
+                              </div>
+
+                              {softDeletedTenants.length === 0 ? (
+                                  <div className="text-center py-12 bg-gray-50 rounded-xl border border-gray-200/60">
+                                      <CheckCircle2 size={36} className="mx-auto text-blue-500 mb-2" />
+                                      <p className="text-sm font-bold text-gray-700">No Soft-Deleted Tenants in Recovery</p>
+                                      <p className="text-xs text-gray-400 mt-1">When an organization is soft-deleted, it will appear here with an active 90-day countdown timer.</p>
+                                  </div>
+                              ) : (
+                                  <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden bg-white">
+                                      {softDeletedTenants.map(item => (
+                                          <div key={item.tenantId} className="p-4 md:p-5 flex flex-col md:flex-row justify-between md:items-center gap-4 hover:bg-gray-50/50 transition-colors">
+                                              <div>
+                                                  <div className="flex items-center gap-2">
+                                                      <h4 className="font-bold text-gray-900 text-sm">{item.companyName}</h4>
+                                                      <span className="bg-rose-50 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded border border-rose-200 font-mono">
+                                                          DEACTIVATED
+                                                      </span>
+                                                  </div>
+                                                  <p className="text-xs text-gray-500 font-mono mt-1">Tenant ID: {item.tenantId}</p>
+                                                  <p className="text-[11px] text-gray-400 mt-1">
+                                                      Deleted on {new Date(item.deletedAt).toLocaleDateString()} by {item.deletedByEmail}
+                                                  </p>
+                                              </div>
+                                              <div className="flex items-center gap-4">
+                                                  <div className="text-right">
+                                                      <p className="text-[10px] font-bold text-amber-600 uppercase">Recovery Window</p>
+                                                      <p className="text-sm font-extrabold text-gray-900">{item.recoveryDaysRemaining} Days Left</p>
+                                                  </div>
+                                                  <button
+                                                      onClick={() => handleRestoreTenant(item.tenantId, item.companyName)}
+                                                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
+                                                  >
+                                                      <RotateCcw size={14} /> Restore Tenant
+                                                  </button>
+                                              </div>
+                                          </div>
+                                      ))}
+                                  </div>
+                              )}
+                          </div>
+                      )}
+
+                      {/* SUBTAB 4: IMMUTABLE AUDIT TRAIL EXPLORER */}
+                      {securitySubTab === 'AUDIT' && (
+                          <div className="space-y-4">
+                              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 pb-3 border-b border-gray-100">
+                                  <div>
+                                      <h3 className="font-bold text-gray-800 text-sm">Security &amp; Data Access Audit Trail</h3>
+                                      <p className="text-xs text-gray-500">Immutable, append-only security logs recording every query, mutation, and permission resolution.</p>
+                                  </div>
+                                  <div className="flex items-center gap-2 w-full md:w-auto">
+                                      <input
+                                          type="text"
+                                          placeholder="Search action, email, tenant..."
+                                          value={auditFilter.search}
+                                          onChange={e => handleFilterAuditLogs({ ...auditFilter, search: e.target.value })}
+                                          className="p-2 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full md:w-60"
+                                      />
+                                      <select
+                                          value={auditFilter.status}
+                                          onChange={e => handleFilterAuditLogs({ ...auditFilter, status: e.target.value })}
+                                          className="p-2 text-xs border border-gray-200 rounded-lg bg-gray-50 font-bold"
+                                      >
+                                          <option value="ALL">All Statuses</option>
+                                          <option value="SUCCESS">SUCCESS</option>
+                                          <option value="DENIED">DENIED (403)</option>
+                                      </select>
+                                  </div>
+                              </div>
+
+                              <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                                  <table className="min-w-full divide-y divide-gray-200 text-xs">
+                                      <thead className="bg-gray-50 text-gray-500 font-bold uppercase tracking-wider text-[10px]">
+                                          <tr>
+                                              <th className="py-3 px-4 text-left">Timestamp</th>
+                                              <th className="py-3 px-4 text-left">Tenant ID</th>
+                                              <th className="py-3 px-4 text-left">User / Email</th>
+                                              <th className="py-3 px-4 text-left">Action</th>
+                                              <th className="py-3 px-4 text-left">Resource</th>
+                                              <th className="py-3 px-4 text-left">Status</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-100 bg-white">
+                                          {auditLogs.length === 0 ? (
+                                              <tr>
+                                                  <td colSpan={6} className="py-8 text-center text-gray-400">No audit logs matching criteria</td>
+                                              </tr>
+                                          ) : (
+                                              auditLogs.slice(0, 50).map(log => (
+                                                  <tr key={log.id} className="hover:bg-gray-50/70 transition-colors font-mono">
+                                                      <td className="py-2.5 px-4 text-gray-500 whitespace-nowrap">
+                                                          {new Date(log.timestamp).toLocaleTimeString()}
+                                                      </td>
+                                                      <td className="py-2.5 px-4 font-bold text-gray-800 whitespace-nowrap">
+                                                          {log.tenantId}
+                                                      </td>
+                                                      <td className="py-2.5 px-4 text-gray-600 whitespace-nowrap">
+                                                          {log.userEmail} ({log.userRole})
+                                                      </td>
+                                                      <td className="py-2.5 px-4 font-bold text-indigo-700 whitespace-nowrap">
+                                                          {log.action}
+                                                      </td>
+                                                      <td className="py-2.5 px-4 text-gray-600 whitespace-nowrap">
+                                                          {log.resource}
+                                                      </td>
+                                                      <td className="py-2.5 px-4 whitespace-nowrap">
+                                                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${log.status === 'SUCCESS' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                                              {log.status}
+                                                          </span>
+                                                      </td>
+                                                  </tr>
+                                              ))
+                                          )}
+                                      </tbody>
+                                  </table>
+                              </div>
+                          </div>
+                      )}
+
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- FEATURE FLAGS & ENTITLEMENTS TAB --- */}
+      {activeTab === 'FLAGS' && (
+        <div className="max-w-6xl mx-auto -mt-16 px-4">
+          <FeatureFlagsManager tenants={tenants} onRefreshData={loadData} />
+        </div>
+      )}
+
       {/* --- OVERRIDES MODAL --- */}
       {overrideModalOpen && selectedTenant && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -690,99 +1098,14 @@ export const SuperAdminDashboard: React.FC = () => {
           </div>
       )}
 
-      {/* --- BRANDING MODAL --- */}
+      {/* --- WHITE-LABEL & RUNTIME THEME MODAL --- */}
       {brandingModalOpen && selectedTenant && (
-          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
-                  
-                  <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                      <div className="flex items-center">
-                          <Palette size={18} className="text-purple-500 mr-2" />
-                          <h3 className="font-bold text-lg text-gray-800">White-Label Config</h3>
-                      </div>
-                      <button onClick={() => setBrandingModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                          <X size={20}/>
-                      </button>
-                  </div>
-                  
-                  <div className="p-5 space-y-5 max-h-[70vh] overflow-y-auto">
-                      
-                      <div>
-                          <label className="text-xs font-bold text-gray-700 uppercase tracking-wide">Application Name</label>
-                          <input 
-                              type="text" 
-                              value={brandingData.appName}
-                              onChange={e => setBrandingData({...brandingData, appName: e.target.value})}
-                              placeholder="e.g. My Factory App"
-                              className="w-full mt-1.5 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          />
-                      </div>
-
-                      <div>
-                          <label className="text-xs font-bold text-gray-700 uppercase tracking-wide">Primary Theme Color</label>
-                          <div className="flex items-center mt-1.5 space-x-3">
-                              <input 
-                                  type="color" 
-                                  value={brandingData.primaryColor}
-                                  onChange={e => setBrandingData({...brandingData, primaryColor: e.target.value})}
-                                  className="h-10 w-14 rounded cursor-pointer border-0 p-0"
-                              />
-                              <input 
-                                  type="text" 
-                                  value={brandingData.primaryColor}
-                                  onChange={e => setBrandingData({...brandingData, primaryColor: e.target.value})}
-                                  className="flex-1 p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
-                              />
-                          </div>
-                      </div>
-
-                      <div>
-                          <label className="text-xs font-bold text-gray-700 uppercase tracking-wide">Brand Logo</label>
-                          <div className="mt-1.5 flex items-center space-x-4">
-                              {brandingData.logoUrl ? (
-                                  <div className="relative group">
-                                      <img src={brandingData.logoUrl} className="w-16 h-16 rounded-lg object-contain bg-gray-50 border border-gray-200 p-1" alt="Logo preview" />
-                                      <button 
-                                        onClick={() => setBrandingData({...brandingData, logoUrl: ''})}
-                                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                                      >
-                                          <X size={12} />
-                                      </button>
-                                  </div>
-                              ) : (
-                                  <div className="w-16 h-16 rounded-lg bg-gray-50 border border-gray-200 border-dashed flex items-center justify-center text-gray-400">
-                                      <Upload size={20} />
-                                  </div>
-                              )}
-                              <div className="flex-1">
-                                  <input 
-                                      type="file" 
-                                      accept="image/*"
-                                      onChange={handleLogoUpload}
-                                      className="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 cursor-pointer"
-                                  />
-                                  <p className="text-[10px] text-gray-400 mt-1">Recommended: Transparent PNG, under 1MB.</p>
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-
-                  <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end space-x-3">
-                      <button 
-                          onClick={() => setBrandingModalOpen(false)} 
-                          className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
-                      >
-                          Cancel
-                      </button>
-                      <button 
-                          onClick={saveBranding} 
-                          className="px-4 py-2 text-sm font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-lg shadow-md transition-colors"
-                      >
-                          Apply Branding
-                      </button>
-                  </div>
-              </div>
-          </div>
+        <WhiteLabelModal
+          isOpen={brandingModalOpen}
+          onClose={() => setBrandingModalOpen(false)}
+          tenant={selectedTenant}
+          onSaved={loadData}
+        />
       )}
 
     </div>

@@ -22,14 +22,21 @@ import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
 import { InboxScreen } from './screens/inboxScreen';
+import { RosterScreen } from './screens/RosterScreen';
 import { useBackButton } from './hooks/useBackButton';
 
 // LEGAL & SUPPORT SCREENS
 import { TermsScreen } from './screens/TermsScreen';
 import { PrivacyScreen } from './screens/PrivacyScreen';
 
+// ENTITLEMENTS & GATING
+import { useEntitlements } from './contexts/EntitlementContext';
+import { GracePeriodBanner } from './components/GracePeriodBanner';
+import { UpgradeRequiredView } from './components/UpgradeRequiredView';
+
 export const RootNavigator: React.FC = () => {
   const { user, profile, loading, logout } = useAuth();
+  const { isEntitled } = useEntitlements();
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
@@ -108,6 +115,14 @@ export const RootNavigator: React.FC = () => {
   }
 
   if (currentScreen === 'ATTENDANCE_KIOSK') {
+    if (!isEntitled('KIOSK_MODE')) {
+      return (
+        <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={logout}>
+          <GracePeriodBanner onNavigateToBilling={() => setCurrentScreen('BILLING')} />
+          <UpgradeRequiredView featureKey="KIOSK_MODE" onNavigate={setCurrentScreen} />
+        </Layout>
+      );
+    }
     return <AttendanceKioskScreen isDedicatedMode={false} onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
   }
 
@@ -122,8 +137,12 @@ export const RootNavigator: React.FC = () => {
   }
 
   const handleOpenKiosk = (branchId: string) => {
-      setKioskBranchId(branchId);
+    if (!isEntitled('KIOSK_MODE')) {
       setCurrentScreen('ATTENDANCE_KIOSK');
+      return;
+    }
+    setKioskBranchId(branchId);
+    setCurrentScreen('ATTENDANCE_KIOSK');
   };
 
   const renderMainScreen = () => {
@@ -135,9 +154,16 @@ export const RootNavigator: React.FC = () => {
                   onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
                   onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
                />;
-      case 'ID_CARDS': return <IdCardsScreen />;
-      case 'PAYROLL': return <PayrollScreen />;
+      case 'ID_CARDS': 
+        return isEntitled('DIGITAL_ID_CARDS') 
+          ? <IdCardsScreen /> 
+          : <UpgradeRequiredView featureKey="DIGITAL_ID_CARDS" onNavigate={setCurrentScreen} />;
+      case 'PAYROLL': 
+        return isEntitled('ADVANCED_PAYROLL') 
+          ? <PayrollScreen /> 
+          : <UpgradeRequiredView featureKey="ADVANCED_PAYROLL" onNavigate={setCurrentScreen} />;
       case 'ATTENDANCE': return <AttendanceScreen />;
+      case 'ROSTER': return <RosterScreen />;
       case 'DAILY_LOGS': return <DailyWageScreen />;
       case 'TEAM': return <TeamScreen />;
       case 'SETTINGS': return <SettingsScreen onNavigate={setCurrentScreen} />;
@@ -170,6 +196,7 @@ export const RootNavigator: React.FC = () => {
 
   return (
     <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={logout}>
+      <GracePeriodBanner onNavigateToBilling={() => setCurrentScreen('BILLING')} />
       {renderMainScreen()}
     </Layout>
   );

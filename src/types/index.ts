@@ -82,11 +82,48 @@ export interface UserProfile {
   commissionRate?: number;
 }
 
+export type DomainVerificationStatus = 'PENDING' | 'VERIFIED' | 'FAILED';
+
+export interface CustomDomainConfig {
+  domain: string;
+  status: DomainVerificationStatus;
+  verificationToken: string;
+  cnameTarget: string;
+  verifiedAt?: string;
+  lastCheckedAt?: string;
+  errorMessage?: string;
+  dnsRecords?: {
+    cnameHost: string;
+    cnameValue: string;
+    txtHost: string;
+    txtValue: string;
+  };
+}
+
+export interface EmailTemplateConfig {
+  senderName: string;
+  replyTo: string;
+  headerText: string;
+  footerText: string;
+  signature: string;
+  bannerLogoUrl?: string;
+}
+
 export interface BrandingConfig {
   appName: string;
-  logoUrl: string;        // Base64 string for immediate use
-  primaryColor: string;   // Hex color code
+  logoUrl: string;             // Base64 string or image URL
+  faviconUrl?: string;         // Base64 favicon or URL
+  primaryColor: string;        // Hex color code (e.g. #2563eb)
+  backgroundColor?: string;    // App shell background hex
+  linkColor?: string;          // Accent link hex
+  textColor?: string;          // Main typography hex
+  customDomain?: CustomDomainConfig;
+  emailTemplates?: EmailTemplateConfig;
+  updatedAt?: string;
 }
+
+export * from './featureFlags';
+export * from './scheduleValidation';
 
 export interface TenantProfile {
   id: string;
@@ -96,8 +133,11 @@ export interface TenantProfile {
   plan: SubscriptionTier;
   trialEndsAt?: string; 
   overrides?: Partial<PlanLimits>; 
+  featureOverrides?: Partial<Record<import('./featureFlags').FeatureFlagKey, boolean>>;
+  pendingDowngrade?: import('./featureFlags').PendingDowngrade;
   branding?: BrandingConfig; // NEW
   resellerId?: string;
+  billingCycleEndsAt?: string;
 }
 
 export interface ShiftConfig {
@@ -223,6 +263,10 @@ export interface Worker {
   esiOptOut?: boolean;
   salaryRevisionDate?: string;
   previousWageAmount?: number;
+  // Shared-Device Quick Switch (PIN/QR)
+  kioskPin?: string; // 4-6 digit quick switch PIN unique per tenant
+  pinLockedUntil?: string; // ISO date string if in cooldown
+  pinFailedAttempts?: number;
 }
 
 export interface TimeRecord {
@@ -525,7 +569,7 @@ export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX';
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX' | 'ROSTER';
 
 export interface PunchConflict {
   id: string;

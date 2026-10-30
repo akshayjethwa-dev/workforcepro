@@ -12,6 +12,7 @@ import { Worker, ShiftConfig, Branch, OrgSettings } from '../types/index';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
 import { useBackButton } from '../hooks/useBackButton'; 
+import { quickSwitchService } from '../services/quickSwitchService';
 
 interface Props {
   onBack: () => void;
@@ -210,6 +211,10 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       if (!formData.gender) { toast.error("Gender is required."); return false; }
       if (!formData.dob) { toast.error("Date of Birth is required."); return false; }
       if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) { toast.error("Aadhar Number must be exactly 12 digits."); return false; }
+      if (formData.kioskPin && !/^\d{4,6}$/.test(formData.kioskPin)) {
+        toast.error("Quick Switch Kiosk PIN must be between 4 and 6 digits (numbers only).");
+        return false;
+      }
     }
     if (step === 1) {
       if (!formData.designation?.trim()) { toast.error("Designation is required."); return false; }
@@ -240,6 +245,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       toast.error("Organization tenant session missing. Please refresh.");
       return;
     }
+
+    // Check tenant PIN uniqueness if PIN is provided
+    if (formData.kioskPin) {
+      const allWorkers = await dbService.getWorkers(profile.tenantId);
+      const uniqueness = quickSwitchService.checkPinUniqueness(
+        profile.tenantId,
+        formData.kioskPin,
+        initialData?.id,
+        allWorkers
+      );
+      if (!uniqueness.isUnique) {
+        toast.error(`Kiosk PIN "${formData.kioskPin}" is already assigned to "${uniqueness.conflictingWorker?.name}". Every PIN must be unique within your organization.`);
+        return;
+      }
+    }
+
     setSaving(true);
     
     try {
@@ -426,6 +447,15 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 <label className="text-xs font-bold text-gray-500 uppercase ml-1">Aadhar Number (Optional)</label>
                 <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
                   maxLength={12} type="tel" value={formData.aadhar} onChange={e => setFormData({...formData, aadhar: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UID" />
+              </div>
+              <div>
+                <div className="flex items-center justify-between ml-1">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Quick Switch Kiosk PIN (4–6 Digits)</label>
+                  <span className="text-[10px] text-blue-600 font-mono font-bold">Unique per tenant</span>
+                </div>
+                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono tracking-widest"
+                  maxLength={6} type="password" value={formData.kioskPin || ''} onChange={e => setFormData({...formData, kioskPin: e.target.value.replace(/\D/g, '')})} placeholder="Defaults to last 4 digits of phone" />
+                <span className="text-[11px] text-gray-400 ml-1 block mt-0.5">Used by workers to switch profiles instantly on shared kiosk tablets.</span>
               </div>
             </div>
           </div>

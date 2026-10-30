@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, 
   History, FileText, CreditCard, PieChart, IdCard, Headset, FileCheck, 
-  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox
+  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox, Calendar
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { useEntitlements } from '../contexts/EntitlementContext';
 import { ScreenName } from '../types/index';
 import { dbService } from '../services/db';
 import { inboxService } from '../services/inboxService';
@@ -32,6 +34,8 @@ export const Sidebar: React.FC<Props> = ({
 }) => {
   const { profile, limits } = useAuth(); 
   const { toast } = useToast();
+  const { effectiveBranding } = useTheme();
+  const { isEntitled } = useEntitlements();
   const isOwner = profile?.role === 'FACTORY_OWNER';
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
   const isReseller = profile?.role === 'RESELLER';
@@ -133,15 +137,29 @@ export const Sidebar: React.FC<Props> = ({
       {/* Brand & Workspace Tile */}
       <div className="p-4 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center font-bold text-base text-white shadow-md shadow-blue-900/40 shrink-0">
-            {profile?.companyName ? profile.companyName.charAt(0).toUpperCase() : 'W'}
-          </div>
+          {effectiveBranding.logoUrl ? (
+            <div className="w-10 h-10 rounded-xl bg-white p-1 border border-slate-700 flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+              <img src={effectiveBranding.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" />
+            </div>
+          ) : (
+            <div 
+              className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-base text-white shadow-md shadow-blue-900/40 shrink-0"
+              style={{ backgroundColor: effectiveBranding.primaryColor || '#2563eb' }}
+            >
+              {(effectiveBranding.appName || profile?.companyName || 'W').charAt(0).toUpperCase()}
+            </div>
+          )}
           <div className="min-w-0">
             <h2 className="font-bold text-sm leading-tight text-white truncate">
-              {profile?.companyName || (isSuperAdmin ? 'Admin Console' : isReseller ? 'Partner Portal' : 'WorkForce Pro')}
+              {effectiveBranding.appName || profile?.companyName || (isSuperAdmin ? 'Admin Console' : isReseller ? 'Partner Portal' : 'WorkForce Pro')}
             </h2>
-            <div className="text-[11px] text-slate-400 font-medium mt-0.5 truncate">
-              {isSuperAdmin ? 'Super Admin' : isReseller ? 'Channel Partner' : isOwner ? 'Factory Admin' : 'Supervisor'}
+            <div className="text-[11px] text-slate-400 font-medium mt-0.5 truncate flex items-center gap-1.5">
+              <span>{isSuperAdmin ? 'Super Admin' : isReseller ? 'Channel Partner' : isOwner ? 'Factory Admin' : 'Supervisor'}</span>
+              {effectiveBranding.customDomain?.domain && (
+                <span className="text-[9px] px-1 rounded bg-slate-800 text-blue-300 font-mono">
+                  {effectiveBranding.customDomain.status === 'VERIFIED' ? 'Custom Domain' : 'DNS Pending'}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -196,18 +214,32 @@ export const Sidebar: React.FC<Props> = ({
               />
               <NavItem icon={Users} label="Workers Directory" screen="WORKERS" />
               <NavItem icon={Clock} label="Attendance Logs" screen="ATTENDANCE" />
-              <NavItem icon={Camera} label="Kiosk Scanner" screen="ATTENDANCE_KIOSK" badge="Live" />
+              <NavItem icon={Calendar} label="Shift Roster & Publish" screen="ROSTER" />
+              <NavItem 
+                icon={Camera} 
+                label="Kiosk Scanner" 
+                screen="ATTENDANCE_KIOSK" 
+                badge={!isEntitled('KIOSK_MODE') ? 'Upgrade' : 'Live'} 
+              />
             </div>
 
             <div className="space-y-1">
               <div className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                 Payroll & Wages
               </div>
-              <NavItem icon={IndianRupee} label="Monthly Payroll" screen="PAYROLL" />
+              <NavItem 
+                icon={IndianRupee} 
+                label="Monthly Payroll" 
+                screen="PAYROLL" 
+                badge={!isEntitled('ADVANCED_PAYROLL') ? 'Pro' : undefined}
+              />
               <NavItem icon={History} label="Daily Wage Logs" screen="DAILY_LOGS" />
-              {limits?.idCardEnabled && (
-                <NavItem icon={IdCard} label="Digital ID Cards" screen="ID_CARDS" />
-              )}
+              <NavItem 
+                icon={IdCard} 
+                label="Digital ID Cards" 
+                screen="ID_CARDS" 
+                badge={!isEntitled('DIGITAL_ID_CARDS') ? 'Starter' : undefined}
+              />
               <NavItem icon={PieChart} label="Factory Reports" screen="REPORTS" />
             </div>
 

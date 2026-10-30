@@ -1,12 +1,14 @@
 // src/screens/ResellerDashboard.tsx
 import React, { useState, useEffect } from 'react';
-import { Users, Building2, Search, Power, Activity, Crown, Palette, Eye, MailPlus, IndianRupee, Download, X } from 'lucide-react';
+import { Users, Building2, Search, Power, Activity, Crown, Palette, Eye, MailPlus, IndianRupee, Download, X, Layers, Clock, Sparkles } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { SubscriptionTier } from '../types/index';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
+import { WhiteLabelModal } from '../components/WhiteLabelModal';
+import { ClientEntitlementsModal } from '../components/ClientEntitlementsModal';
 
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7;
@@ -29,6 +31,7 @@ export const ResellerDashboard: React.FC = () => {
   const [inviteData, setInviteData] = useState({ email: '', companyName: '', plan: 'TRIAL' as SubscriptionTier, trialDays: FREE_TRIAL_DAYS });
   
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
+  const [entitlementsModalOpen, setEntitlementsModalOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
   const [brandingData, setBrandingData] = useState<any>({ appName: '', primaryColor: '#4f46e5', logoUrl: '' });
   
@@ -86,22 +89,18 @@ export const ResellerDashboard: React.FC = () => {
     loadData(); 
   };
 
-  const handleImpersonate = (tenant: any) => {
-    toast.info(`Switched to ${tenant.companyName} workspace`);
-    impersonateTenant(tenant.tenantId, tenant.companyName);
+  const handleImpersonate = async (tenant: any) => {
+    try {
+      await impersonateTenant(tenant.tenantId, tenant.companyName);
+      toast.info(`Switched to ${tenant.companyName} workspace`);
+    } catch (err: any) {
+      toast.error(err.message || "Access denied: Unauthorized tenant");
+    }
   };
 
   const openBrandingModal = (tenant: any) => {
     setSelectedTenant(tenant);
-    setBrandingData({ appName: tenant.branding?.appName || tenant.companyName, primaryColor: tenant.branding?.primaryColor || '#4f46e5', logoUrl: tenant.branding?.logoUrl });
     setBrandingModalOpen(true);
-  };
-
-  const saveBranding = async () => {
-    await dbService.updateTenantBranding(selectedTenant.tenantId, brandingData);
-    setBrandingModalOpen(false);
-    toast.success("Client branding applied");
-    loadData(); 
   };
 
   const generateInvoice = async () => {
@@ -194,28 +193,100 @@ export const ResellerDashboard: React.FC = () => {
 
                  <div className="divide-y divide-gray-100 bg-gray-50/50">
                     {loading ? <div className="p-12 text-center">Loading...</div> : 
-                     filteredClients.map((client) => (
-                        <div key={client.id} className="p-4 md:p-6 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6">
-                            <div className="flex-1">
-                                <h3 className="font-bold text-gray-900 text-base md:text-lg">{client.branding?.appName || client.companyName || 'Unnamed'}</h3>
-                                <div className="mt-1 text-xs md:text-sm text-gray-600 flex items-center gap-2">
-                                    <span className="font-medium">{client.name}</span><span className="text-gray-300">•</span><span>{client.email}</span>
-                                </div>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <select value={client.plan || 'TRIAL'} onChange={(e) => handlePlanChange(client.tenantId, e.target.value as SubscriptionTier)} className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-900 text-xs font-bold rounded-lg focus:outline-none">
-                                    <option value="FREE">FREE</option>
-                                    <option value="TRIAL">TRIAL</option>
-                                    <option value="STARTER">STARTER</option>
-                                    <option value="PRO">PRO</option>
-                                    <option value="ENTERPRISE">ENTERPRISE</option>
-                                </select>
-                                <button onClick={() => openBrandingModal(client)} className="p-2 bg-white border border-purple-200 text-purple-600 rounded-lg hover:bg-purple-50 transition-colors" title="White-Label Branding"><Palette size={16} /></button>
-                                <button onClick={() => handleImpersonate(client)} className="p-2 bg-white border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors" title="Login As"><Eye size={16} /></button>
-                                <button onClick={() => toggleStatus(client.id, client.isActive)} className={`p-2 rounded-lg border transition-colors ${client.isActive ? 'border-red-200 text-red-500 hover:bg-red-50' : 'border-green-200 text-green-500 hover:bg-green-50'}`} title="Toggle Status"><Power size={16} /></button>
-                            </div>
-                        </div>
-                    ))}
+                     filteredClients.map((client) => {
+                        const plan = client.plan || 'TRIAL';
+                        const hasPayroll = plan === 'PRO' || plan === 'ENTERPRISE' || plan === 'TRIAL' || client.featureOverrides?.ADVANCED_PAYROLL === true;
+                        const hasKiosk = (plan !== 'FREE') || client.featureOverrides?.KIOSK_MODE === true;
+                        const hasWhiteLabel = plan === 'PRO' || plan === 'ENTERPRISE' || plan === 'TRIAL' || client.featureOverrides?.WHITE_LABEL === true;
+                        const hasIdCards = (plan !== 'FREE') || client.featureOverrides?.DIGITAL_ID_CARDS === true;
+                        const hasAi = plan === 'ENTERPRISE' || plan === 'TRIAL' || client.featureOverrides?.AI_CHAT === true;
+
+                        return (
+                          <div key={client.id} className="p-4 md:p-6 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 border-b border-gray-100 last:border-b-0">
+                              <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h3 className="font-bold text-gray-900 text-base md:text-lg truncate">
+                                      {client.branding?.appName || client.companyName || 'Unnamed'}
+                                    </h3>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full font-mono uppercase ${
+                                      plan === 'ENTERPRISE' ? 'bg-amber-100 text-amber-800' :
+                                      plan === 'PRO' ? 'bg-purple-100 text-purple-800' :
+                                      plan === 'STARTER' ? 'bg-blue-100 text-blue-800' :
+                                      plan === 'TRIAL' ? 'bg-emerald-100 text-emerald-800' :
+                                      'bg-gray-100 text-gray-700'
+                                    }`}>
+                                      {plan}
+                                    </span>
+                                    {client.pendingDowngrade && (
+                                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1 font-mono">
+                                        <Clock size={10} />
+                                        <span>Grace Period: &rarr; {client.pendingDowngrade.targetPlan}</span>
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-1 text-xs md:text-sm text-gray-600 flex items-center gap-2">
+                                      <span className="font-medium">{client.name}</span><span className="text-gray-300">•</span><span>{client.email}</span>
+                                  </div>
+
+                                  {/* At-a-glance feature entitlements pills */}
+                                  <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mr-1">
+                                      Entitlements:
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                                      hasPayroll ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-400 line-through'
+                                    }`}>
+                                      Payroll
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                                      hasKiosk ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-400 line-through'
+                                    }`}>
+                                      Kiosk
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                                      hasWhiteLabel ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-400 line-through'
+                                    }`}>
+                                      White-Label
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                                      hasIdCards ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-400 line-through'
+                                    }`}>
+                                      ID Cards
+                                    </span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
+                                      hasAi ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-100 text-gray-400 line-through'
+                                    }`}>
+                                      AI Insights
+                                    </span>
+                                  </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                  <select value={client.plan || 'TRIAL'} onChange={(e) => handlePlanChange(client.tenantId, e.target.value as SubscriptionTier)} className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-900 text-xs font-bold rounded-lg focus:outline-none">
+                                      <option value="FREE">FREE</option>
+                                      <option value="TRIAL">TRIAL</option>
+                                      <option value="STARTER">STARTER</option>
+                                      <option value="PRO">PRO</option>
+                                      <option value="ENTERPRISE">ENTERPRISE</option>
+                                  </select>
+
+                                  <button 
+                                      onClick={() => { setSelectedTenant(client); setEntitlementsModalOpen(true); }} 
+                                      className="px-2.5 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors text-xs font-semibold flex items-center gap-1.5"
+                                      title="View All Plan Entitlements"
+                                  >
+                                      <Layers size={14} className="text-blue-600" />
+                                      <span className="hidden sm:inline">Entitlements</span>
+                                  </button>
+
+                                  <button onClick={() => openBrandingModal(client)} className="p-2 bg-white border border-purple-200 text-purple-600 rounded-lg hover:bg-purple-50 transition-colors" title="White-Label Branding"><Palette size={16} /></button>
+                                  <button onClick={() => handleImpersonate(client)} className="p-2 bg-white border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors" title="Login As"><Eye size={16} /></button>
+                                  <button onClick={() => toggleStatus(client.id, client.isActive)} className={`p-2 rounded-lg border transition-colors ${client.isActive ? 'border-red-200 text-red-500 hover:bg-red-50' : 'border-green-200 text-green-500 hover:bg-green-50'}`} title="Toggle Status"><Power size={16} /></button>
+                              </div>
+                          </div>
+                        );
+                     })}
                  </div>
              </div>
           </div>
@@ -380,37 +451,24 @@ export const ResellerDashboard: React.FC = () => {
           </div>
       )}
 
-      {/* Branding Modal */}
+      {/* Full-Featured White-Label & Runtime Theme Modal */}
       {brandingModalOpen && selectedTenant && (
-           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-              <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-                  <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                      <div className="flex items-center">
-                          <Palette size={18} className="text-purple-500 mr-2" />
-                          <h3 className="font-bold text-lg text-gray-800">White-Label Config</h3>
-                      </div>
-                      <button onClick={() => setBrandingModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors"><X size={20}/></button>
-                  </div>
+        <WhiteLabelModal
+          isOpen={brandingModalOpen}
+          onClose={() => setBrandingModalOpen(false)}
+          tenant={selectedTenant}
+          onSaved={loadData}
+        />
+      )}
 
-                  <div className="p-5 space-y-4">
-                      <div>
-                          <label className="text-xs font-bold text-gray-700 uppercase">App Name</label>
-                          <input type="text" value={brandingData.appName} onChange={e => setBrandingData({...brandingData, appName: e.target.value})} className="w-full mt-1.5 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                      </div>
-                      <div>
-                          <label className="text-xs font-bold text-gray-700 uppercase">Theme Color</label>
-                          <div className="flex items-center space-x-3 mt-1.5">
-                              <input type="color" value={brandingData.primaryColor} onChange={e => setBrandingData({...brandingData, primaryColor: e.target.value})} className="h-10 w-14 rounded cursor-pointer border-0 p-0" />
-                              <input type="text" value={brandingData.primaryColor} onChange={e => setBrandingData({...brandingData, primaryColor: e.target.value})} className="flex-1 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                          </div>
-                      </div>
-                  </div>
-                  <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end space-x-3">
-                      <button onClick={() => setBrandingModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">Cancel</button>
-                      <button onClick={saveBranding} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-bold hover:bg-purple-700 transition-colors">Apply Branding</button>
-                  </div>
-              </div>
-          </div>
+      {/* Per-Tenant Entitlements Inspector Modal */}
+      {entitlementsModalOpen && selectedTenant && (
+        <ClientEntitlementsModal
+          isOpen={entitlementsModalOpen}
+          onClose={() => setEntitlementsModalOpen(false)}
+          tenant={selectedTenant}
+          onUpgradePlan={handlePlanChange}
+        />
       )}
 
     </div>

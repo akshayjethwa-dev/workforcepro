@@ -347,23 +347,33 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                 )}
             </div>
 
-            {/* Quick Shift Summary Tile */}
-            <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            {/* Quick Shift Summary Tile -> Navigates to ROSTER */}
+            <div 
+                onClick={() => onNavigate && onNavigate('ROSTER')}
+                className="bg-white hover:bg-slate-50/80 rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between cursor-pointer group transition-all"
+            >
                 <div>
-                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Shift Configuration</div>
-                    <div className="text-base font-bold text-slate-900 mt-1">
-                        {orgSettings?.shifts && orgSettings.shifts.length > 0 ? orgSettings.shifts[0].name : 'Default Morning Shift'}
+                    <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Weekly Roster &amp; Shifts</span>
+                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md group-hover:bg-blue-100 transition-colors">
+                            Pre-Publish Check
+                        </span>
+                    </div>
+                    <div className="text-base font-bold text-slate-900 mt-1 flex items-center justify-between">
+                        <span>{orgSettings?.shifts && orgSettings.shifts.length > 0 ? orgSettings.shifts[0].name : 'Production Roster'}</span>
+                        <ChevronRight size={16} className="text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
                     </div>
                     <div className="text-xs text-slate-500 mt-1 font-mono tabular-nums">
                         {orgSettings?.shifts && orgSettings.shifts.length > 0 
                             ? `${orgSettings.shifts[0].startTime} — ${orgSettings.shifts[0].endTime}` 
-                            : '09:00 AM — 06:00 PM'}
+                            : '08:00 AM — 04:30 PM'}
                     </div>
                 </div>
                 <div className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
-                    <span>Grace Period</span>
-                    <span className="font-mono font-semibold text-slate-700 tabular-nums">
-                        {orgSettings?.shifts?.[0]?.gracePeriodMins || 15} mins
+                    <span>Validation Engine</span>
+                    <span className="font-semibold text-emerald-600 flex items-center gap-1">
+                        <CheckCircle2 size={13} />
+                        Active
                     </span>
                 </div>
             </div>

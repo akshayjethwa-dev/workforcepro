@@ -1202,6 +1202,33 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
             </div>
           </div>
 
+          {/* Direct Link to Roster & Pre-Publish Validation */}
+          {onNavigate && (
+            <div 
+              onClick={() => onNavigate('ROSTER')}
+              className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white p-4 rounded-2xl flex items-center justify-between cursor-pointer hover:border-blue-400 border border-blue-800 shadow-sm transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 text-white flex items-center justify-center shrink-0">
+                  <Calendar size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xs text-white">Weekly Shift Roster &amp; Pre-Publish Validation</span>
+                    <span className="text-[10px] bg-blue-500/40 text-blue-200 px-2 py-0.5 rounded font-mono">Pre-Publish Engine</span>
+                  </div>
+                  <p className="text-[11px] text-blue-200 mt-0.5">
+                    Assign workers to shifts and run real-time conflict validation for double-booking, 11h rest periods, and 48h weekly overtime limits.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs font-bold text-blue-200 group-hover:text-white shrink-0 ml-4">
+                <span>Open Roster</span>
+                <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-between items-end px-1">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Active Shift Profiles</h3>
               <button onClick={addShift} className="text-indigo-600 text-sm font-bold flex items-center bg-indigo-50 px-4 min-h-11 rounded-xl hover:bg-indigo-100 transition-colors">

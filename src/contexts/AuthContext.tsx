@@ -5,6 +5,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { UserProfile, SubscriptionTier, PlanLimits, Role, DEFAULT_PLAN_CONFIG } from '../types/index';
 import { dbService } from '../services/db';
+import { tenantSecurityService } from '../services/tenantSecurityService';
 
 interface AuthContextType {
   user: User | null;         
@@ -107,7 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setTrialDaysLeft(daysLeft);
         }
     } catch (error) {
-        console.error("Error fetching tenant data:", error);
+        console.warn("Notice: Unable to fetch remote tenant data, running offline:", error);
     }
   };
 
@@ -205,7 +206,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
       } catch (error) {
-          console.error("Critical error in auth state resolution:", error);
+          console.warn("Notice in auth state resolution (running offline):", error);
       } finally {
           // Guaranteed to run, preventing the infinite loading spinner issue on poor networks
           setLoading(false);
@@ -218,6 +219,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Temporarily fake the local state to view exactly what the tenant sees
   const impersonateTenant = async (tenantId: string, companyName: string) => {
     if (!originalProfile) return;
+    
+    // Server-enforced scope boundary: Validate that caller possesses claim or reseller portfolio authority
+    await tenantSecurityService.resolveAuthorizedTenantScope(originalProfile, tenantId);
+
     setIsImpersonating(true);
     setProfile({
         ...originalProfile,

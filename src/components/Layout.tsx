@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { ScreenName, AppNotification } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { SetupGuideModal } from './SetupGuideModal';
@@ -26,6 +27,7 @@ const SCREEN_METADATA: Record<ScreenName, { title: string; category: string }> =
   WORKERS: { title: 'Workers Directory', category: 'Operations' },
   ADD_WORKER: { title: 'Worker Profile Editor', category: 'Operations' },
   ATTENDANCE: { title: 'Daily Attendance & Punch Logs', category: 'Operations' },
+  ROSTER: { title: 'Shift Roster & Schedule Validation', category: 'Operations' },
   ATTENDANCE_KIOSK: { title: 'Face & QR Kiosk Terminal', category: 'Operations' },
   PAYROLL: { title: 'Monthly Salary & Payroll', category: 'Payroll & Wages' },
   DAILY_LOGS: { title: 'Daily Wage Calculations', category: 'Payroll & Wages' },
@@ -44,6 +46,7 @@ const SCREEN_METADATA: Record<ScreenName, { title: string; category: string }> =
 
 export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavigate, onLogout }) => {
   const { profile, tenantPlan, trialDaysLeft, isImpersonating, stopImpersonating, limits } = useAuth();
+  const { effectiveBranding } = useTheme();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -238,8 +241,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
 
                 {/* Desktop Breadcrumbs Trail */}
                 <div className="flex items-center gap-2 min-w-0 text-sm">
+                  {effectiveBranding.logoUrl && (
+                    <img src={effectiveBranding.logoUrl} alt="Brand" className="w-5 h-5 object-contain rounded hidden sm:inline" />
+                  )}
                   <span className="font-semibold text-slate-800 whitespace-nowrap hidden sm:inline">
-                    {profile?.companyName || 'WorkForce Pro'}
+                    {effectiveBranding.appName || profile?.companyName || 'WorkForce Pro'}
                   </span>
                   <ChevronRight size={14} className="text-slate-400 hidden sm:inline shrink-0" />
                   <span className="font-medium text-slate-600 truncate">
