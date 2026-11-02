@@ -1,6 +1,6 @@
 // src/services/db.ts
 import { 
-  collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc 
+  collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc, deleteField 
 } from "firebase/firestore";
 import { db, auth } from "../lib/firebase";
 import { 
@@ -10,6 +10,7 @@ import {
 } from "../types/index";
 import { tenantSecurityService } from "./tenantSecurityService";
 import { entitlementService } from "./entitlementService";
+import { employeeCapGuard, EmployeeCapExceededError } from "./employeeCapGuard";
 
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7; 
@@ -21,6 +22,7 @@ const getNotificationsRef = () => collection(db, "notifications");
 const DEMO_TENANTS = [
   {
     id: 'demo-tenant-1',
+    tenantId: 'demo-tenant-1',
     companyName: 'Apex Precision Engineering',
     name: 'Rajesh Patel',
     email: 'rajesh@apexeng.in',
@@ -33,6 +35,7 @@ const DEMO_TENANTS = [
   },
   {
     id: 'demo-tenant-2',
+    tenantId: 'demo-tenant-2',
     companyName: 'Gujarat Auto Components',
     name: 'Sanjay Shah',
     email: 'sanjay@gujratauto.com',
@@ -45,6 +48,7 @@ const DEMO_TENANTS = [
   },
   {
     id: 'demo-tenant-3',
+    tenantId: 'demo-tenant-3',
     companyName: 'Surat Textile Mills',
     name: 'Vikram Mehta',
     email: 'vikram@surattextiles.co',
@@ -579,8 +583,15 @@ export const dbService = {
   },
 
   updateTenantPlan: async (tenantId: string, plan: SubscriptionTier) => {
+    // E17-S3 Downgrade Guard: Block downgrade if current active worker count exceeds target plan cap
+    await employeeCapGuard.validatePlanDowngrade(tenantId, plan);
+
     const tenantRef = doc(db, 'tenants', tenantId);
-    const updateData: any = { plan };
+    const updateData: any = { 
+      plan,
+      pendingDowngrade: deleteField(),
+      updatedAt: new Date().toISOString()
+    };
     
     // Auto-assign the free trial if manually switched to TRIAL from the dropdown later
     if (plan === 'TRIAL') {
@@ -590,6 +601,7 @@ export const dbService = {
     }
     
     await updateDoc(tenantRef, updateData);
+    entitlementService.invalidateCache(tenantId);
   },
 
   updateTenantOverrides: async (tenantId: string, overrides: Partial<PlanLimits>) => {
@@ -915,6 +927,9 @@ export const dbService = {
   },
 
   addWorker: async (worker: Omit<Worker, 'id'>) => {
+    // Centralized server-side guard: enforce soft/hard employee caps
+    await employeeCapGuard.assertCanAddWorker(worker.tenantId, worker, 1);
+
     if (worker.tenantId === 'demo-tenant-id') {
       const current = getStoredDemoWorkers();
       const newWorker: Worker = {
@@ -947,7 +962,44 @@ export const dbService = {
     }
   },
 
+  bulkAddWorkers: async (tenantId: string, workers: Array<Partial<Worker>>) => {
+    // 1. Enforce feature entitlement (BULK_IMPORT is gated to PRO/ENTERPRISE)
+    await entitlementService.assertEntitlement(tenantId, 'BULK_IMPORT');
+
+    // 2. Enforce all-or-nothing batch validation against employee cap
+    await employeeCapGuard.validateBatchImport(tenantId, workers);
+
+    const now = new Date().toISOString();
+    const current = getStoredDemoWorkers();
+    const created: Worker[] = [];
+
+    for (let i = 0; i < workers.length; i++) {
+      const w = workers[i];
+      const newWorker: Worker = normalizeWorker({
+        ...w,
+        id: 'worker-' + (Date.now() + i) + '-' + Math.random().toString(36).substring(2, 6),
+        tenantId,
+        status: w.status || 'ACTIVE',
+        createdAt: now,
+        updatedAt: now
+      });
+      created.push(newWorker);
+    }
+
+    setStoredDemoWorkers([...created, ...current]);
+    return created.map(w => w.id);
+  },
+
   updateWorker: async (workerId: string, data: Partial<Worker>) => {
+    // If worker is being reactivated (status changing to ACTIVE), check cap guard
+    if (data.status === 'ACTIVE') {
+      const current = getStoredDemoWorkers();
+      const existing = current.find(w => w.id === workerId);
+      if (existing && existing.status !== 'ACTIVE') {
+        await employeeCapGuard.assertCanAddWorker(existing.tenantId, { ...existing, ...data }, 1);
+      }
+    }
+
     if (workerId.startsWith('worker-')) {
       const current = getStoredDemoWorkers();
       const updated = current.map(w => w.id === workerId ? { ...w, ...data, updatedAt: new Date().toISOString() } : w);
@@ -1193,7 +1245,7 @@ export const dbService = {
     }
   },
 
-  updateAdvanceStatus: async (advanceId: string, status: 'APPROVED' | 'PENDING' | 'REPAID'): Promise<void> => {
+  updateAdvanceStatus: async (advanceId: string, status: 'APPROVED' | 'PENDING' | 'REPAID' | 'REJECTED'): Promise<void> => {
     try {
       const demoList = getStoredDemoAdvances();
       const idx = demoList.findIndex(a => a.id === advanceId);
@@ -1205,6 +1257,24 @@ export const dbService = {
       await updateDoc(doc(db, "advances", advanceId), { status, repaid: status === 'REPAID' });
     } catch (e) {
       console.warn("updateAdvanceStatus fallback:", e);
+    }
+  },
+
+  updateAdvanceRecord: async (advance: Advance): Promise<void> => {
+    try {
+      const demoList = getStoredDemoAdvances();
+      const idx = demoList.findIndex(a => a.id === advance.id);
+      if (idx >= 0) {
+        demoList[idx] = { ...advance };
+        setStoredDemoAdvances(demoList);
+      } else {
+        setStoredDemoAdvances([advance, ...demoList]);
+      }
+      if (advance.tenantId !== 'demo-tenant-id') {
+        await setDoc(doc(db, "advances", advance.id), advance, { merge: true });
+      }
+    } catch (e) {
+      console.warn("updateAdvanceRecord fallback:", e);
     }
   },
 
@@ -1572,6 +1642,11 @@ export const dbService = {
   },
 
   savePayroll: async (payroll: MonthlyPayroll) => {
+    // API-Level Entitlement Check: Gated features return HTTP 403 / throw structured EntitlementError
+    if (payroll.tenantId) {
+      await entitlementService.assertEntitlement(payroll.tenantId, 'ADVANCED_PAYROLL');
+    }
+
     if (payroll.tenantId === 'demo-tenant-id') {
       try {
         const key = `demo_payrolls_${payroll.month}`;

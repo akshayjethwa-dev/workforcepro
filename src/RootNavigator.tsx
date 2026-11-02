@@ -132,6 +132,7 @@ export const RootNavigator: React.FC = () => {
         initialData={workerToEdit}
         onBack={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
         onSuccess={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
+        onNavigateToBilling={() => setCurrentScreen('BILLING')}
       />
     );
   }
@@ -153,6 +154,7 @@ export const RootNavigator: React.FC = () => {
         return <WorkersScreen 
                   onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
                   onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
+                  onNavigateToBilling={() => setCurrentScreen('BILLING')}
                />;
       case 'ID_CARDS': 
         return isEntitled('DIGITAL_ID_CARDS') 
@@ -163,7 +165,10 @@ export const RootNavigator: React.FC = () => {
           ? <PayrollScreen /> 
           : <UpgradeRequiredView featureKey="ADVANCED_PAYROLL" onNavigate={setCurrentScreen} />;
       case 'ATTENDANCE': return <AttendanceScreen />;
-      case 'ROSTER': return <RosterScreen />;
+      case 'ROSTER': 
+        return isEntitled('REGULATE_PUNCH') 
+          ? <RosterScreen /> 
+          : <UpgradeRequiredView featureKey="REGULATE_PUNCH" onNavigate={setCurrentScreen} />;
       case 'DAILY_LOGS': return <DailyWageScreen />;
       case 'TEAM': return <TeamScreen />;
       case 'SETTINGS': return <SettingsScreen onNavigate={setCurrentScreen} />;

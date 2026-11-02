@@ -1,4 +1,4 @@
-import { InboxItem, InboxAuditEntry, InboxUrgency, InboxActionType, UserProfile, Role, Worker, Punch, AttendanceRecord, Advance } from '../types/index';
+import { InboxItem, InboxAuditEntry, InboxUrgency, InboxActionType, UserProfile, Role, Worker, Punch, AttendanceRecord, Advance, EwaTimelineStage, EwaDetails } from '../types/index';
 import { dbService } from './db';
 import { conflictService } from './conflictService';
 import { syncService } from './syncService';
@@ -241,25 +241,58 @@ export class InboxService {
       for (const adv of advances) {
         if (adv.status === 'PENDING' && !items.some(i => i.id === `db-adv-${adv.id}`)) {
           const w = workers.find(x => x.id === adv.workerId);
+          const isEwa = Boolean(adv.isEwa);
+          const ewaDetails = adv.ewaDetails;
+          const isFnF = Boolean(w?.dateOfExit || ewaDetails?.isFnFSettlement);
+          const refCode = adv.id.slice(-6).toUpperCase();
+
+          const title = isEwa 
+            ? `EWA Withdrawal: ₹${adv.amount.toLocaleString()}`
+            : `Advance Request: ₹${adv.amount}`;
+
+          const description = isEwa
+            ? (isFnF 
+                ? `[Full & Final Settlement] EWA withdrawal of ₹${adv.amount} (${adv.reason || 'Earned wage access'})`
+                : `Earned Wage Access withdrawal request of ₹${adv.amount} (${adv.reason || 'Earned wage access'})`)
+            : (adv.reason || 'Cash advance requested');
+
+          const currentAccrual = ewaDetails?.netAccruedBalance ?? (adv.amount * 2);
+          const remainingAccrual = Math.max(0, currentAccrual - adv.amount);
+
+          const deductionLineItem = isFnF
+            ? `Full & Final Settlement: EWA Recovery (${adv.date}) [Ref: ${refCode}]`
+            : `Earned Wage Access (${adv.date}) [Ref: ${refCode}]`;
+
           items.unshift({
             id: `db-adv-${adv.id}`,
             tenantId,
             branchId: w?.branchId,
             actionType: 'ADVANCE_APPROVAL',
-            urgency: adv.amount > 2000 ? 'HIGH' : adv.amount > 500 ? 'NORMAL' : 'LOW',
+            urgency: isEwa ? (adv.amount > 2000 ? 'HIGH' : 'NORMAL') : (adv.amount > 2000 ? 'HIGH' : adv.amount > 500 ? 'NORMAL' : 'LOW'),
             status: 'PENDING',
             workerId: adv.workerId,
             workerName: adv.workerName || w?.name || 'Worker',
             workerPhone: w?.phone,
             workerDesignation: w?.designation,
-            title: `Advance Request: ₹${adv.amount}`,
-            description: adv.reason || 'Cash advance requested',
+            title,
+            description,
             timestamp: adv.date ? new Date(adv.date).toISOString() : new Date().toISOString(),
             amount: adv.amount,
-            isLowRisk: adv.amount <= 500,
+            isLowRisk: !isEwa && adv.amount <= 500,
             details: {
               advance: adv,
-              reason: adv.reason
+              reason: adv.reason,
+              isEwa,
+              ewaDetails,
+              accruedBalance: currentAccrual,
+              payrollImpact: {
+                currentNetAccrual: currentAccrual,
+                withdrawalAmount: adv.amount,
+                remainingAccrual,
+                estimatedUpcomingPayslipNet: remainingAccrual,
+                deductionLineItem,
+                isFnF
+              }
             }
           });
         }
@@ -397,7 +430,44 @@ export class InboxService {
     // If it's linked to an advance or conflict, reflect in the underlying service
     if (targetItem.actionType === 'ADVANCE_APPROVAL' && targetItem.details?.advance) {
       try {
-        await dbService.updateAdvanceStatus(targetItem.details.advance.id, action === 'APPROVE' ? 'APPROVED' : 'REPAID');
+        const adv = targetItem.details.advance;
+        if (adv.isEwa) {
+          const newStage: EwaTimelineStage = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+          const currentTimeline = adv.ewaDetails?.timelineHistory || [];
+          const updatedDetails: EwaDetails = {
+            ...(adv.ewaDetails || {
+              grossEarnedAccrued: targetItem.details.accruedBalance || adv.amount * 2,
+              statutoryDeductionsEstimate: 0,
+              existingAdvancesDeduction: 0,
+              netAccruedBalance: targetItem.details.accruedBalance || adv.amount * 2,
+              maxAllowedAmount: adv.amount * 2,
+              requestedAmount: adv.amount,
+              feeAmount: 19,
+              netDisbursalAmount: Math.max(0, adv.amount - 19),
+              timelineStage: newStage,
+              timelineHistory: []
+            }),
+            timelineStage: newStage,
+            timelineHistory: [
+              ...currentTimeline,
+              {
+                stage: newStage,
+                timestamp: nowIso,
+                actor: resolvedBy,
+                notes: notes || `One-tap ${action.toLowerCase()} via Action Inbox`
+              }
+            ]
+          };
+          const updatedAdv: Advance = {
+            ...adv,
+            status: action === 'APPROVE' ? 'APPROVED' as const : 'REJECTED' as const,
+            repaid: false,
+            ewaDetails: updatedDetails
+          };
+          await dbService.updateAdvanceRecord(updatedAdv);
+        } else {
+          await dbService.updateAdvanceStatus(targetItem.details.advance.id, action === 'APPROVE' ? 'APPROVED' : 'REPAID');
+        }
       } catch (e) {
         console.warn('DB advance status update error:', e);
       }
@@ -415,6 +485,19 @@ export class InboxService {
     }
 
     return targetItem;
+  }
+
+  public async createCustomItem(tenantId: string, item: InboxItem): Promise<InboxItem> {
+    const items = this.getStoredItems(tenantId);
+    // Don't duplicate if already present
+    const existingIdx = items.findIndex(i => i.id === item.id);
+    if (existingIdx >= 0) {
+      items[existingIdx] = item;
+    } else {
+      items.unshift(item);
+    }
+    this.saveStoredItems(tenantId, items);
+    return item;
   }
 
   public async bulkApproveLowRisk(

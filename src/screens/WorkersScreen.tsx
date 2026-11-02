@@ -1,27 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save, Lock, 
-  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter
+  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { Worker, OrgSettings } from '../types/index';
+import { Worker, OrgSettings, Advance, AttendanceRecord } from '../types/index';
+import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
+import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
+import { BulkImportModal } from '../components/BulkImportModal';
+import { employeeCapGuard, EmployeeCapExceededError } from '../services/employeeCapGuard';
+import { WorkerEwaModal } from '../components/WorkerEwaModal';
 
 interface Props {
   onAddWorker: () => void;
   onEditWorker: (worker: Worker) => void;
+  onNavigateToBilling?: () => void;
 }
 
-export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) => {
+export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNavigateToBilling }) => {
   const { profile, limits } = useAuth();
   const { toast } = useToast();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [settings, setSettings] = useState<OrgSettings | null>(null);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  const [ewaModalWorker, setEwaModalWorker] = useState<Worker | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
   const [loading, setLoading] = useState(true);
+
+  // Cap Enforcement Modals
+  const [showPaywall, setShowPaywall] = useState<boolean>(false);
+  const [paywallError, setPaywallError] = useState<any>(null);
+  const [showBulkImport, setShowBulkImport] = useState<boolean>(false);
   
   // State for deletion modal
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
@@ -43,12 +57,16 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     const tenantId = profile?.tenantId;
     if (tenantId) {
       try {
-        const [workersData, settingsData] = await Promise.all([
+        const [workersData, settingsData, attendanceData, advancesData] = await Promise.all([
             dbService.getWorkers(tenantId),
-            dbService.getOrgSettings(tenantId)
+            dbService.getOrgSettings(tenantId),
+            dbService.getAttendanceHistory(tenantId),
+            dbService.getAdvances(tenantId)
         ]);
         setWorkers(workersData);
         setSettings(settingsData);
+        setAttendanceRecords(attendanceData);
+        setAdvances(advancesData);
       } catch (error) {
         console.error("Failed to load workers data", error);
         toast.error("Failed to load workers directory");
@@ -79,12 +97,20 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
     }
   };
 
-  const handleAddWorkerClick = () => {
-    if (limits && workers.length >= limits.maxWorkers) {
-        toast.error(`Plan limit reached (${limits.maxWorkers} workers). Please upgrade in Billing.`);
-        return;
+  const handleAddWorkerClick = async () => {
+    const tenantId = profile?.tenantId || 'demo-tenant-id';
+    try {
+      // Pre-flight check against authoritative server-side cap guard
+      await employeeCapGuard.assertCanAddWorker(tenantId, undefined, 1);
+      onAddWorker();
+    } catch (err: any) {
+      if (err instanceof EmployeeCapExceededError || err?.code === 'EMPLOYEE_CAP_EXCEEDED') {
+        setPaywallError(err);
+        setShowPaywall(true);
+      } else {
+        toast.error(err.message || 'Cannot add worker');
+      }
     }
-    onAddWorker();
   };
 
   // Quick Action Logic for Advances
@@ -170,14 +196,30 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
           </div>
         </div>
 
-        <button 
-          onClick={handleAddWorkerClick}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs transition-all active:scale-95 shrink-0 self-start sm:self-auto"
-        >
-          <Plus size={16} />
-          <span>Add New Worker</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button 
+            onClick={() => setShowBulkImport(true)}
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-xs shadow-xs transition-all active:scale-95"
+            title="Import workers in bulk via CSV"
+          >
+            <Upload size={15} />
+            <span>Bulk CSV Import</span>
+          </button>
+          <button 
+            onClick={handleAddWorkerClick}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs transition-all active:scale-95 shrink-0"
+          >
+            <Plus size={16} />
+            <span>Add New Worker</span>
+          </button>
+        </div>
       </div>
+
+      {/* PERSISTENT EMPLOYEE CAP BANNER (SOFT CAP WARNING & HARD CAP PAYWALL) */}
+      <EmployeeCapBanner 
+        tenantId={profile?.tenantId || 'demo-tenant-id'} 
+        onNavigateToBilling={onNavigateToBilling || (() => {})} 
+      />
 
       {/* FILTER & SEARCH ROW */}
       <div className="flex flex-col sm:flex-row gap-2.5">
@@ -336,18 +378,26 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
                   </div>
                 </div>
 
-                {/* BOTTOM ACTION: Kharchi / Advance */}
-                <div className="mt-4 pt-3 border-t border-slate-100">
+                {/* BOTTOM ACTIONS: EWA Accrued Wages + Kharchi / Advance */}
+                <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
+                  <button 
+                    onClick={() => setEwaModalWorker(worker)}
+                    className="py-2 px-2.5 rounded-xl text-xs font-bold transition-all active:scale-98 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs cursor-pointer"
+                    title="Real-time Accrued Wage Balance & EWA Withdrawal"
+                  >
+                    <IndianRupee size={13} className="text-emerald-700" />
+                    <span>EWA Access</span>
+                  </button>
+
                   <button 
                     onClick={() => handleOpenAdvance(worker)}
-                    className={`w-full py-2 px-3 rounded-xl text-xs font-semibold transition-all active:scale-98 flex items-center justify-center gap-1.5 ${
+                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition-all active:scale-98 flex items-center justify-center gap-1 ${
                       limits?.allowancesAndDeductionsEnabled 
-                        ? 'bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200' 
+                        ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 cursor-pointer' 
                         : 'bg-slate-50 text-slate-400 border border-slate-200 cursor-not-allowed'
                     }`}
                   >
-                    <IndianRupee size={14} />
-                    <span>Issue Advance (Kharchi)</span>
+                    <span>Kharchi</span>
                   </button>
                 </div>
 
@@ -510,6 +560,45 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker }) =>
             </div>
           </div>
         </div>
+      )}
+
+      {/* HARD CAP UPGRADE PAYWALL */}
+      <UpgradePaywallModal
+        isOpen={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        onNavigateToBilling={() => {
+          setShowPaywall(false);
+          if (onNavigateToBilling) onNavigateToBilling();
+        }}
+        errorPayload={paywallError}
+      />
+
+      {/* BULK CSV WORKER IMPORT */}
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        onSuccess={() => {
+          loadWorkersAndSettings();
+        }}
+        onPaywallTrigger={(err) => {
+          setPaywallError(err);
+          setShowPaywall(true);
+        }}
+      />
+
+      {/* EARNED WAGE ACCESS (EWA) MODAL */}
+      {ewaModalWorker && profile?.tenantId && settings && (
+        <WorkerEwaModal
+          isOpen={Boolean(ewaModalWorker)}
+          onClose={() => setEwaModalWorker(null)}
+          worker={ewaModalWorker}
+          tenantId={profile.tenantId}
+          attendanceRecords={attendanceRecords}
+          advances={advances}
+          orgSettings={settings}
+          onAdvanceCreated={(newAdv) => setAdvances(prev => [...prev, newAdv])}
+        />
       )}
 
     </div>

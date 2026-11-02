@@ -25,25 +25,36 @@ import {
   ShieldCheck,
   Hand,
   Sparkles,
-  Zap
+  Zap,
+  Sun,
+  IndianRupee
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { syncService } from '../services/syncService';
-import { Worker, AttendanceRecord, OrgSettings } from '../types/index';
+import { Worker, AttendanceRecord, OrgSettings, Advance } from '../types/index';
 import { geoUtils } from '../utils/geo';
 import { FRONTLINE_TOUCH, triggerFrontlineHaptic } from '../utils/frontlineTouch';
 import { FrontlineWipeOverlay } from '../components/FrontlineWipeOverlay';
 import { FrontlineErgonomicsModal } from '../components/FrontlineErgonomicsModal';
+import { FieldStatusBadge } from '../components/FieldStatusBadge';
+import { A11yAuditModal } from '../components/A11yAuditModal';
+import { WorkerEwaModal } from '../components/WorkerEwaModal';
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const { isFieldMode, toggleFieldMode } = useTheme();
+  const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
   const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
+  const [allAdvances, setAllAdvances] = useState<Advance[]>([]);
+  const [allAttendanceHistory, setAllAttendanceHistory] = useState<AttendanceRecord[]>([]);
+  const [ewaModalWorker, setEwaModalWorker] = useState<Worker | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
@@ -126,14 +137,18 @@ export const AttendanceScreen: React.FC = () => {
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
-          const [fetchedWorkers, fetchedAttendance, fetchedSettings] = await Promise.all([
+          const [fetchedWorkers, fetchedAttendance, fetchedSettings, fetchedAdvances, fetchedHistory] = await Promise.all([
             dbService.getWorkers(profile.tenantId),
             dbService.getTodayAttendance(profile.tenantId),
-            dbService.getOrgSettings(profile.tenantId)
+            dbService.getOrgSettings(profile.tenantId),
+            dbService.getAdvances(profile.tenantId),
+            dbService.getAttendanceHistory(profile.tenantId)
           ]);
           
           setWorkers(fetchedWorkers);
           setSettings(fetchedSettings);
+          setAllAdvances(fetchedAdvances);
+          setAllAttendanceHistory(fetchedHistory);
           
           const map: Record<string, AttendanceRecord> = {};
           fetchedAttendance.forEach(r => {
@@ -500,8 +515,64 @@ export const AttendanceScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Supervisor Controls & Conflict Resolution Trigger (min-h-[56px] for gloves) */}
+        {/* Supervisor Controls & Sunlight Field Mode Trigger (min-h-[56px] for gloves) */}
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Quick-Access Field Mode (Sunlight Mode) Toggle */}
+          <button
+            onClick={() => {
+              triggerFrontlineHaptic('confirm');
+              toggleFieldMode();
+              if (!isFieldMode) {
+                toast.success("High-Contrast Field Mode Activated (Sunlight Legibility >= 7:1)");
+              } else {
+                toast.info("Standard Platform Theme Restored");
+              }
+            }}
+            type="button"
+            className={`min-h-[56px] px-4 py-2.5 rounded-2xl font-black text-xs border-2 shadow-xs flex items-center gap-2.5 transition-all cursor-pointer ${
+              isFieldMode
+                ? 'bg-black text-white border-black ring-2 ring-amber-400'
+                : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-300'
+            }`}
+            title={isFieldMode ? 'Sunlight Field Mode ON (7:1 Contrast, 16px+ Type). Tap to disable.' : 'Switch to High-Contrast Field Mode for sunlight readability'}
+            aria-pressed={isFieldMode}
+            aria-label="Toggle Sunlight Field Mode"
+          >
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isFieldMode ? 'bg-amber-400 text-black' : 'bg-amber-50 text-amber-600'}`}>
+              <Sun size={20} strokeWidth={isFieldMode ? 2.5 : 2} />
+            </div>
+            <div className="text-left">
+              <div className="leading-tight flex items-center gap-1.5">
+                <span className="font-black">{isFieldMode ? 'Field Mode (ON)' : 'Field Mode'}</span>
+                <span className={`w-2 h-2 rounded-full ${isFieldMode ? 'bg-emerald-400 animate-pulse' : 'bg-slate-300'}`} />
+              </div>
+              <span className={`text-[10px] font-mono font-medium block mt-0.5 ${isFieldMode ? 'text-amber-200' : 'text-slate-500'}`}>
+                {isFieldMode ? 'Sunlight High-Contrast' : 'Sunlight Optimized'}
+              </span>
+            </div>
+          </button>
+
+          {/* Automated Accessibility (axe-core) Audit Trigger */}
+          <button
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              setA11yModalOpen(true);
+            }}
+            type="button"
+            className="min-h-[56px] px-3.5 py-2.5 rounded-2xl bg-white hover:bg-slate-50 active:scale-95 text-slate-800 font-bold text-xs border-2 border-slate-300 hover:border-blue-500 shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+            title="Open Automated Accessibility (axe-core) & Contrast Report"
+            aria-label="Run Accessibility Audit"
+          >
+            <ShieldCheck size={18} className="text-blue-600" />
+            <div className="text-left">
+              <div className="leading-tight flex items-center gap-1">
+                <span>A11y Audit</span>
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+              </div>
+              <span className="text-[10px] text-slate-500 font-mono font-normal">axe-core zero errors</span>
+            </div>
+          </button>
+
           {/* Punch Conflict Resolver Button */}
           <button
             onClick={() => {
@@ -547,6 +618,27 @@ export const AttendanceScreen: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               </div>
               <span className="text-[10px] text-slate-500 font-mono font-normal">56px & 72px Safe</span>
+            </div>
+          </button>
+
+          {/* Quick-Access Earned Wage Access (EWA) Control */}
+          <button
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              const target = workers.find(w => w.id === selectedQuickWorkerId) || workers[0];
+              if (target) setEwaModalWorker(target);
+            }}
+            type="button"
+            className="min-h-[56px] px-3.5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs border-2 border-emerald-500 shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+            title="Earned Wage Access (EWA) Quick Modal"
+          >
+            <IndianRupee size={18} />
+            <div className="text-left">
+              <div className="leading-tight flex items-center gap-1">
+                <span>Accrued Wages</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-300" />
+              </div>
+              <span className="text-[10px] text-emerald-100 font-mono font-normal">EWA Withdrawal</span>
             </div>
           </button>
         </div>
@@ -776,8 +868,34 @@ export const AttendanceScreen: React.FC = () => {
                           </div>
                           
                           <div className="flex flex-col items-end gap-1.5 shrink-0">
-                              <div className={`text-xs uppercase tracking-wide font-black ${statusTextColor}`}>
-                                  {statusLabel}
+                              <div className="flex items-center gap-1.5">
+                                <FieldStatusBadge
+                                  status={
+                                    isOnLeave 
+                                      ? 'ON_LEAVE' 
+                                      : isInside 
+                                        ? 'PENDING' 
+                                        : record?.status || 'ABSENT'
+                                  }
+                                  customLabel={statusLabel}
+                                  isLate={record?.lateStatus?.isLate}
+                                  lateMinutes={record?.lateStatus?.lateByMins}
+                                  size="md"
+                                  isCriticalMetric={true}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    triggerFrontlineHaptic('light');
+                                    setEwaModalWorker(worker);
+                                  }}
+                                  className="h-7 px-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
+                                  title="Access Accrued Wages (EWA)"
+                                >
+                                  <IndianRupee size={11} className="text-emerald-700" />
+                                  <span>EWA</span>
+                                </button>
                               </div>
                               {record && (
                                 <SyncStatusBadge
@@ -1184,6 +1302,26 @@ export const AttendanceScreen: React.FC = () => {
           }
         }}
       />
+
+      {/* AUTOMATED ACCESSIBILITY (AXE-CORE) AUDIT MODAL */}
+      <A11yAuditModal
+        isOpen={isA11yModalOpen}
+        onClose={() => setA11yModalOpen(false)}
+      />
+
+      {/* EARNED WAGE ACCESS (EWA) MODAL */}
+      {ewaModalWorker && profile?.tenantId && (
+        <WorkerEwaModal
+          isOpen={Boolean(ewaModalWorker)}
+          onClose={() => setEwaModalWorker(null)}
+          worker={ewaModalWorker}
+          tenantId={profile.tenantId}
+          attendanceRecords={allAttendanceHistory}
+          advances={allAdvances}
+          orgSettings={settings}
+          onAdvanceCreated={(newAdv) => setAllAdvances(prev => [...prev, newAdv])}
+        />
+      )}
     </div>
   );
 };

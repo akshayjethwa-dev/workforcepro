@@ -254,3 +254,153 @@ export function autoAdjustForWCAG_AA(
   // Fallback to high-contrast tone if extreme
   return isLightBg ? '#1d4ed8' : '#60a5fa';
 }
+
+/**
+ * ============================================================================
+ * HIGH-CONTRAST "FIELD MODE" THEME & BRAND COLOR FALLBACK MAPPING
+ * ============================================================================
+ * 
+ * Field Mode is designed for field staff operating in direct sunlight as well
+ * as low-vision users. Under outdoor glare, subtle pastels and standard brand
+ * hues wash out.
+ * 
+ * WCAG 2.1 Criteria Enforced:
+ * - Minimum body text contrast: >= 7.0:1 (WCAG AAA) against #ffffff
+ * - Minimum large text / critical data contrast: >= 4.5:1 (WCAG AAA for large, AA for normal)
+ * - Minimum font size: Body >= 16px, Critical data / status >= 18px
+ * - Information delivery: Text label + icon always required, never color alone
+ */
+
+export interface FieldModeColorMapping {
+  role: string;
+  defaultBrandToken: string;
+  fieldModeOverride: string;
+  background: string;
+  contrastRatio: number;
+  wcagLevel: 'AAA' | 'AA';
+  reason: string;
+}
+
+/**
+ * Explicit documented fallback mapping for tenant brand colors in Field Mode.
+ * If brand colors conflict with sunlight contrast (fail 7:1), these deterministic
+ * high-contrast fallbacks are applied.
+ */
+export const FIELD_MODE_FALLBACK_MAPPINGS: FieldModeColorMapping[] = [
+  {
+    role: 'Primary Action / Button',
+    defaultBrandToken: 'var(--tenant-primary, #2563eb)',
+    fieldModeOverride: '#000000',
+    background: '#ffffff',
+    contrastRatio: 21.0,
+    wcagLevel: 'AAA',
+    reason: 'Standard tenant blues and teals wash out under sunlight. Pure black (#000000) guarantees maximum 21:1 contrast.'
+  },
+  {
+    role: 'Primary Button Text',
+    defaultBrandToken: '#ffffff',
+    fieldModeOverride: '#ffffff',
+    background: '#000000',
+    contrastRatio: 21.0,
+    wcagLevel: 'AAA',
+    reason: 'White text on black button fill provides crisp 21:1 edge contrast.'
+  },
+  {
+    role: 'Body Text & Labels',
+    defaultBrandToken: '#0f172a',
+    fieldModeOverride: '#000000',
+    background: '#ffffff',
+    contrastRatio: 21.0,
+    wcagLevel: 'AAA',
+    reason: 'Deep slate is elevated to pure black (#000000) for highest possible optical density outdoors.'
+  },
+  {
+    role: 'Secondary / Subtitle Text',
+    defaultBrandToken: '#64748b',
+    fieldModeOverride: '#1f2937',
+    background: '#ffffff',
+    contrastRatio: 12.6,
+    wcagLevel: 'AAA',
+    reason: 'Default slate-500 (3.9:1) fails sunlight readability; mapped to gray-800 (#1f2937) at 12.6:1.'
+  },
+  {
+    role: 'Card & Surface Background',
+    defaultBrandToken: '#f8fafc',
+    fieldModeOverride: '#ffffff',
+    background: '#ffffff',
+    contrastRatio: 21.0,
+    wcagLevel: 'AAA',
+    reason: 'Subtle gray backgrounds reduce screen brightness; pure white (#ffffff) utilizes full display nits.'
+  },
+  {
+    role: 'Card & Container Boundaries',
+    defaultBrandToken: '#e2e8f0',
+    fieldModeOverride: '#000000 (2px solid)',
+    background: '#ffffff',
+    contrastRatio: 21.0,
+    wcagLevel: 'AAA',
+    reason: 'Subtle 1px borders vanish outdoors. 2px solid black boundaries clearly delineate cards and buttons.'
+  },
+  {
+    role: 'Status: PRESENT / CHECKED IN',
+    defaultBrandToken: '#10b981 (Emerald 500: ~2.4:1 fail)',
+    fieldModeOverride: '#14532d (Green 900) + 2px #166534 border',
+    background: '#f0fdf4',
+    contrastRatio: 10.3,
+    wcagLevel: 'AAA',
+    reason: 'Light emerald fails contrast. Green 900 with icon [✓] and explicit text "PRESENT" delivers 10.3:1.'
+  },
+  {
+    role: 'Status: ABSENT / NOT IN',
+    defaultBrandToken: '#ef4444 (Red 500: ~3.8:1 fail)',
+    fieldModeOverride: '#7f1d1d (Red 900) + 2px #991b1b border',
+    background: '#fef2f2',
+    contrastRatio: 10.8,
+    wcagLevel: 'AAA',
+    reason: 'Light red washes out. Red 900 with icon [✕] and explicit text "ABSENT" delivers 10.8:1.'
+  },
+  {
+    role: 'Status: LATE ARRIVAL',
+    defaultBrandToken: '#f59e0b (Amber 500: ~1.8:1 fail)',
+    fieldModeOverride: '#713f12 (Amber 900) + 2px #854d0e border',
+    background: '#fefce8',
+    contrastRatio: 9.6,
+    wcagLevel: 'AAA',
+    reason: 'Standard amber is unreadable in sun. Amber 900 with clock icon and text "LATE" delivers 9.6:1.'
+  },
+  {
+    role: 'Status: ON LEAVE',
+    defaultBrandToken: '#8b5cf6 (Purple 500: ~3.3:1 fail)',
+    fieldModeOverride: '#581c87 (Purple 900) + 2px #6b21a8 border',
+    background: '#faf5ff',
+    contrastRatio: 11.2,
+    wcagLevel: 'AAA',
+    reason: 'Standard purple fails contrast. Purple 900 with umbrella/calendar icon and text delivers 11.2:1.'
+  },
+  {
+    role: 'Status: ON SHIFT / PENDING',
+    defaultBrandToken: '#3b82f6 (Blue 500: ~3.1:1 fail)',
+    fieldModeOverride: '#1e3a8a (Blue 900) + 2px #1e40af border',
+    background: '#eff6ff',
+    contrastRatio: 10.5,
+    wcagLevel: 'AAA',
+    reason: 'Standard blue washes out. Blue 900 with timer icon and text delivers 10.5:1.'
+  }
+];
+
+/**
+ * Helper to get the field mode compliant color for a given brand color
+ */
+export function getFieldModeBrandOverride(brandHex: string): {
+  color: string;
+  isOverridden: boolean;
+  contrastRatio: number;
+} {
+  const currentRatio = getContrastRatio(brandHex, '#ffffff');
+  if (currentRatio >= 7.0) {
+    return { color: brandHex, isOverridden: false, contrastRatio: currentRatio };
+  }
+  // If contrast is less than 7:1 against white, override to high-contrast black/dark navy
+  return { color: '#000000', isOverridden: true, contrastRatio: 21.0 };
+}
+

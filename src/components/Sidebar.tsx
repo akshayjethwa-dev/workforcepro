@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, 
   History, FileText, CreditCard, PieChart, IdCard, Headset, FileCheck, 
-  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox, Calendar
+  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox, Calendar, Lock
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -88,13 +88,17 @@ export const Sidebar: React.FC<Props> = ({
     label, 
     screen, 
     onClick,
-    badge
+    badge,
+    locked = false,
+    availableOn
   }: { 
     icon: any; 
     label: string; 
     screen?: ScreenName; 
     onClick?: () => void;
     badge?: string;
+    locked?: boolean;
+    availableOn?: string;
   }) => {
     const isActive = screen ? currentScreen === screen : false;
     return (
@@ -116,12 +120,20 @@ export const Sidebar: React.FC<Props> = ({
         <div className={`p-1.5 rounded-lg mr-2.5 shrink-0 transition-colors ${
           isActive 
             ? 'bg-white/15 text-white' 
-            : 'text-slate-500 group-hover:text-slate-900'
+            : locked
+              ? 'text-amber-600 bg-amber-50 group-hover:bg-amber-100/70'
+              : 'text-slate-500 group-hover:text-slate-900'
         }`}>
           <Icon size={16} />
         </div>
         <span className="flex-1 text-left truncate">{label}</span>
-        {badge && (
+        {locked && availableOn && (
+          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/80 font-medium">
+            <Lock size={10} className="text-amber-600 shrink-0" />
+            <span>Available on {availableOn}</span>
+          </span>
+        )}
+        {!locked && badge && (
           <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
             isActive ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
           }`}>
@@ -214,12 +226,20 @@ export const Sidebar: React.FC<Props> = ({
               />
               <NavItem icon={Users} label="Workers Directory" screen="WORKERS" />
               <NavItem icon={Clock} label="Attendance Logs" screen="ATTENDANCE" />
-              <NavItem icon={Calendar} label="Shift Roster & Publish" screen="ROSTER" />
+              <NavItem 
+                icon={Calendar} 
+                label="Shift Roster & Publish" 
+                screen="ROSTER" 
+                locked={!isEntitled('REGULATE_PUNCH')}
+                availableOn="Starter"
+              />
               <NavItem 
                 icon={Camera} 
                 label="Kiosk Scanner" 
                 screen="ATTENDANCE_KIOSK" 
-                badge={!isEntitled('KIOSK_MODE') ? 'Upgrade' : 'Live'} 
+                locked={!isEntitled('KIOSK_MODE')}
+                availableOn="Starter"
+                badge={isEntitled('KIOSK_MODE') ? 'Live' : undefined} 
               />
             </div>
 
@@ -231,14 +251,16 @@ export const Sidebar: React.FC<Props> = ({
                 icon={IndianRupee} 
                 label="Monthly Payroll" 
                 screen="PAYROLL" 
-                badge={!isEntitled('ADVANCED_PAYROLL') ? 'Pro' : undefined}
+                locked={!isEntitled('ADVANCED_PAYROLL')}
+                availableOn="Pro"
               />
               <NavItem icon={History} label="Daily Wage Logs" screen="DAILY_LOGS" />
               <NavItem 
                 icon={IdCard} 
                 label="Digital ID Cards" 
                 screen="ID_CARDS" 
-                badge={!isEntitled('DIGITAL_ID_CARDS') ? 'Starter' : undefined}
+                locked={!isEntitled('DIGITAL_ID_CARDS')}
+                availableOn="Starter"
               />
               <NavItem icon={PieChart} label="Factory Reports" screen="REPORTS" />
             </div>

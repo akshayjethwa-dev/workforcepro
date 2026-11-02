@@ -32,6 +32,9 @@ interface ThemeContextType {
   previewBranding: BrandingConfig | null;
   setPreviewBranding: (branding: BrandingConfig | null) => void;
   resetBrandingToDefault: () => void;
+  isFieldMode: boolean;
+  setFieldMode: (enabled: boolean) => void;
+  toggleFieldMode: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
@@ -41,29 +44,50 @@ const ThemeContext = createContext<ThemeContextType>({
   previewBranding: null,
   setPreviewBranding: () => {},
   resetBrandingToDefault: () => {},
+  isFieldMode: false,
+  setFieldMode: () => {},
+  toggleFieldMode: () => {},
 });
 
 export const useTheme = () => useContext(ThemeContext);
 
 /**
  * Applies runtime theme styling (CSS variables, dynamic favicon, theme-color meta, and title)
+ * If field mode is enabled, overrides brand colors with sunlight-optimized high-contrast palette (>= 7:1)
  */
-function applyRuntimeTheme(theme: BrandingConfig) {
+function applyRuntimeTheme(theme: BrandingConfig, isFieldMode: boolean = false) {
   if (typeof document === 'undefined') return;
 
   const root = document.documentElement;
 
-  // 1. Inject root CSS variables for Tailwind and Capacitor/PWA themeing
-  const primary: string = theme.primaryColor || DEFAULT_PLATFORM_BRANDING.primaryColor;
-  const background: string = theme.backgroundColor || DEFAULT_PLATFORM_BRANDING.backgroundColor;
-  const link: string = theme.linkColor || primary;
-  const text: string = theme.textColor || DEFAULT_PLATFORM_BRANDING.textColor;
+  if (isFieldMode) {
+    root.classList.add('field-mode');
+    root.setAttribute('data-theme', 'field-mode');
 
-  root.style.setProperty('--tenant-primary', primary);
-  root.style.setProperty('--color-brand', primary);
-  root.style.setProperty('--tenant-bg', background);
-  root.style.setProperty('--tenant-link', link);
-  root.style.setProperty('--tenant-text', text);
+    // Field Mode: High-contrast pure white (#ffffff) with pure black (#000000) text (21:1 contrast)
+    root.style.setProperty('--tenant-primary', '#000000');
+    root.style.setProperty('--color-brand', '#000000');
+    root.style.setProperty('--tenant-bg', '#ffffff');
+    root.style.setProperty('--tenant-link', '#000000');
+    root.style.setProperty('--tenant-text', '#000000');
+    root.style.setProperty('--field-border', '#000000');
+  } else {
+    root.classList.remove('field-mode');
+    root.removeAttribute('data-theme');
+
+    // 1. Inject root CSS variables for standard Tailwind and Capacitor/PWA theming
+    const primary: string = theme.primaryColor || DEFAULT_PLATFORM_BRANDING.primaryColor;
+    const background: string = theme.backgroundColor || DEFAULT_PLATFORM_BRANDING.backgroundColor;
+    const link: string = theme.linkColor || primary;
+    const text: string = theme.textColor || DEFAULT_PLATFORM_BRANDING.textColor;
+
+    root.style.setProperty('--tenant-primary', primary);
+    root.style.setProperty('--color-brand', primary);
+    root.style.setProperty('--tenant-bg', background);
+    root.style.setProperty('--tenant-link', link);
+    root.style.setProperty('--tenant-text', text);
+    root.style.setProperty('--field-border', '#e2e8f0');
+  }
 
   // 2. Update favicon if custom favicon provided; fallback to standard app icon
   const faviconEl = document.querySelector("link[rel*='icon']") as HTMLLinkElement | null;
@@ -77,9 +101,11 @@ function applyRuntimeTheme(theme: BrandingConfig) {
 
   // 3. Update document title
   const appTitle = theme.appName?.trim() || DEFAULT_PLATFORM_BRANDING.appName;
-  document.title = appTitle === DEFAULT_PLATFORM_BRANDING.appName
-    ? 'WorkForce Pro | Industrial Workforce Management'
-    : `${appTitle} | Industrial Workforce Platform`;
+  document.title = isFieldMode
+    ? `[Field Mode] ${appTitle} | Industrial Workforce Platform`
+    : appTitle === DEFAULT_PLATFORM_BRANDING.appName
+      ? 'WorkForce Pro | Industrial Workforce Management'
+      : `${appTitle} | Industrial Workforce Platform`;
 
   // 4. Update meta theme-color for PWA & mobile browser status bar
   let metaTheme = document.querySelector("meta[name='theme-color']") as HTMLMetaElement | null;
@@ -88,13 +114,35 @@ function applyRuntimeTheme(theme: BrandingConfig) {
     metaTheme.name = 'theme-color';
     document.head.appendChild(metaTheme);
   }
-  metaTheme.content = primary;
+  metaTheme.content = isFieldMode ? '#000000' : (theme.primaryColor || DEFAULT_PLATFORM_BRANDING.primaryColor);
 }
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { profile } = useAuth();
   const [branding, setBranding] = useState<BrandingConfig | null>(null);
   const [previewBranding, setPreviewBranding] = useState<BrandingConfig | null>(null);
+  
+  // High-Contrast Sunlight Field Mode state (persisted across sessions)
+  const [isFieldMode, setIsFieldModeState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('workforce_field_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const setFieldMode = useCallback((enabled: boolean) => {
+    setIsFieldModeState(enabled);
+    try {
+      localStorage.setItem('workforce_field_mode', enabled ? 'true' : 'false');
+    } catch (e) {
+      console.warn("Could not persist field mode in localStorage", e);
+    }
+  }, []);
+
+  const toggleFieldMode = useCallback(() => {
+    setFieldMode(!isFieldMode);
+  }, [isFieldMode, setFieldMode]);
 
   // Calculate effective branding: active preview overrides stored branding, fallback to platform defaults
   const effectiveBranding = useMemo(() => {
@@ -126,13 +174,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const resetBrandingToDefault = useCallback(() => {
     setPreviewBranding(null);
     setBranding(null);
-    applyRuntimeTheme(DEFAULT_PLATFORM_BRANDING);
-  }, []);
+    applyRuntimeTheme(DEFAULT_PLATFORM_BRANDING, isFieldMode);
+  }, [isFieldMode]);
 
   // Sync theme changes to DOM
   useEffect(() => {
-    applyRuntimeTheme(effectiveBranding);
-  }, [effectiveBranding]);
+    applyRuntimeTheme(effectiveBranding, isFieldMode);
+  }, [effectiveBranding, isFieldMode]);
 
   // Listen to local window broadcast updates (for instant reactivity without network delay)
   useEffect(() => {
@@ -222,6 +270,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         previewBranding,
         setPreviewBranding,
         resetBrandingToDefault,
+        isFieldMode,
+        setFieldMode,
+        toggleFieldMode,
       }}
     >
       {children}

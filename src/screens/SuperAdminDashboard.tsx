@@ -12,6 +12,7 @@ import { crossTenantVerification, CrossTenantVerificationReport } from '../servi
 import { tenantSecurityService, SecurityAlert, TenantAuditLogEntry, SoftDeletedTenant } from '../services/tenantSecurityService';
 import { WhiteLabelModal } from '../components/WhiteLabelModal';
 import { FeatureFlagsManager } from '../components/FeatureFlagsManager';
+import { PlanCatalogManager } from '../components/PlanCatalogManager';
 
 export const SuperAdminDashboard: React.FC = () => {
   const { profile, impersonateTenant } = useAuth();
@@ -261,7 +262,7 @@ export const SuperAdminDashboard: React.FC = () => {
                         onClick={() => setActiveTab('PLANS')}
                         className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center ${activeTab === 'PLANS' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
                     >
-                        <Settings size={14} className="mr-1.5" /> Plan Limits
+                        <Crown size={14} className="mr-1.5 text-amber-400" /> Plan Catalog &amp; Pricing
                     </button>
                     <button 
                         onClick={() => setActiveTab('FLAGS')}
@@ -510,161 +511,19 @@ export const SuperAdminDashboard: React.FC = () => {
           </div>
       )}
 
-      {/* --- TAB CONTENT: GLOBAL PLANS CONFIGURATION --- */}
-      {activeTab === 'PLANS' && globalPlans && (
-          <div className="max-w-6xl mx-auto -mt-16 px-4">
-             <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden mb-6">
-                 
-                 <div className="p-4 md:p-5 border-b border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white">
-                     <div>
-                         <h2 className="font-bold text-gray-800 text-lg">Global Pricing & Limits</h2>
-                         <p className="text-xs text-gray-500 mt-1">Changes here instantly affect all users on these plans upon refresh.</p>
-                     </div>
-                     <button 
-                         onClick={saveGlobalPlans}
-                         disabled={savingPlans}
-                         className="w-full md:w-auto flex justify-center items-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg font-bold text-sm transition-colors shadow-md disabled:opacity-50"
-                     >
-                         <Save size={16} className="mr-2" />
-                         {savingPlans ? 'Saving...' : 'Save All Changes'}
-                     </button>
-                 </div>
-
-                 <div className="p-4 md:p-6 bg-gray-50/30">
-                     <div className="flex flex-col space-y-6">
-                         {(Object.keys(globalPlans) as SubscriptionTier[]).map((tier) => (
-                             <div key={tier} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                                 {/* Plan Header */}
-                                 <div className="bg-slate-50 border-b border-gray-200 px-5 py-3 flex items-center">
-                                     <Crown size={18} className="text-indigo-500 mr-2" />
-                                     <h3 className="font-bold text-indigo-900 text-lg tracking-wide">{tier}</h3>
-                                 </div>
-                                 
-                                 <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                     
-                                     {/* Numeric Limits */}
-                                     <div className="space-y-4">
-                                         <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-2">Capacity Limits</h4>
-                                         
-                                         <div>
-                                             <label className="text-sm font-medium text-gray-700 block mb-1">Max Workers</label>
-                                             <input 
-                                                 type="number" 
-                                                 value={globalPlans[tier].maxWorkers}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'maxWorkers', parseInt(e.target.value) || 0)}
-                                                 className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                                             />
-                                         </div>
-                                         <div>
-                                             <label className="text-sm font-medium text-gray-700 block mb-1">Max Managers</label>
-                                             <input 
-                                                 type="number" 
-                                                 value={globalPlans[tier].maxManagers}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'maxManagers', parseInt(e.target.value) || 0)}
-                                                 className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                                             />
-                                         </div>
-                                         <div>
-                                             <label className="text-sm font-medium text-gray-700 block mb-1">Max Shifts</label>
-                                             <input 
-                                                 type="number" 
-                                                 value={globalPlans[tier].maxShifts}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'maxShifts', parseInt(e.target.value) || 0)}
-                                                 className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                                             />
-                                         </div>
-                                     </div>
-
-                                     {/* Feature Toggles Column 1 */}
-                                     <div className="space-y-3.5">
-                                         <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-2">Core Features</h4>
-                                         
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].kioskEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'kioskEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Kiosk Mode</span>
-                                         </label>
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].geofencingEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'geofencingEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Geofencing</span>
-                                         </label>
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].multiBranchEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'multiBranchEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Multi-Branch Setup</span>
-                                         </label>
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].livenessDetectionEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'livenessDetectionEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Face Liveness Detection</span>
-                                         </label>
-                                     </div>
-
-                                     {/* Feature Toggles Column 2 */}
-                                     <div className="space-y-3.5">
-                                         <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-2">Advanced Modules</h4>
-                                         
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].advancedLeavesEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'advancedLeavesEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Advanced Leaves (CL/SL/PL)</span>
-                                         </label>
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].allowancesAndDeductionsEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'allowancesAndDeductionsEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Allowances & Deductions</span>
-                                         </label>
-                                         <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].statutoryComplianceEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'statutoryComplianceEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Statutory Compliance (PF/ESIC)</span>
-                                         </label>
-                                          <label className="flex items-center space-x-3 cursor-pointer">
-                                             <input 
-                                                 type="checkbox" 
-                                                 checked={globalPlans[tier].bulkImportEnabled}
-                                                 onChange={e => handleGlobalPlanEdit(tier, 'bulkImportEnabled', e.target.checked)}
-                                                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                             />
-                                             <span className="text-sm font-medium text-gray-700">Excel Bulk Import</span>
-                                         </label>
-                                     </div>
-                                 </div>
-                             </div>
-                         ))}
-                     </div>
-                 </div>
-             </div>
-          </div>
+      {/* --- TAB CONTENT: PLAN CATALOG & PRICING ENGINE --- */}
+      {activeTab === 'PLANS' && (
+        <PlanCatalogManager
+          actor={{
+            uid: profile?.uid || 'super-admin-root',
+            email: profile?.email || 'admin@workforcepro.in',
+            role: profile?.role || 'SUPER_ADMIN'
+          }}
+          globalPlans={globalPlans}
+          onSaveGlobalPlans={saveGlobalPlans}
+          onGlobalPlanEdit={handleGlobalPlanEdit}
+          savingGlobalPlans={savingPlans}
+        />
       )}
 
       {/* --- TAB CONTENT: TENANT-ISOLATED DATA ACCESS & SECURITY --- */}

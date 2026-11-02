@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Home, Users, CalendarCheck, IndianRupee, Menu, Bell, X, Zap, 
   ChevronRight, Building2, Shield, LogOut, Camera, MoreHorizontal,
-  CheckCircle2, AlertTriangle, ArrowRight, Sparkles, ExternalLink, Search, BookOpen
+  CheckCircle2, AlertTriangle, ArrowRight, Sparkles, ExternalLink, Search, BookOpen,
+  Sun, ShieldCheck
 } from 'lucide-react';
 import { ScreenName, AppNotification } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,6 +11,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { SetupGuideModal } from './SetupGuideModal';
+import { A11yAuditModal } from './A11yAuditModal';
 import { dbService } from '../services/db';
 
 const FREE_TRIAL_DAYS = 7; 
@@ -46,12 +48,13 @@ const SCREEN_METADATA: Record<ScreenName, { title: string; category: string }> =
 
 export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavigate, onLogout }) => {
   const { profile, tenantPlan, trialDaysLeft, isImpersonating, stopImpersonating, limits } = useAuth();
-  const { effectiveBranding } = useTheme();
+  const { effectiveBranding, isFieldMode, toggleFieldMode } = useTheme();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isGuideOpen, setGuideOpen] = useState(false);
+  const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
@@ -285,6 +288,36 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   <Search size={19} />
                 </button>
 
+                {/* High-Contrast Sunlight Field Mode Quick Switch */}
+                <button
+                  type="button"
+                  onClick={toggleFieldMode}
+                  className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer min-h-[38px] ${
+                    isFieldMode
+                      ? 'bg-black text-white border-black ring-2 ring-amber-400 shadow-md font-black'
+                      : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300 shadow-2xs'
+                  }`}
+                  title={isFieldMode ? 'Sunlight Field Mode ON (Contrast >= 7:1) - Tap to revert' : 'Enable High-Contrast Field Mode (Optimized for Sunlight)'}
+                  aria-pressed={isFieldMode}
+                  aria-label="Toggle High-Contrast Field Mode"
+                >
+                  <Sun size={15} className={isFieldMode ? "text-amber-300" : "text-amber-600"} />
+                  <span className="hidden sm:inline">
+                    {isFieldMode ? 'Field Mode (ON)' : 'Field Mode'}
+                  </span>
+                </button>
+
+                {/* Accessibility & axe-core Contrast Audit Dialog Trigger */}
+                <button
+                  type="button"
+                  onClick={() => setA11yModalOpen(true)}
+                  className="hidden md:inline-flex p-2 text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 rounded-xl transition-colors min-w-[38px] min-h-[38px] items-center justify-center border border-slate-300 shadow-2xs"
+                  title="Run Automated Accessibility (axe-core) Audit"
+                  aria-label="Accessibility and contrast audit"
+                >
+                  <ShieldCheck size={18} className="text-emerald-700" />
+                </button>
+
                 {/* Interactive Setup & Flow Guide button */}
                 {!isSuperAdmin && (
                   <button
@@ -436,6 +469,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         onNavigate={onNavigate}
         onLogout={onLogout}
         onOpenGuide={() => setGuideOpen(true)}
+        onOpenA11yAudit={() => setA11yModalOpen(true)}
       />
 
       {/* Interactive Factory Setup & Flow Guide Modal */}
@@ -443,6 +477,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         isOpen={isGuideOpen}
         onClose={() => setGuideOpen(false)}
         onNavigate={onNavigate}
+      />
+
+      {/* Automated Accessibility (axe-core) Audit Modal */}
+      <A11yAuditModal
+        isOpen={isA11yModalOpen}
+        onClose={() => setA11yModalOpen(false)}
       />
     </div>
   );

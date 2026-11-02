@@ -124,6 +124,7 @@ export interface BrandingConfig {
 
 export * from './featureFlags';
 export * from './scheduleValidation';
+export * from './planCatalog';
 
 export interface TenantProfile {
   id: string;
@@ -158,6 +159,23 @@ export interface Branch {
   location?: { lat: number; lng: number; radius: number; address?: string };
 }
 
+export interface EwaConfig {
+  enabled: boolean;
+  maxWithdrawalPercentage: number; // default 50%
+  coolingPeriodDays?: number; // e.g. 1-3 days between requests
+  payrollLockWindowDays?: number; // e.g. days 27-31 of month
+  payrollResumeDate?: string; // e.g. "1st of next month"
+  isPayrollLocked?: boolean;
+  provider?: {
+    isExternal: boolean;
+    providerName: string; // e.g. "KarmaLife / Northern Arc"
+    lenderPartnerName?: string; // e.g. "Northern Arc Capital (RBI Registered NBFC)"
+    feeType: 'FLAT' | 'PERCENTAGE';
+    feeValue: number; // e.g. 19 for ₹19 or 1.5 for 1.5%
+    disclosureNote?: string;
+  };
+}
+
 export interface OrgSettings {
   shifts: ShiftConfig[];
   enableBreakTracking: boolean; 
@@ -181,6 +199,7 @@ export interface OrgSettings {
   enableSandwichRule?: boolean;
   holidayPayMultiplier?: number; 
   leavePolicy?: LeavePolicy;
+  ewaConfig?: EwaConfig;
 }
 
 export interface Punch {
@@ -482,6 +501,37 @@ export interface MonthlyPayroll {
   status: 'DRAFT' | 'LOCKED' | 'PAID';
 }
 
+export type EwaTimelineStage = 'REQUESTED' | 'APPROVED' | 'DISBURSED' | 'ADJUSTED_IN_PAYSLIP' | 'REJECTED';
+
+export interface EwaDetails {
+  grossEarnedAccrued: number;
+  statutoryDeductionsEstimate: number;
+  existingAdvancesDeduction: number;
+  netAccruedBalance: number;
+  maxAllowedAmount: number;
+  requestedAmount: number;
+  feeAmount: number;
+  netDisbursalAmount: number;
+  providerName?: string;
+  lenderPartnerName?: string;
+  salaryRevisionDate?: string;
+  preRevisionRate?: number;
+  currentRate?: number;
+  preRevisionDays?: number;
+  postRevisionDays?: number;
+  timelineStage: EwaTimelineStage;
+  timelineHistory: {
+    stage: EwaTimelineStage;
+    timestamp: string;
+    actor: string;
+    notes?: string;
+  }[];
+  isFnFSettlement?: boolean;
+  fnfExitDate?: string;
+  payrollMonth?: string;
+  payrollAdjustedDate?: string;
+}
+
 export interface Advance {
   id: string;
   tenantId: string;
@@ -490,8 +540,10 @@ export interface Advance {
   amount: number;
   date: string;
   reason: string;
-  status?: 'APPROVED' | 'PENDING' | 'REPAID';
+  status?: 'APPROVED' | 'PENDING' | 'REPAID' | 'REJECTED';
   repaid?: boolean;
+  isEwa?: boolean;
+  ewaDetails?: EwaDetails;
 }
 
 export interface AppNotification {
@@ -672,6 +724,17 @@ export interface InboxItem {
     lateMinutes?: number;
     reason?: string;
     leaveType?: string;
+    isEwa?: boolean;
+    ewaDetails?: EwaDetails;
+    accruedBalance?: number;
+    payrollImpact?: {
+      currentNetAccrual: number;
+      withdrawalAmount: number;
+      remainingAccrual: number;
+      estimatedUpcomingPayslipNet: number;
+      deductionLineItem: string;
+      isFnF?: boolean;
+    };
   };
   resolution?: {
     action: 'APPROVE' | 'REJECT' | 'RESOLVE';

@@ -4,10 +4,11 @@ import {
   Search, Users, CalendarCheck, IndianRupee, Settings, Shield, 
   Building2, CreditCard, PieChart, IdCard, UserPlus, Camera, 
   HelpCircle, ArrowRight, CornerDownLeft, Sparkles, X, History,
-  Layers, BookOpen, FileSpreadsheet, Inbox
+  Layers, BookOpen, FileSpreadsheet, Inbox, Sun, ShieldCheck
 } from 'lucide-react';
 import { ScreenName, Role } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface Props {
   isOpen: boolean;
@@ -15,6 +16,7 @@ interface Props {
   onNavigate: (screen: ScreenName) => void;
   onLogout: () => void;
   onOpenGuide?: () => void;
+  onOpenA11yAudit?: () => void;
 }
 
 interface CommandItem {
@@ -27,8 +29,16 @@ interface CommandItem {
   keywords?: string[];
 }
 
-export const CommandPalette: React.FC<Props> = ({ isOpen, onClose, onNavigate, onLogout, onOpenGuide }) => {
+export const CommandPalette: React.FC<Props> = ({ 
+  isOpen, 
+  onClose, 
+  onNavigate, 
+  onLogout, 
+  onOpenGuide,
+  onOpenA11yAudit 
+}) => {
   const { profile, loginDemo } = useAuth();
+  const { isFieldMode, toggleFieldMode } = useTheme();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -42,6 +52,30 @@ export const CommandPalette: React.FC<Props> = ({ isOpen, onClose, onNavigate, o
   }, [isOpen]);
 
   const items: CommandItem[] = [
+    {
+      id: 'act-field-mode',
+      title: isFieldMode ? 'Disable Field Mode (Revert to Standard Theme)' : 'Enable High-Contrast Field Mode (Sunlight & Low Vision)',
+      category: 'Actions',
+      icon: Sun,
+      shortcut: 'F M',
+      action: () => {
+        toggleFieldMode();
+        onClose();
+      },
+      keywords: ['sunlight', 'field mode', 'contrast', 'high contrast', 'outdoor', 'vision', 'accessibility', 'bright', 'glare']
+    },
+    {
+      id: 'act-a11y-audit',
+      title: 'Run Automated Accessibility Audit (axe-core)',
+      category: 'Actions',
+      icon: ShieldCheck,
+      shortcut: 'A 1 1 Y',
+      action: () => {
+        if (onOpenA11yAudit) onOpenA11yAudit();
+        onClose();
+      },
+      keywords: ['axe', 'wcag', 'audit', 'contrast', 'accessibility', 'check', 'violations']
+    },
     {
       id: 'act-setup-guide',
       title: 'Factory Setup & Operational Guide',

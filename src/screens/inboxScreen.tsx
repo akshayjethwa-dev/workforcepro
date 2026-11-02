@@ -478,6 +478,56 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                           {item.description}
                         </p>
 
+                        {/* EWA Accrued-Wage & Payroll Impact Callout (AC requirement) */}
+                        {item.details?.isEwa && (
+                          <div className="mb-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[11px] font-extrabold text-emerald-900 uppercase tracking-wider flex items-center gap-1">
+                                <IndianRupee size={12} className="text-emerald-700" />
+                                <span>Earned Wage Access (EWA)</span>
+                              </span>
+                              {item.details.payrollImpact?.isFnF && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
+                                  Full & Final Settlement (FnF)
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                              <div className="p-2 bg-white rounded-lg border border-emerald-100">
+                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Requested</span>
+                                <span className="text-sm font-black text-emerald-800 font-mono">₹{item.amount?.toLocaleString()}</span>
+                              </div>
+                              <div className="p-2 bg-white rounded-lg border border-emerald-100">
+                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Accrued Balance</span>
+                                <span className="text-sm font-black text-slate-800 font-mono">₹{item.details.accruedBalance?.toLocaleString()}</span>
+                              </div>
+                              <div className="p-2 bg-white rounded-lg border border-emerald-100 col-span-2 sm:col-span-1">
+                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Remaining Accrual</span>
+                                <span className="text-sm font-black text-blue-700 font-mono">₹{item.details.payrollImpact?.remainingAccrual?.toLocaleString()}</span>
+                              </div>
+                            </div>
+
+                            {item.details.payrollImpact?.deductionLineItem && (
+                              <div className="text-[11px] text-emerald-900 bg-white/70 p-2 rounded-lg border border-emerald-100">
+                                <strong className="text-slate-800">Payroll Impact:</strong> Deducted as distinct line item{' '}
+                                <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[10px]">
+                                  {item.details.payrollImpact.deductionLineItem}
+                                </code>
+                              </div>
+                            )}
+
+                            {item.details.ewaDetails?.providerName && (
+                              <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                                <span>Disbursement Partner: <strong>{item.details.ewaDetails.providerName}</strong></span>
+                                {item.details.ewaDetails.feeAmount > 0 && (
+                                  <span>Partner Fee: ₹{item.details.ewaDetails.feeAmount}</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 font-medium">
                           <span className="flex items-center gap-1 text-slate-800 font-bold">
                             <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold">
@@ -742,6 +792,102 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                       <strong>Worker Note:</strong> {reviewingItem.details.reason}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Dedicated EWA Breakdown & 4-Stage Status Timeline */}
+              {reviewingItem.details?.isEwa && (
+                <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-emerald-950 font-black text-sm">
+                      <IndianRupee size={16} className="text-emerald-700" />
+                      <span>Earned Wage Access Financial Audit</span>
+                    </div>
+                    {reviewingItem.details.payrollImpact?.isFnF && (
+                      <span className="px-2 py-0.5 text-[10px] font-black uppercase rounded bg-rose-200 text-rose-900 border border-rose-300">
+                        FnF Settlement
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Financial Metrics Grid */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Requested Withdrawal</span>
+                      <span className="text-base font-black text-emerald-800 font-mono">₹{reviewingItem.amount?.toLocaleString()}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Net Accrued Balance</span>
+                      <span className="text-base font-black text-slate-900 font-mono">₹{reviewingItem.details.accruedBalance?.toLocaleString()}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Remaining Accrual</span>
+                      <span className="text-sm font-bold text-blue-700 font-mono">₹{reviewingItem.details.payrollImpact?.remainingAccrual?.toLocaleString()}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase block">Upcoming Payslip Impact</span>
+                      <span className="text-sm font-bold text-amber-800 font-mono">Itemized deduction</span>
+                    </div>
+                  </div>
+
+                  {/* Payroll Itemization Specification */}
+                  {reviewingItem.details.payrollImpact?.deductionLineItem && (
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-200 text-xs text-slate-700 space-y-1">
+                      <div className="text-[11px] font-bold text-slate-900">Payslip Deduction Line Item (Distinct, never opaque):</div>
+                      <code className="text-xs font-mono text-emerald-800 bg-emerald-50/80 px-2 py-1 rounded block border border-emerald-100">
+                        {reviewingItem.details.payrollImpact.deductionLineItem}
+                      </code>
+                    </div>
+                  )}
+
+                  {/* Regulatory / Partner Provider Notice */}
+                  {reviewingItem.details.ewaDetails?.providerName && (
+                    <div className="p-2.5 bg-slate-900 text-slate-200 rounded-lg text-xs space-y-1">
+                      <div className="text-[11px] font-bold text-emerald-400">Regulatory Partner Integration</div>
+                      <div className="text-[11px] text-slate-300">
+                        Disbursed through <strong>{reviewingItem.details.ewaDetails.providerName}</strong> via <em>{reviewingItem.details.ewaDetails.lenderPartnerName || 'Northern Arc Capital Ltd. (RBI Registered NBFC)'}</em>.
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Fee: ₹{reviewingItem.details.ewaDetails.feeAmount} • Net Disbursed: ₹{reviewingItem.details.ewaDetails.netDisbursalAmount}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 4-Step Status Timeline: Requested -> Approved -> Disbursed -> Adjusted in payslip */}
+                  <div className="space-y-2 pt-1">
+                    <div className="text-xs font-bold text-emerald-950 uppercase tracking-wider">
+                      Status Timeline
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5 text-center text-[10px]">
+                      {[
+                        { key: 'REQUESTED', label: 'Requested' },
+                        { key: 'APPROVED', label: 'Approved' },
+                        { key: 'DISBURSED', label: 'Disbursed' },
+                        { key: 'ADJUSTED_IN_PAYSLIP', label: 'In Payslip' }
+                      ].map((step, idx) => {
+                        const currentStage = reviewingItem.details?.ewaDetails?.timelineStage || 'REQUESTED';
+                        const stageOrder = ['REQUESTED', 'APPROVED', 'DISBURSED', 'ADJUSTED_IN_PAYSLIP'];
+                        const isCurrentOrPast = stageOrder.indexOf(currentStage) >= idx;
+                        const isCurrent = currentStage === step.key;
+
+                        return (
+                          <div
+                            key={step.key}
+                            className={`p-2 rounded-lg border font-bold transition-colors ${
+                              isCurrent
+                                ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                                : isCurrentOrPast
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-slate-100 text-slate-400 border-slate-200'
+                            }`}
+                          >
+                            <div className="text-xs mb-0.5">{idx + 1}</div>
+                            <div>{step.label}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               )}
 

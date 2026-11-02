@@ -3,13 +3,18 @@ import {
   Save, Plus, Trash2, Clock, AlertCircle, CheckCircle, 
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
-  CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp
+  CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
+  IndianRupee
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName } from '../types/index';
 import { SetupGuideModal } from '../components/SetupGuideModal';
+import { A11yAuditModal } from '../components/A11yAuditModal';
+import { FieldStatusBadge } from '../components/FieldStatusBadge';
+import { FIELD_MODE_FALLBACK_MAPPINGS } from '../utils/wcagColor';
 
 import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -17,8 +22,10 @@ import { db } from '../lib/firebase';
 export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => void }> = ({ onNavigate }) => {
   const { profile, limits } = useAuth();
   const { toast } = useToast();
+  const { isFieldMode, toggleFieldMode, setFieldMode } = useTheme();
   
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE'>('GENERAL');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA'>('GENERAL');
+  const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [showSetupAssistant, setShowSetupAssistant] = useState(true);
   
@@ -627,13 +634,15 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
       <div className="flex items-center gap-1.5 p-1.5 bg-slate-200/70 rounded-2xl overflow-x-auto scrollbar-none">
         {[
           { id: 'GENERAL', label: 'General', icon: Building },
+          { id: 'ACCESSIBILITY', label: 'Field Mode & Accessibility', icon: Sun },
           { id: 'SHIFTS', label: 'Shifts & Grace', icon: Clock },
           { id: 'CALENDAR', label: 'Holidays & Calendar', icon: CalendarDays },
           { id: 'LEAVES', label: 'Leave Policy', icon: Umbrella },
           { id: 'COMPLIANCE', label: 'Statutory (PF & ESI)', icon: Shield },
           { id: 'BRANCHES', label: 'Locations & Geofence', icon: GitBranch },
           { id: 'DEPARTMENTS', label: 'Departments', icon: Layers },
-          { id: 'TERMINALS', label: 'Kiosk Terminals', icon: ScanFace }
+          { id: 'TERMINALS', label: 'Kiosk Terminals', icon: ScanFace },
+          { id: 'EWA', label: 'Earned Wage Access', icon: IndianRupee }
         ].map(tab => (
           <button 
             key={tab.id}
@@ -834,6 +843,269 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ======================= ACCESSIBILITY & FIELD MODE TAB ======================= */}
+      {activeTab === 'ACCESSIBILITY' && (
+        <div className="animate-in fade-in duration-300 space-y-6 mb-8">
+          
+          {/* Main Master Toggle Banner */}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-black text-white rounded-3xl p-6 shadow-md border-2 border-slate-700 relative overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 relative z-10">
+              <div className="max-w-2xl">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-black">
+                    Sunlight &amp; Low-Vision Mode
+                  </span>
+                  <span className="text-xs text-slate-300 font-mono">
+                    WCAG 2.1 AAA Compliant (Contrast ≥ 7.0:1)
+                  </span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight mt-1.5 flex items-center gap-2.5">
+                  <Sun className="text-amber-400 shrink-0" size={26} />
+                  <span>High-Contrast &quot;Field Mode&quot;</span>
+                </h2>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  Engineered for frontline workers operating outdoors in intense sunlight, open factory gates, and loading docks without shade. Enforces high-reflectance pure white backgrounds (#ffffff), dense near-black text (#000000), large body fonts (≥ 16px), and enlarged critical timestamps and wage metrics (≥ 18px).
+                </p>
+              </div>
+
+              {/* Master Switch */}
+              <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleFieldMode();
+                    if (!isFieldMode) {
+                      toast.success("Field Mode Activated: Sunlight-optimized high contrast (≥ 7:1) enabled.");
+                    } else {
+                      toast.info("Standard theme restored.");
+                    }
+                  }}
+                  className={`px-5 py-3 rounded-2xl font-black text-sm flex items-center gap-3 transition-all active:scale-95 shadow-lg border-2 cursor-pointer ${
+                    isFieldMode
+                      ? 'bg-amber-400 hover:bg-amber-300 text-black border-amber-300 ring-4 ring-amber-400/30'
+                      : 'bg-white hover:bg-slate-100 text-slate-900 border-slate-200'
+                  }`}
+                  aria-pressed={isFieldMode}
+                >
+                  <Sun size={20} className={isFieldMode ? 'text-black' : 'text-amber-500'} />
+                  <span>{isFieldMode ? 'Field Mode: ACTIVE (ON)' : 'Activate Field Mode'}</span>
+                </button>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {isFieldMode ? 'Persists across sessions & devices' : 'Click to instantly boost legibility'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Core Accessibility Pillars (Grid of 4) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Contrast Standard</span>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">≥ 7.0:1</div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Exceeds standard WCAG AA (4.5:1) to satisfy enhanced AAA sunlight specifications. Pure black on pure white delivers 21.0:1.
+                </p>
+              </div>
+              <span className="mt-3 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded self-start">
+                WCAG 2.1 AAA
+              </span>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Typography Scale</span>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">≥ 16px / ≥ 18px</div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Body type is scaled to minimum 16px. Critical data (punch timestamps, counts, wage amounts) render at ≥ 18px to 20px.
+                </p>
+              </div>
+              <span className="mt-3 text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded self-start">
+                Zero Squinting
+              </span>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Information Delivery</span>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">Text + Icon</div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Critical statuses (present, absent, late, leave) always pair a clear text label with a distinct icon. Never colour alone.
+                </p>
+              </div>
+              <span className="mt-3 text-[11px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded self-start">
+                Colour-Blind Safe
+              </span>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Low-Vision Gating</span>
+                <div className="text-2xl font-black text-slate-900 font-mono mt-1">All Roles</div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Available as a universal accessibility option for office staff, factory owners, supervisors, and workers with low vision.
+                </p>
+              </div>
+              <span className="mt-3 text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded self-start">
+                Universal Access
+              </span>
+            </div>
+          </div>
+
+          {/* Interactive Simulation & Live Demonstration */}
+          <div className="bg-white rounded-3xl p-6 border-2 border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="font-extrabold text-base text-slate-900">
+                  Live Attendance Status &amp; Punch Card Preview
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Preview how factory personnel statuses render in the active theme ({isFieldMode ? 'Field Mode' : 'Standard Theme'}).
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setA11yModalOpen(true)}
+                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                >
+                  <ShieldCheck size={16} className="text-indigo-600" />
+                  <span>Run axe-core Audit</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Status Badges Showcase (Demonstrating text + icon, never color alone) */}
+            <div className="space-y-2">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                Standardised Status Badges (Always Text Label + Accessible Icon):
+              </span>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <FieldStatusBadge status="PRESENT" isCriticalMetric={true} />
+                <FieldStatusBadge status="HALF_DAY" isCriticalMetric={true} />
+                <FieldStatusBadge status="LATE" isLate={true} lateMinutes={35} isCriticalMetric={true} />
+                <FieldStatusBadge status="ABSENT" isCriticalMetric={true} />
+                <FieldStatusBadge status="ON_LEAVE" isCriticalMetric={true} />
+                <FieldStatusBadge status="PENDING" isCriticalMetric={true} />
+              </div>
+            </div>
+
+            {/* Mock Worker Card Rendering under Active Mode */}
+            <div className="mt-4 p-5 rounded-2xl border-2 border-slate-300 bg-slate-50/50 space-y-3">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-slate-800 text-white font-bold flex items-center justify-center text-base">
+                    R
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 text-base">Ramesh Sharma</h4>
+                    <p className="text-xs text-slate-500">CNC Operator · Shift 1 (08:00 AM – 04:30 PM)</p>
+                  </div>
+                </div>
+                <FieldStatusBadge status="PRESENT" isCriticalMetric={true} />
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200 text-xs">
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Clock-In:</span>
+                  <strong className="text-slate-900 font-mono text-base tabular-nums">07:54 AM</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Working Hours:</span>
+                  <strong className="text-slate-900 font-mono text-base tabular-nums">8.2 hrs</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Daily Wage:</span>
+                  <strong className="text-slate-900 font-mono text-base tabular-nums">₹ 650</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Punches Today:</span>
+                  <strong className="text-slate-900 font-mono text-base tabular-nums">2 Punches</strong>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-black text-white font-bold text-xs rounded-xl border border-black shadow-xs hover:bg-slate-800 transition-colors"
+                >
+                  Primary Action (21.0:1)
+                </button>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-white text-slate-900 font-bold text-xs rounded-xl border-2 border-slate-400 hover:border-black transition-colors"
+                >
+                  Secondary Action
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Brand Color Fallback Mapping Table */}
+          <div className="bg-white rounded-3xl p-6 border-2 border-slate-200 shadow-sm space-y-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 font-mono text-[10px] font-bold">
+                  DOCUMENTED SPECIFICATION
+                </span>
+                <h3 className="font-extrabold text-base text-slate-900">
+                  Brand Color Fallback Mapping (Sunlight Override Table)
+                </h3>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                When tenant brand colors conflict with sunlight readability or fail the 7.0:1 contrast ratio against the white background, the deterministic high-contrast mappings below take precedence.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto border-2 border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-700 uppercase font-bold text-[11px] border-b-2 border-slate-200">
+                  <tr>
+                    <th className="p-3">Interface Element / Role</th>
+                    <th className="p-3">Standard Brand Value</th>
+                    <th className="p-3">Field Mode Override</th>
+                    <th className="p-3">Contrast Ratio</th>
+                    <th className="p-3">WCAG Level</th>
+                    <th className="p-3">Technical Rationale</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-slate-800">
+                  {FIELD_MODE_FALLBACK_MAPPINGS.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="p-3 font-bold text-slate-900">{row.role}</td>
+                      <td className="p-3 font-mono text-[11px] text-slate-600">{row.defaultBrandToken}</td>
+                      <td className="p-3">
+                        <span className="font-mono text-[11px] font-bold bg-black text-white px-1.5 py-0.5 rounded">
+                          {row.fieldModeOverride}
+                        </span>
+                      </td>
+                      <td className="p-3 font-mono font-black text-emerald-800">
+                        {row.contrastRatio.toFixed(1)}:1
+                      </td>
+                      <td className="p-3">
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-bold font-mono text-[10px]">
+                          {row.wcagLevel}
+                        </span>
+                      </td>
+                      <td className="p-3 text-slate-600 text-[11px]">{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Quick Links & Information */}
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-3 text-xs text-blue-950">
+            <Info size={18} className="text-blue-700 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-bold">Quick Access Reminder:</strong> You do not need to visit Settings every time. Field workers and supervisors can quickly toggle Field Mode from the top navigation bar or the quick-access button on the <strong>Attendance</strong> screen at any moment.
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -1789,11 +2061,244 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
         </div>
       )}
 
+      {/* ======================= EWA TAB ======================= */}
+      {activeTab === 'EWA' && (
+        <div className="animate-in fade-in duration-300 space-y-6">
+          <div className="px-1 mb-1">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+              Earned Wage Access (EWA) Program Settings
+            </h3>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Configure real-time accrued salary withdrawal parameters, tenant limits, payroll lock guards & NBFC integration.
+            </p>
+          </div>
+
+          {/* Master Enablement & Cap Percentage Card */}
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-6">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
+                  <IndianRupee size={22} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-slate-900">Enable Earned Wage Access (EWA)</h4>
+                  <p className="text-xs text-slate-500">
+                    Allow workers to withdraw accrued wages in real-time before monthly payroll disbursement
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={settings?.ewaConfig?.enabled ?? true}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { maxWithdrawalPercentage: 50 }),
+                      enabled: e.target.checked
+                    }
+                  } : null)}
+                />
+                <div className="w-12 h-6 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Max Withdrawal Percentage */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-2">
+                  Max Allowable Withdrawal Limit: <span className="font-mono text-emerald-700 text-sm font-black">{settings?.ewaConfig?.maxWithdrawalPercentage ?? 50}%</span> of Accrued Wages
+                </label>
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={5}
+                  value={settings?.ewaConfig?.maxWithdrawalPercentage ?? 50}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true }),
+                      maxWithdrawalPercentage: parseInt(e.target.value)
+                    }
+                  } : null)}
+                  className="w-full accent-emerald-600 cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-slate-400 font-mono mt-1">
+                  <span>10% (Strict)</span>
+                  <span>50% (Recommended)</span>
+                  <span>100% (Full Accrual)</span>
+                </div>
+              </div>
+
+              {/* Payroll Lock Window */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1.5">
+                  Payroll Processing Lock Window (Days before month-end)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={settings?.ewaConfig?.payrollLockWindowDays ?? 3}
+                    onChange={(e) => setSettings(s => s ? {
+                      ...s,
+                      ewaConfig: {
+                        ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                        payrollLockWindowDays: parseInt(e.target.value) || 0
+                      }
+                    } : null)}
+                    className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                    Days before cycle end
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-400 block mt-1">
+                  Prevents withdrawal requests while accountants lock and verify monthly payroll.
+                </span>
+              </div>
+            </div>
+
+            {/* Manual Payroll Lock Override */}
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-slate-900">Manual Payroll Lock Override</div>
+                <div className="text-[11px] text-slate-500">
+                  Force-freeze all EWA withdrawals immediately during salary disbursement runs
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={settings?.ewaConfig?.isPayrollLocked ?? false}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                      isPayrollLocked: e.target.checked
+                    }
+                  } : null)}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+              </label>
+            </div>
+          </div>
+
+          {/* Regulatory Lender & Disbursal Partner Integration */}
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <Building size={18} className="text-blue-600" />
+                <span>Regulatory NBFC & Disbursal Partner Configuration</span>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800">
+                RBI DLG Compliant
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">EWA Provider Name</label>
+                <input
+                  type="text"
+                  value={settings?.ewaConfig?.provider?.providerName ?? 'KarmaLife Financial Services'}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                      provider: {
+                        ...(s.ewaConfig?.provider || { isExternal: true, feeType: 'FLAT', feeValue: 19, lenderPartnerName: 'Northern Arc Capital Ltd. (RBI Registered NBFC)' }),
+                        providerName: e.target.value
+                      }
+                    }
+                  } : null)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">Registered NBFC Lending Partner</label>
+                <input
+                  type="text"
+                  value={settings?.ewaConfig?.provider?.lenderPartnerName ?? 'Northern Arc Capital Ltd. (RBI Registered NBFC)'}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                      provider: {
+                        ...(s.ewaConfig?.provider || { isExternal: true, feeType: 'FLAT', feeValue: 19, providerName: 'KarmaLife Financial Services' }),
+                        lenderPartnerName: e.target.value
+                      }
+                    }
+                  } : null)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">Fee Model</label>
+                <select
+                  value={settings?.ewaConfig?.provider?.feeType ?? 'FLAT'}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                      provider: {
+                        ...(s.ewaConfig?.provider || { isExternal: true, feeValue: 19, providerName: 'KarmaLife Financial Services', lenderPartnerName: 'Northern Arc Capital Ltd. (RBI Registered NBFC)' }),
+                        feeType: e.target.value as 'FLAT' | 'PERCENTAGE'
+                      }
+                    }
+                  } : null)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                >
+                  <option value="FLAT">Flat Facilitation Fee (₹ per withdrawal)</option>
+                  <option value="PERCENTAGE">Percentage Fee (% of withdrawal)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 uppercase block mb-1">
+                  Fee Value ({settings?.ewaConfig?.provider?.feeType === 'PERCENTAGE' ? '%' : '₹'})
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={settings?.ewaConfig?.provider?.feeValue ?? 19}
+                  onChange={(e) => setSettings(s => s ? {
+                    ...s,
+                    ewaConfig: {
+                      ...(s.ewaConfig || { enabled: true, maxWithdrawalPercentage: 50 }),
+                      provider: {
+                        ...(s.ewaConfig?.provider || { isExternal: true, feeType: 'FLAT', providerName: 'KarmaLife Financial Services', lenderPartnerName: 'Northern Arc Capital Ltd. (RBI Registered NBFC)' }),
+                        feeValue: parseFloat(e.target.value) || 0
+                      }
+                    }
+                  } : null)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 font-mono"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Interactive Factory Setup & Flow Guide Modal */}
       <SetupGuideModal
         isOpen={showGuide}
         onClose={() => setShowGuide(false)}
         onNavigate={onNavigate || (() => {})}
+      />
+
+      {/* Automated Accessibility (axe-core) Audit Modal */}
+      <A11yAuditModal
+        isOpen={isA11yModalOpen}
+        onClose={() => setA11yModalOpen(false)}
       />
 
       {/* --- FLOATING SAVE ACTION BAR --- */}

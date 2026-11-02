@@ -14,17 +14,45 @@ import { SubscriptionTier, TenantProfile } from '../types/index';
 import { tenantSecurityService } from './tenantSecurityService';
 
 export class EntitlementError extends Error {
-  public readonly code = 'FEATURE_NOT_ENTITLED';
+  public readonly status = 403;
+  public readonly code = 'FEATURE_NOT_ENTITLED' as const;
+  public readonly feature: FeatureFlagKey;
   public readonly featureKey: FeatureFlagKey;
+  public readonly requiredPlan: SubscriptionTier | string;
+  public readonly upgradeUrl: string;
   public readonly tenantId: string;
   public readonly resolution: FeatureResolution;
 
-  constructor(featureKey: FeatureFlagKey, tenantId: string, resolution: FeatureResolution) {
-    super(`Access Denied: Tenant '${tenantId}' is not entitled to feature '${featureKey}'. [Resolution: ${resolution.source}]`);
+  constructor(
+    featureKey: FeatureFlagKey, 
+    tenantId: string, 
+    resolution: FeatureResolution,
+    requiredPlan?: string,
+    upgradeUrl?: string
+  ) {
+    const minTier = requiredPlan || ALL_FEATURE_FLAGS.find(f => f.key === featureKey)?.minRecommendedTier || 'PRO';
+    const link = upgradeUrl || '/billing';
+    super(`Access Denied (HTTP 403): Tenant '${tenantId}' is not entitled to feature '${featureKey}'. [Resolution: ${resolution.source}]. Required plan: ${minTier}. Upgrade at: ${link}`);
     this.name = 'EntitlementError';
+    this.status = 403;
+    this.code = 'FEATURE_NOT_ENTITLED';
+    this.feature = featureKey;
     this.featureKey = featureKey;
+    this.requiredPlan = minTier;
+    this.upgradeUrl = link;
     this.tenantId = tenantId;
     this.resolution = resolution;
+  }
+
+  toJSON() {
+    return {
+      status: 403,
+      code: 'FEATURE_NOT_ENTITLED' as const,
+      feature: this.feature,
+      requiredPlan: this.requiredPlan,
+      upgradeUrl: this.upgradeUrl,
+      message: this.message
+    };
   }
 }
 
@@ -130,7 +158,7 @@ export const entitlementService = {
   /**
    * Resolves a single feature flag with clear precedence hierarchy:
    * Level 3: Tenant-specific override (highest)
-   * Level 2: Plan-level override
+   * Level 2: Plan-level override / Active Pro Trial override
    * Level 1: Global default
    * Fallback: Fail-closed (false)
    */
@@ -138,11 +166,12 @@ export const entitlementService = {
     key: FeatureFlagKey,
     tenantOverrides: Partial<Record<FeatureFlagKey, boolean>> | undefined,
     planFlags: Record<FeatureFlagKey, boolean>,
-    globalFlags: Record<FeatureFlagKey, boolean>
+    globalFlags: Record<FeatureFlagKey, boolean>,
+    isTrialActive = false
   ): FeatureResolution => {
     const now = new Date().toISOString();
 
-    // 1. Check Level 3: Tenant-Specific Override
+    // 1. Check Level 3: Tenant-Specific Override (highest precedence)
     if (tenantOverrides && typeof tenantOverrides[key] === 'boolean') {
       return {
         key,
@@ -153,14 +182,16 @@ export const entitlementService = {
       };
     }
 
-    // 2. Check Level 2: Plan-Level Override
+    // 2. Check Level 2: Plan-Level Override / Active Pro Trial
     if (planFlags && typeof planFlags[key] === 'boolean') {
       return {
         key,
         enabled: planFlags[key],
-        source: 'PLAN_OVERRIDE',
+        source: isTrialActive ? 'TRIAL_OVERRIDE' : 'PLAN_OVERRIDE',
         resolvedAt: now,
-        reason: `Entitlement derived from tenant plan tier (${planFlags[key] ? 'INCLUDED' : 'NOT INCLUDED'}).`,
+        reason: isTrialActive
+          ? 'All Pro flags granted via active PRO trial override.'
+          : `Entitlement derived from tenant plan tier (${planFlags[key] ? 'INCLUDED' : 'NOT INCLUDED'}).`,
       };
     }
 
@@ -187,6 +218,7 @@ export const entitlementService = {
 
   /**
    * Full client-side cached resolution for a tenant with mid-cycle downgrade grace-period detection
+   * and automated trial expiration checks.
    */
   getTenantEntitlements: async (
     tenantId: string, 
@@ -213,7 +245,7 @@ export const entitlementService = {
       } catch {}
     }
 
-    // 2. Fetch dependencies safely (fail-closed if critical error)
+    // 2. Fetch dependencies safely (fail-closed if critical error or timeout)
     try {
       // Demo tenant bypass for realistic testing in dev environment
       if (tenantId === 'demo-tenant-id' || tenantId.startsWith('demo-')) {
@@ -253,13 +285,27 @@ export const entitlementService = {
       let tenantOverrides: Partial<Record<FeatureFlagKey, boolean>> | undefined = undefined;
       let pendingDowngrade: PendingDowngrade | null = null;
       let isInGracePeriod = false;
+      let isTrialActive = false;
 
       if (tenantSnap.exists()) {
         const tData = tenantSnap.data() as Partial<TenantProfile>;
         tenantPlan = tData.plan || fallbackPlan;
         tenantOverrides = tData.featureOverrides;
 
-        // Check for mid-cycle downgrade
+        // Trial Tenant Edge Case: All Pro flags granted during trial via TRIAL override that expires automatically
+        if (tenantPlan === 'TRIAL') {
+          const now = new Date();
+          const trialEnds = tData.trialEndsAt ? new Date(tData.trialEndsAt) : null;
+          if (trialEnds && now >= trialEnds) {
+            // Trial period has elapsed! Revert immediately to FREE tier
+            tenantPlan = 'FREE';
+            isTrialActive = false;
+          } else {
+            isTrialActive = true;
+          }
+        }
+
+        // Mid-Period Downgrade Edge Case: Features remain active until period end (Grace Period), then lock
         if (tData.pendingDowngrade) {
           const now = new Date();
           const effectiveDate = new Date(tData.pendingDowngrade.effectiveDate);
@@ -293,7 +339,8 @@ export const entitlementService = {
           def.key,
           tenantOverrides,
           tierFlags,
-          globalFlags
+          globalFlags,
+          isTrialActive
         );
       }
 
@@ -341,8 +388,9 @@ export const entitlementService = {
   },
 
   /**
-   * Programmatic API assertion: Throws EntitlementError if feature is not entitled
-   * Gated features MUST call this before executing sensitive operations (e.g. Form 16, white-label update, kiosk register)
+   * Programmatic API assertion: Throws structured EntitlementError (HTTP 403) if feature is not entitled.
+   * Gated features MUST call this before executing sensitive operations (e.g. Form 16, payroll, kiosk register).
+   * Enforces fail-closed: if resolution errors or times out (3000ms), access is denied immediately.
    */
   assertEntitlement: async (
     tenantId: string, 
@@ -354,39 +402,134 @@ export const entitlementService = {
       return true;
     }
 
-    const entitlements = await entitlementService.getTenantEntitlements(tenantId);
-    const resolution = entitlements.resolutions[featureKey];
+    try {
+      // Fail-closed timeout guard: max 3000ms resolution
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Entitlement resolution timed out after 3000ms (fail-closed)')), 3000)
+      );
 
-    if (!resolution || !resolution.enabled) {
-      // Log breach attempt to audit trail and security service
-      await tenantSecurityService.logTenantAccess({
-        tenantId,
-        userId: 'system-gating',
-        userEmail: 'system@workforce.internal',
-        userRole: callerRole || 'SYSTEM_GATING',
-        action: `GATED_FEATURE_ACCESS_DENIED:${featureKey}`,
-        resource: `features/${featureKey}`,
-        status: 'DENIED',
-        details: {
-          featureKey,
-          resolutionSource: resolution?.source || 'FAIL_CLOSED_FALLBACK',
-          tenantPlan: entitlements.plan,
-        }
-      });
+      const entitlements = await Promise.race([
+        entitlementService.getTenantEntitlements(tenantId),
+        timeoutPromise
+      ]);
 
+      const resolution = entitlements.resolutions[featureKey];
+
+      if (!resolution || !resolution.enabled) {
+        // Log breach attempt to audit trail and security service
+        await tenantSecurityService.logTenantAccess({
+          tenantId,
+          userId: 'system-gating',
+          userEmail: 'system@workforce.internal',
+          userRole: callerRole || 'SYSTEM_GATING',
+          action: `GATED_FEATURE_ACCESS_DENIED:${featureKey}`,
+          resource: `features/${featureKey}`,
+          status: 'DENIED',
+          details: {
+            featureKey,
+            resolutionSource: resolution?.source || 'FAIL_CLOSED_FALLBACK',
+            tenantPlan: entitlements.plan,
+          }
+        });
+
+        const featureDef = ALL_FEATURE_FLAGS.find(f => f.key === featureKey);
+        throw new EntitlementError(
+          featureKey, 
+          tenantId, 
+          resolution || {
+            key: featureKey,
+            enabled: false,
+            source: 'FAIL_CLOSED_FALLBACK',
+            resolvedAt: new Date().toISOString()
+          },
+          featureDef?.minRecommendedTier || 'PRO',
+          '/billing'
+        );
+      }
+
+      return true;
+    } catch (err: any) {
+      if (err instanceof EntitlementError) {
+        throw err;
+      }
+      // Fail-closed safety: on resolution error or timeout, strictly deny access
+      console.warn('Fail-closed denial due to resolution failure or timeout:', err);
+      const featureDef = ALL_FEATURE_FLAGS.find(f => f.key === featureKey);
       throw new EntitlementError(
-        featureKey, 
-        tenantId, 
-        resolution || {
+        featureKey,
+        tenantId,
+        {
           key: featureKey,
           enabled: false,
           source: 'FAIL_CLOSED_FALLBACK',
-          resolvedAt: new Date().toISOString()
-        }
+          resolvedAt: new Date().toISOString(),
+          reason: `Fail-closed access denial: ${err?.message || 'Resolution error'}`
+        },
+        featureDef?.minRecommendedTier || 'PRO',
+        '/billing'
       );
     }
+  },
 
-    return true;
+  /**
+   * Safe API check returning structured HTTP 403 response payload without throwing
+   */
+  checkApiEntitlement: async (
+    tenantId: string,
+    featureKey: FeatureFlagKey,
+    callerRole?: string
+  ): Promise<{ 
+    entitled: boolean; 
+    error?: { 
+      status: 403; 
+      code: 'FEATURE_NOT_ENTITLED'; 
+      feature: string; 
+      requiredPlan: string; 
+      upgradeUrl: string; 
+      message: string 
+    } 
+  }> => {
+    try {
+      await entitlementService.assertEntitlement(tenantId, featureKey, callerRole);
+      return { entitled: true };
+    } catch (err: any) {
+      if (err instanceof EntitlementError) {
+        return {
+          entitled: false,
+          error: err.toJSON() as any
+        };
+      }
+      const featureDef = ALL_FEATURE_FLAGS.find(f => f.key === featureKey);
+      return {
+        entitled: false,
+        error: {
+          status: 403,
+          code: 'FEATURE_NOT_ENTITLED',
+          feature: featureKey,
+          requiredPlan: featureDef?.minRecommendedTier || 'PRO',
+          upgradeUrl: '/billing',
+          message: err?.message || 'Feature not entitled'
+        }
+      };
+    }
+  },
+
+  /**
+   * Mid-period upgrade helper: features unlock immediately on payment confirmation without waiting for period end
+   */
+  handlePlanUpgrade: async (tenantId: string, newPlan: SubscriptionTier): Promise<void> => {
+    try {
+      const tenantRef = doc(db, 'tenants', tenantId);
+      await updateDoc(tenantRef, {
+        plan: newPlan,
+        pendingDowngrade: deleteField(),
+        updatedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('handlePlanUpgrade DB write warning:', e);
+    }
+    // Invalidate cache immediately so new features are unlocked instantly in current session
+    entitlementService.invalidateCache(tenantId);
   },
 
   /**

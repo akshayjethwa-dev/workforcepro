@@ -6,6 +6,7 @@ import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
 import { attendanceLogic } from '../services/attendanceLogic';
 import { Worker, AttendanceRecord, Punch, OrgSettings, Advance } from '../types/index';
+import { WorkerEwaModal } from '../components/WorkerEwaModal';
 
 export const WorkerHistoryScreen: React.FC = () => {
   const { profile, limits } = useAuth();
@@ -17,6 +18,7 @@ export const WorkerHistoryScreen: React.FC = () => {
   const [monthAdvances, setMonthAdvances] = useState<Advance[]>([]);
   const [settings, setSettings] = useState<OrgSettings>({ shifts: [], enableBreakTracking: false });
   const [loading, setLoading] = useState(true);
+  const [isEwaModalOpen, setIsEwaModalOpen] = useState(false);
 
   // Expanded View State for Punches
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
@@ -361,8 +363,36 @@ export const WorkerHistoryScreen: React.FC = () => {
       </div>
 
       {/* CONTENT */}
-      {selectedWorkerId && monthData ? (
+      {selectedWorkerId && monthData && selectedWorker ? (
         <>
+            {/* Real-time Earned Wage Access (EWA) Banner */}
+            <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs mb-6">
+                <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                        <IndianRupee size={22} />
+                    </div>
+                    <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm sm:text-base font-black text-slate-900 tracking-tight">Earned Wage Access (EWA)</span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-200 text-emerald-900 border border-emerald-300">
+                                Live Balance
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                            Real-time earned salary withdrawal for emergency access (up to 50% limit)
+                        </p>
+                    </div>
+                </div>
+
+                <button
+                    onClick={() => setIsEwaModalOpen(true)}
+                    className="h-12 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer self-start sm:self-auto"
+                >
+                    <IndianRupee size={16} />
+                    <span>Access Accrued Wages</span>
+                </button>
+            </div>
+
             {/* Monthly Summary Card */}
             <div className="bg-linear-to-r from-blue-600 to-indigo-700 rounded-xl p-5 text-white shadow-lg mb-6 relative overflow-hidden">
                 <div className="relative z-10">
@@ -751,6 +781,20 @@ export const WorkerHistoryScreen: React.FC = () => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Earned Wage Access Modal */}
+      {selectedWorker && profile?.tenantId && (
+        <WorkerEwaModal
+          isOpen={isEwaModalOpen}
+          onClose={() => setIsEwaModalOpen(false)}
+          worker={selectedWorker}
+          tenantId={profile.tenantId}
+          attendanceRecords={attendanceHistory}
+          advances={monthAdvances}
+          orgSettings={settings}
+          onAdvanceCreated={(newAdv) => setMonthAdvances(prev => [newAdv, ...prev])}
+        />
       )}
     </div>
   );

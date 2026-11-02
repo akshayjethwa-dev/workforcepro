@@ -65,15 +65,21 @@ export const wageService = {
 
     const config = ensureWageConfig(worker);
     
+    // Mid-cycle salary revision: if punch date is prior to revision date, use previous wage
+    let effectiveWageAmount = config.amount;
+    if (worker.salaryRevisionDate && record.date && record.date < worker.salaryRevisionDate && worker.previousWageAmount && worker.previousWageAmount > 0) {
+      effectiveWageAmount = worker.previousWageAmount;
+    }
+    
     // 2. Determine Daily Rate Dynamically based on the specific month
     const isMonthly = config.type === 'MONTHLY';
-    let dailyRate = config.amount;
+    let dailyRate = effectiveWageAmount;
     if (isMonthly) {
       const dateParts = (record.date || '').slice(0, 10).split('-');
       const yearStr = dateParts[0] || '2026';
       const monthStr = dateParts[1] || '10';
       const daysInMonth = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
-      dailyRate = config.amount / (config.workingDaysPerMonth || daysInMonth);
+      dailyRate = effectiveWageAmount / (config.workingDaysPerMonth || daysInMonth);
     }
 
     // 3. Calculate Base Wage WITH HOLIDAY & LEAVE RULES
@@ -326,7 +332,22 @@ export const wageService = {
 
     monthAdvances.forEach(adv => {
         advanceTotal += adv.amount;
-        deductionDetails.push({ description: `Kharchi Advance (${adv.date})`, amount: adv.amount });
+        if (adv.isEwa) {
+          const refCode = adv.id.slice(-6).toUpperCase();
+          if (worker.dateOfExit) {
+            deductionDetails.push({ 
+              description: `Full & Final Settlement: EWA Recovery (${adv.date}) [Ref: ${refCode}]`, 
+              amount: adv.amount 
+            });
+          } else {
+            deductionDetails.push({ 
+              description: `Earned Wage Access (${adv.date}) [Ref: ${refCode}]`, 
+              amount: adv.amount 
+            });
+          }
+        } else {
+          deductionDetails.push({ description: `Kharchi Advance (${adv.date})`, amount: adv.amount });
+        }
     });
 
     // Compute Indian Statutory Deductions (PF, ESI, State PT, TDS)

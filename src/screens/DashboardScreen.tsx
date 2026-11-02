@@ -12,6 +12,8 @@ import { AttendanceRecord, OrgSettings, ScreenName } from '../types/index';
 import { AIChat } from '../components/AIChat';
 import { SetupGuideModal } from '../components/SetupGuideModal';
 import { inboxService } from '../services/inboxService';
+import { FieldStatusBadge } from '../components/FieldStatusBadge';
+import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
@@ -217,6 +219,12 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
 
   return (
     <div className="space-y-6 pb-12">
+        {/* PERSISTENT EMPLOYEE CAP BANNER */}
+        <EmployeeCapBanner 
+          tenantId={profile?.tenantId || 'demo-tenant-id'} 
+          onNavigateToBilling={() => onNavigate && onNavigate('BILLING')} 
+        />
+
         {/* PAGE TOOLBAR */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -333,16 +341,25 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                         </div>
                     </div>
                 ) : (
-                    <div className="bg-slate-100 rounded-2xl p-5 border border-slate-200 flex items-center justify-between text-slate-500">
+                    <div 
+                        onClick={() => onNavigate && onNavigate('ATTENDANCE_KIOSK')}
+                        className="bg-slate-100 hover:bg-slate-200/70 cursor-pointer rounded-2xl p-5 border border-slate-200 flex items-center justify-between text-slate-500 transition-colors group"
+                    >
                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-slate-200 text-slate-600 flex items-center justify-center shrink-0">
+                            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
                                 <Lock size={20} />
                             </div>
                             <div>
-                                <h4 className="font-bold text-sm text-slate-700">Face Scan Kiosk (Plan Upgrade Required)</h4>
-                                <p className="text-xs text-slate-500 mt-0.5">Upgrade subscription plan to activate automated gate attendance terminals.</p>
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-bold text-sm text-slate-800">Face Scan Kiosk</h4>
+                                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                                    Available on Starter
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-0.5">Click to view feature details and upgrade subscription.</p>
                             </div>
                         </div>
+                        <ChevronRight size={16} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
                     </div>
                 )}
             </div>
@@ -521,9 +538,11 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2">
                                         <p className="text-sm font-bold text-slate-900 truncate">{record.workerName}</p>
-                                        <span className={`text-xs ${statusTextColor}`}>
-                                            · {statusLabel}
-                                        </span>
+                                        <FieldStatusBadge
+                                          status={record.computedStatus}
+                                          isLate={record.isLate}
+                                          size="sm"
+                                        />
                                     </div>
                                     <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 font-mono tabular-nums">
                                         <span>{isOut ? 'Check Out' : 'Check In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>

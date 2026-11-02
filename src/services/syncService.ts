@@ -13,7 +13,12 @@ export const SYNC_STALE_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 export const syncService = {
   dbInstance: null as IDBDatabase | null,
   isSyncingNow: false,
+  queueCache: [] as OfflineQueueItem[],
   listeners: new Set<(items: OfflineQueueItem[]) => void>(),
+
+  getCachedQueue(): OfflineQueueItem[] {
+    return this.queueCache;
+  },
 
   // 1. Initialize Durable IndexedDB
   async initDB(): Promise<IDBDatabase> {
@@ -169,6 +174,7 @@ export const syncService = {
           const items: OfflineQueueItem[] = req.result || [];
           // Sort with oldest pending first
           items.sort((a, b) => new Date(a.offlineTimestamp).getTime() - new Date(b.offlineTimestamp).getTime());
+          this.queueCache = items;
           resolve(items);
         };
         req.onerror = () => reject(req.error);

@@ -15,18 +15,21 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { DailyWageRecord, Worker, Advance, OrgSettings } from '../types/index';
+import { DailyWageRecord, Worker, Advance, OrgSettings, AttendanceRecord } from '../types/index';
+import { WorkerEwaModal } from '../components/WorkerEwaModal';
 
 export const DailyWageScreen: React.FC = () => {
   const { profile } = useAuth();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [dailyWages, setDailyWages] = useState<DailyWageRecord[]>([]);
+  const [attendanceList, setAttendanceList] = useState<AttendanceRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isErgonomicsModalOpen, setIsErgonomicsModalOpen] = useState(false);
+  const [isEwaModalOpen, setIsEwaModalOpen] = useState(false);
   const [isAuditOverlayActive, setIsAuditOverlayActive] = useState(false);
   const [isThumbReachMode, setIsThumbReachMode] = useState(false);
   const [isScreenLockedForWipe, setIsScreenLockedForWipe] = useState(false);
@@ -62,6 +65,7 @@ export const DailyWageScreen: React.FC = () => {
           ]);
           
           setWorkers(fetchedWorkers);
+          setAttendanceList(fetchedAttendance);
           setAdvances(fetchedAdvances);
           setSettings(fetchedSettings);
 
@@ -189,6 +193,19 @@ export const DailyWageScreen: React.FC = () => {
             </div>
 
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 border-t sm:border-t-0 sm:border-l border-slate-800 pt-4 sm:pt-0 sm:pl-6">
+              <button
+                type="button"
+                onClick={() => {
+                  triggerFrontlineHaptic('light');
+                  setIsEwaModalOpen(true);
+                }}
+                className="min-h-[56px] px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs sm:text-sm border-2 border-emerald-400 shadow-md flex items-center gap-2 cursor-pointer transition-all"
+                title="Access real-time accrued wages (EWA)"
+              >
+                <IndianRupee size={18} />
+                <span>Earned Wage Access</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -634,6 +651,20 @@ export const DailyWageScreen: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Earned Wage Access Modal */}
+      {activeDetailWorker && profile?.tenantId && settings && (
+        <WorkerEwaModal
+          isOpen={isEwaModalOpen}
+          onClose={() => setIsEwaModalOpen(false)}
+          worker={activeDetailWorker}
+          tenantId={profile.tenantId}
+          attendanceRecords={attendanceList}
+          advances={advances}
+          orgSettings={settings}
+          onAdvanceCreated={(newAdv) => setAdvances(prev => [...prev, newAdv])}
+        />
       )}
     </div>
   );

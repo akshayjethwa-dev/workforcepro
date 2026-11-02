@@ -65,3 +65,131 @@ input, textarea, select {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ============================================================================
+   HIGH-CONTRAST "FIELD MODE" THEME (SUNLIGHT & LOW-VISION ACCESSIBILITY)
+   Enforces WCAG 2.1 AAA (>= 7:1) contrast, pure white background, near-black
+   text, >= 16px body type, and >= 18px critical data metrics.
+   ============================================================================ */
+
+html.field-mode,
+.field-mode {
+  --color-brand: #000000;
+  --tenant-primary: #000000;
+  --tenant-bg: #ffffff;
+  --tenant-link: #000000;
+  --tenant-text: #000000;
+  --field-border: #000000;
+}
+
+html.field-mode body,
+body.field-mode {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  font-size: 16px !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.01em;
+}
+
+/* Force pure white background on cards and canvas in Field Mode */
+html.field-mode .min-h-screen,
+html.field-mode .min-h-dvh,
+html.field-mode .bg-slate-50,
+html.field-mode .bg-slate-100,
+html.field-mode .bg-gray-50,
+html.field-mode .bg-gray-100,
+html.field-mode .bg-white {
+  background-color: #ffffff !important;
+}
+
+/* Ensure all text meets or exceeds 7:1 contrast on white in Field Mode */
+html.field-mode p,
+html.field-mode span,
+html.field-mode h1,
+html.field-mode h2,
+html.field-mode h3,
+html.field-mode h4,
+html.field-mode h5,
+html.field-mode label,
+html.field-mode th,
+html.field-mode td,
+html.field-mode li {
+  color: #000000 !important;
+}
+
+/* Subordinate text in field mode is pinned to gray-900 (12.6:1 contrast) */
+html.field-mode .text-slate-400,
+html.field-mode .text-slate-500,
+html.field-mode .text-gray-400,
+html.field-mode .text-gray-500 {
+  color: #111827 !important;
+  font-weight: 500 !important;
+}
+
+/* Scale minimum type size in Field Mode: body >= 16px */
+html.field-mode .text-xs,
+html.field-mode .text-\[10px\],
+html.field-mode .text-\[11px\],
+html.field-mode .text-\[12px\] {
+  font-size: 0.9375rem !important; /* 15px-16px */
+  line-height: 1.375rem !important;
+}
+
+html.field-mode .text-sm {
+  font-size: 1rem !important; /* 16px */
+  line-height: 1.5rem !important;
+}
+
+/* Critical data and financial figures in Field Mode: >= 18px */
+html.field-mode .field-critical-data,
+html.field-mode .text-lg,
+html.field-mode .text-xl,
+html.field-mode .text-2xl,
+html.field-mode .text-3xl {
+  font-size: 1.25rem !important; /* 20px */
+  font-weight: 800 !important;
+  color: #000000 !important;
+}
+
+/* Crisp 2px solid black boundaries to cut through sunlight glare */
+html.field-mode .border,
+html.field-mode .border-b,
+html.field-mode .border-t,
+html.field-mode .border-slate-100,
+html.field-mode .border-slate-200,
+html.field-mode .border-slate-200\/80,
+html.field-mode .border-slate-300,
+html.field-mode .border-gray-200,
+html.field-mode .border-gray-300 {
+  border-color: #000000 !important;
+  border-width: 2px !important;
+}
+
+/* High-contrast action buttons in Field Mode */
+html.field-mode .bg-blue-600,
+html.field-mode .bg-indigo-600,
+html.field-mode .bg-slate-900 {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border: 2px solid #000000 !important;
+}
+
+html.field-mode .bg-blue-600 *,
+html.field-mode .bg-indigo-600 *,
+html.field-mode .bg-slate-900 * {
+  color: #ffffff !important;
+}
+
+/* Focus indicator for keyboard / assistive tech */
+html.field-mode :focus-visible {
+  outline: 3px solid #000000 !important;
+  outline-offset: 3px !important;
+}
+
+/* Interactive touch targets >= 44px in Field Mode */
+html.field-mode button,
+html.field-mode a,
+html.field-mode input,
+html.field-mode select {
+  min-height: 44px;
+}

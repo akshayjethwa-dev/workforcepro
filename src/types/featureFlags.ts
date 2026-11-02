@@ -200,6 +200,7 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
 export type ResolutionSource = 
   | 'TENANT_OVERRIDE'       // Level 3 (Highest precedence)
   | 'PLAN_OVERRIDE'         // Level 2
+  | 'TRIAL_OVERRIDE'        // Trial tenant active override
   | 'GLOBAL_DEFAULT'        // Level 1
   | 'FAIL_CLOSED_FALLBACK'; // Safety default when error / unresolvable
 

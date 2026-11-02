@@ -20,8 +20,8 @@ export default defineConfig(({ mode }) => {
             globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
             navigateFallback: '/index.html',
             cleanupOutdatedCaches: true,
-            // Increases the cache limit to 8MB for workbox service worker
-            maximumFileSizeToCacheInBytes: 8 * 1024 * 1024 
+            // Increases the cache limit to 15MB for workbox service worker
+            maximumFileSizeToCacheInBytes: 15 * 1024 * 1024 
           },
           manifest: {
             name: 'WorkforcePro',

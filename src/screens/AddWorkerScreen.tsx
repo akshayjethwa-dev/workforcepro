@@ -13,11 +13,14 @@ import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
 import { useBackButton } from '../hooks/useBackButton'; 
 import { quickSwitchService } from '../services/quickSwitchService';
+import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
+import { EmployeeCapExceededError } from '../services/employeeCapGuard';
 
 interface Props {
   onBack: () => void;
   onSuccess: () => void;
   initialData?: Worker; 
+  onNavigateToBilling?: () => void;
 }
 
 const STEPS = [
@@ -46,11 +49,13 @@ const DAYS_OF_WEEK = [
   { id: 0, label: 'Sunday' }
 ];
 
-export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialData }) => {
+export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialData, onNavigateToBilling }) => {
   const { profile, limits } = useAuth();
   const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [showPaywall, setShowPaywall] = useState<boolean>(false);
+  const [paywallError, setPaywallError] = useState<any>(null);
   
   const [availableShifts, setAvailableShifts] = useState<ShiftConfig[]>([]); 
   const [availableBranches, setAvailableBranches] = useState<Branch[]>([]);
@@ -344,6 +349,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       }
       onSuccess();
     } catch (e: any) {
+      if (e?.code === 'EMPLOYEE_CAP_EXCEEDED' || e?.name === 'EmployeeCapExceededError') {
+        setPaywallError(e);
+        setShowPaywall(true);
+        return;
+      }
       toast.error(`Error saving worker: ${e.message}`);
     } finally {
       setSaving(false);
@@ -906,6 +916,18 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           </button>
         </div>
       )}
+
+      {/* HARD CAP UPGRADE PAYWALL */}
+      <UpgradePaywallModal
+        isOpen={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        onNavigateToBilling={() => {
+          setShowPaywall(false);
+          if (onNavigateToBilling) onNavigateToBilling();
+          else onBack();
+        }}
+        errorPayload={paywallError}
+      />
     </div>
   );
 };

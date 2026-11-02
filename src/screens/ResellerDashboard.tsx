@@ -9,6 +9,7 @@ import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 import { WhiteLabelModal } from '../components/WhiteLabelModal';
 import { ClientEntitlementsModal } from '../components/ClientEntitlementsModal';
+import { employeeCapGuard, EmployeeCapStatus } from '../services/employeeCapGuard';
 
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7;
@@ -16,6 +17,7 @@ export const ResellerDashboard: React.FC = () => {
   const { user, profile, impersonateTenant } = useAuth();
   const { toast } = useToast();
   const [clients, setClients] = useState<any[]>([]);
+  const [capStatuses, setCapStatuses] = useState<Record<string, EmployeeCapStatus>>({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -44,6 +46,18 @@ export const ResellerDashboard: React.FC = () => {
     setLoading(true);
     const clientsData = await dbService.getResellerClients(user.uid);
     setClients(clientsData);
+
+    // Compute live employee cap status for each partner tenant (E20 visibility)
+    const capMap: Record<string, EmployeeCapStatus> = {};
+    for (const c of clientsData) {
+      try {
+        const id = (c as any).tenantId || c.id;
+        capMap[id] = await employeeCapGuard.getTenantCapStatus(id);
+      } catch (err) {
+        console.warn('Notice checking client cap:', err);
+      }
+    }
+    setCapStatuses(capMap);
     
     const activeCount = clientsData.filter(c => c.isActive).length;
     const activePaidCount = clientsData.filter(c => c.isActive && c.plan !== 'FREE' && c.plan !== 'TRIAL').length;
@@ -83,10 +97,15 @@ export const ResellerDashboard: React.FC = () => {
   };
 
   const handlePlanChange = async (tenantId: string, newPlan: SubscriptionTier) => {
-    setClients(prev => prev.map(c => c.tenantId === tenantId ? { ...c, plan: newPlan } : c));
-    await dbService.updateTenantPlan(tenantId, newPlan);
-    toast.success(`Plan upgraded to ${newPlan}`);
-    loadData(); 
+    try {
+      await dbService.updateTenantPlan(tenantId, newPlan);
+      setClients(prev => prev.map(c => (((c as any).tenantId || c.id) === tenantId) ? { ...c, plan: newPlan } : c));
+      toast.success(`Plan updated to ${newPlan}`);
+      loadData(); 
+    } catch (err: any) {
+      toast.error(err.message || 'Cannot update client plan');
+      loadData();
+    }
   };
 
   const handleImpersonate = async (tenant: any) => {
@@ -223,6 +242,32 @@ export const ResellerDashboard: React.FC = () => {
                                         <span>Grace Period: &rarr; {client.pendingDowngrade.targetPlan}</span>
                                       </span>
                                     )}
+
+                                    {/* PARTNER PORTAL EMPLOYEE CAP WARNING (E20) */}
+                                    {(() => {
+                                      const clientId = (client as any).tenantId || client.id;
+                                      const capStatus = capStatuses[clientId];
+                                      if (!capStatus) return null;
+                                      if (capStatus.isHardCapExceeded) {
+                                        return (
+                                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1 font-mono">
+                                            🚫 Hard Cap Exceeded ({capStatus.activeCount}/{capStatus.hardCapLimit})
+                                          </span>
+                                        );
+                                      }
+                                      if (capStatus.isSoftCap) {
+                                        return (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1 font-mono">
+                                            ⚠️ Soft Cap: +{capStatus.overageCount} Overage (₹{capStatus.overageRate}/mo)
+                                          </span>
+                                        );
+                                      }
+                                      return (
+                                        <span className="text-[10px] text-gray-500 font-mono font-medium">
+                                          Workers: {capStatus.activeCount}/{capStatus.cap ?? '∞'}
+                                        </span>
+                                      );
+                                    })()}
                                   </div>
 
                                   <div className="mt-1 text-xs md:text-sm text-gray-600 flex items-center gap-2">
@@ -263,7 +308,7 @@ export const ResellerDashboard: React.FC = () => {
                               </div>
 
                               <div className="flex flex-wrap items-center gap-2 shrink-0">
-                                  <select value={client.plan || 'TRIAL'} onChange={(e) => handlePlanChange(client.tenantId, e.target.value as SubscriptionTier)} className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-900 text-xs font-bold rounded-lg focus:outline-none">
+                                  <select value={client.plan || 'TRIAL'} onChange={(e) => handlePlanChange((client as any).tenantId || client.id, e.target.value as SubscriptionTier)} className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-900 text-xs font-bold rounded-lg focus:outline-none">
                                       <option value="FREE">FREE</option>
                                       <option value="TRIAL">TRIAL</option>
                                       <option value="STARTER">STARTER</option>
