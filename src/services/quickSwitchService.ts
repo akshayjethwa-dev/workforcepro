@@ -221,6 +221,15 @@ export const quickSwitchService = {
       };
     }
 
+    // Worker-exit enforcement: punch fails with "You are no longer active."
+    if (matchedWorker.status === 'INACTIVE' || matchedWorker.isActive === false) {
+      return {
+        success: false,
+        worker: matchedWorker,
+        error: 'You are no longer active.'
+      };
+    }
+
     // 2. Check if this worker is in cooldown
     const cooldown = quickSwitchService.getWorkerCooldownStatus(tenantId, matchedWorker.id);
     if (cooldown.isLocked) {
@@ -261,6 +270,14 @@ export const quickSwitchService = {
     enteredPin: string
   ): Promise<QuickSwitchAuthResult> => {
     const cleanPin = enteredPin.trim();
+
+    if (worker.status === 'INACTIVE' || worker.isActive === false) {
+      return {
+        success: false,
+        worker,
+        error: 'You are no longer active.'
+      };
+    }
 
     // Check cooldown
     const cooldown = quickSwitchService.getWorkerCooldownStatus(tenantId, worker.id);
@@ -406,7 +423,11 @@ export const quickSwitchService = {
       // Find worker
       const worker = workers.find(w => w.id === parsed!.wid && w.tenantId === activeTenantId);
       if (!worker) {
-        return { isValid: false, error: 'Worker associated with this QR badge is not active in this branch.' };
+        return { isValid: false, error: 'Worker associated with this QR badge is not found in this branch.' };
+      }
+
+      if (worker.status === 'INACTIVE' || worker.isActive === false) {
+        return { isValid: false, error: 'You are no longer active.' };
       }
 
       const secondsRemaining = Math.max(0, 60 - ageSeconds);

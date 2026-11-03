@@ -34,6 +34,9 @@ import { useEntitlements } from './contexts/EntitlementContext';
 import { GracePeriodBanner } from './components/GracePeriodBanner';
 import { UpgradeRequiredView } from './components/UpgradeRequiredView';
 
+// SCOPED MAGIC LINK PORTAL
+import { WorkerMagicLinkPortalView } from './components/WorkerMagicLinkPortalView';
+
 export const RootNavigator: React.FC = () => {
   const { user, profile, loading, logout } = useAuth();
   const { isEntitled } = useEntitlements();
@@ -41,6 +44,22 @@ export const RootNavigator: React.FC = () => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');
+
+  // Magic Link Token State: parses /w/:token, ?w=:token, or #/w/:token
+  const [magicToken, setMagicToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const qToken = params.get('w') || params.get('token');
+    if (qToken) return qToken;
+
+    const pathMatch = window.location.pathname.match(/\/w\/([a-zA-Z0-9_-]+)/);
+    if (pathMatch) return pathMatch[1];
+
+    const hashMatch = window.location.hash.match(/#\/?w\/([a-zA-Z0-9_-]+)/);
+    if (hashMatch) return hashMatch[1];
+
+    return null;
+  });
 
   const [kioskConfig, setKioskConfig] = useState<KioskTerminal | null>(() => {
     const saved = localStorage.getItem('kiosk_config');
@@ -75,6 +94,25 @@ export const RootNavigator: React.FC = () => {
     }
     return false;
   });
+
+  // Dedicated Scoped Worker Magic Link Portal (Universal Link / PWA)
+  if (magicToken) {
+    return (
+      <WorkerMagicLinkPortalView
+        token={magicToken}
+        onExitToLogin={() => {
+          if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('w');
+            url.searchParams.delete('token');
+            const cleanPath = url.pathname.replace(/\/w\/[a-zA-Z0-9_-]+/, '');
+            window.history.replaceState({}, '', (cleanPath || '/') + (url.search ? url.search : ''));
+          }
+          setMagicToken(null);
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (

@@ -324,6 +324,8 @@ export interface AttendanceRecord {
     gross: number;
     net: number; 
     overtime: number;
+    regular?: number;
+    breakTime?: number;
   };
   leaveInfo?: {
     type: 'CL' | 'SL' | 'PL' | 'LWP';
@@ -332,6 +334,10 @@ export interface AttendanceRecord {
   };
   inTime?: TimeRecord;
   outTime?: TimeRecord;
+  checkIn?: string;
+  checkOut?: string;
+  punches?: Punch[];
+  confidence?: number;
   calculatedHours?: AttendanceCalculations;
   syncStatus?: SyncStatus;
   offlineTimestamp?: string;
@@ -735,6 +741,9 @@ export interface InboxItem {
       deductionLineItem: string;
       isFnF?: boolean;
     };
+    withdrawnPurposes?: string[];
+    dpdpAction?: string;
+    ticketId?: string;
   };
   resolution?: {
     action: 'APPROVE' | 'REJECT' | 'RESOLVE';
@@ -754,3 +763,181 @@ export interface InboxAuditEntry {
   resolvedAt: string;
   notes?: string;
 }
+
+// ==========================================
+// MANAGER-INITIATED MAGIC LINK (SCOPED TOKENS)
+// ==========================================
+
+export type MagicLinkScope = 'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY' | 'PUNCH' | 'punch';
+export type MagicLinkChannel = 'WHATSAPP' | 'SMS' | 'COPY_LINK';
+
+export interface DeviceAccessEntry {
+  deviceFingerprint: string;
+  userAgent: string;
+  timestamp: string;
+  ip?: string;
+  deviceModel?: string;
+}
+
+export interface WorkerAccessToken {
+  id?: string;
+  token: string;
+  tokenHash: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  scope: MagicLinkScope;
+  channel: MagicLinkChannel;
+  issuedBy: string;
+  issuedAt: string;
+  sentAt?: string;
+  expiresAt: string;
+  ttlHours: number;
+  targetMonth?: string;
+  shiftId?: string;
+  accessLog: DeviceAccessEntry[];
+  deviceAccessHistory?: DeviceAccessEntry[];
+  revoked?: boolean;
+  revokedAt?: string;
+  revokedBy?: string;
+  revocationReason?: RevocationReason;
+  lastUsedAt?: string;
+  flaggedMultiDevice?: boolean;
+  flaggedReason?: string;
+  deliveryStatus?: 'DELIVERED' | 'FAILED' | 'PENDING';
+}
+
+export type RevocationReason = 'lost phone' | 'worker exit' | 'suspicious access' | 'shared link' | 'other';
+
+export interface BoundDevice {
+  id: string;
+  workerId: string;
+  workerName: string;
+  tenantId: string;
+  deviceModel: string;
+  deviceFingerprint: string;
+  boundAt: string;
+  lastPunchAt: string;
+  expiresAt?: string; // 30 days validity, auto-renewed on each successful punch
+  registeredPhone?: string;
+  platform?: string;
+  userAgent?: string;
+  status: 'BOUND' | 'UNBOUND';
+  unboundAt?: string;
+  unboundBy?: string;
+  unboundReason?: string;
+}
+
+export interface DeviceBindingOtpState {
+  phone: string;
+  workerId: string;
+  otpCode: string; // 6-digit code
+  sentAt: number;
+  expiresAt: number; // 10 minutes validity
+  attempts: number; // max 5 attempts per code
+  requestTimestamps: number[]; // timestamps in ms for rolling 1h limit (max 3)
+  lockUntil?: number; // 30-minute lock on 5 failed attempts
+  lastRequestTime: number;
+}
+
+export interface BoundDevicePunchResult {
+  success: boolean;
+  error?: string;
+  errorCode?: 'WORKER_INACTIVE' | 'DEVICE_UNREGISTERED' | 'DEVICE_LIMIT_REACHED' | 'OTP_REQUIRED' | 'RATE_LIMITED';
+  record?: AttendanceRecord;
+  punchType?: 'IN' | 'OUT';
+  punchTime?: string;
+  boundDevice?: BoundDevice;
+  requiresOtp?: boolean;
+  canNotifyManager?: boolean;
+}
+
+export interface DpdpSubjectAccessReport {
+  generatedAt: string;
+  workerId: string;
+  workerName: string;
+  tenantId: string;
+  phone: string;
+  aadharMasked?: string;
+  activeTokensCount: number;
+  revokedTokensCount: number;
+  boundDevicesCount: number;
+  punchRecordsCount: number;
+  tokens: WorkerAccessToken[];
+  boundDevices: BoundDevice[];
+  auditLogs: any[];
+}
+
+// ==========================================
+// DPDP LOCATION CONSENT & TRANSPARENCY
+// ==========================================
+
+export type WorkerLanguage = 'en' | 'hi' | 'gu';
+export type ConsentPurposeKey = 'attendance_location' | 'safety_location';
+
+export interface ConsentPurposes {
+  attendance_location: boolean;
+  safety_location: boolean;
+}
+
+export interface ConsentRecord {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  policyVersion: string;
+  capturedInBindingId: string;
+  channel: 'PUNCH_VIEW' | 'WHATSAPP_BOT' | 'SMS' | 'MANAGER_ASSISTED';
+  language: WorkerLanguage;
+  timestamp: string;
+  purposes: ConsentPurposes;
+  active: boolean;
+  withdrawnAt?: string;
+  withdrawnPurposes?: ConsentPurposeKey[];
+  withdrawalChannel?: string;
+}
+
+export interface LocationBreadcrumbLog {
+  timestamp: string;
+  activityType: 'PUNCH_IN' | 'PUNCH_OUT' | 'SHIFT_BREADCRUMB';
+  purpose: ConsentPurposeKey;
+  status: 'VERIFIED' | 'WITHDRAWN_MODE';
+  deviceModel?: string;
+}
+
+export interface LocationAuditViewEntry {
+  timestamp: string;
+  viewerName: string;
+  viewerRole: string;
+  purpose: string;
+}
+
+export interface LocationDataSummary {
+  workerId: string;
+  workerName: string;
+  generatedAt: string;
+  retentionDays: number;
+  activeConsent: ConsentRecord | null;
+  consentHistory: ConsentRecord[];
+  breadcrumbs: LocationBreadcrumbLog[];
+  auditViews: LocationAuditViewEntry[];
+  activeLegalHold?: boolean;
+  legalHoldReason?: string;
+}
+
+export interface LocationDeletionRequest {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  requestedAt: string;
+  dueByDate: string; // 30-day statutory DPDP deadline
+  channel: string;
+  status: 'PENDING' | 'UNDER_LEGAL_HOLD' | 'PROCESSED' | 'REJECTED';
+  legalHoldApplied?: boolean;
+  legalHoldReason?: string;
+  resolvedAt?: string;
+  notes?: string;
+}
+

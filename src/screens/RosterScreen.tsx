@@ -3,7 +3,7 @@ import {
   Calendar as CalendarIcon, Clock, Users, Plus, CheckCircle2, 
   AlertTriangle, ShieldAlert, Sparkles, RefreshCw, FileCheck, 
   ArrowRight, ArrowLeft, History, Filter, ChevronDown, Check, 
-  Layers, User, Wand2, Bell, AlertCircle, X, ShieldCheck, Zap
+  Layers, User, Wand2, Bell, AlertCircle, X, ShieldCheck, Zap, Send
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -18,6 +18,7 @@ import {
 } from '../types/scheduleValidation';
 import { Worker, OrgSettings, AttendanceRecord, ShiftConfig } from '../types/index';
 import { PrePublishValidationPanel } from '../components/PrePublishValidationPanel';
+import { BulkSendRosterModal } from '../components/BulkSendRosterModal';
 
 export const RosterScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -39,6 +40,7 @@ export const RosterScreen: React.FC = () => {
   const [isValidationPanelOpen, setIsValidationPanelOpen] = useState(false);
   const [isAddShiftOpen, setIsAddShiftOpen] = useState(false);
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [isBulkSendOpen, setIsBulkSendOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<ScheduleOverrideAudit[]>([]);
 
   // Add Shift Form State
@@ -422,6 +424,17 @@ export const RosterScreen: React.FC = () => {
           >
             <ShieldAlert size={15} />
             <span>Validate ({liveConflicts.length} Flags)</span>
+          </button>
+
+          {/* Bulk Magic Link Action: Send Shift Schedules */}
+          <button
+            type="button"
+            onClick={() => setIsBulkSendOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-300 shadow-2xs transition-all active:scale-95 cursor-pointer"
+            title="Bulk send schedule magic links to all shift workers via WhatsApp/SMS"
+          >
+            <Send size={14} className="text-emerald-700" />
+            <span>Send Schedules</span>
           </button>
 
           {/* Primary Publish Button */}
@@ -892,6 +905,18 @@ export const RosterScreen: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* BULK SEND SCHEDULE MAGIC LINKS MODAL */}
+      {isBulkSendOpen && (
+        <BulkSendRosterModal
+          workers={workers}
+          tenantId={tenantId}
+          issuedByEmail={profile?.email || 'manager@factory.in'}
+          shiftName={newShiftName || 'All Assigned Shifts'}
+          weekName={rosterName}
+          onClose={() => setIsBulkSendOpen(false)}
+        />
       )}
 
     </div>

@@ -2,14 +2,15 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, Building2, Search, Shield, Power, Activity, Crown, Sliders, Eye, X, Save, Settings, Palette, Upload, IndianRupee, Handshake, PlusCircle, MailPlus,
-  ShieldAlert, ShieldCheck, AlertTriangle, RotateCcw, CheckCircle2, Play, Trash2, Filter, RefreshCw
+  ShieldAlert, ShieldCheck, AlertTriangle, RotateCcw, CheckCircle2, Play, Trash2, Filter, RefreshCw, Key, FileCheck2, Smartphone, Download, ExternalLink, Calendar, Clock
 } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { SubscriptionTier, PlanLimits } from '../types/index';
+import { SubscriptionTier, PlanLimits, WorkerAccessToken, RevocationReason } from '../types/index';
 import { crossTenantVerification, CrossTenantVerificationReport } from '../services/crossTenantVerification';
 import { tenantSecurityService, SecurityAlert, TenantAuditLogEntry, SoftDeletedTenant } from '../services/tenantSecurityService';
+import { magicLinkService } from '../services/magicLinkService';
 import { WhiteLabelModal } from '../components/WhiteLabelModal';
 import { FeatureFlagsManager } from '../components/FeatureFlagsManager';
 import { PlanCatalogManager } from '../components/PlanCatalogManager';
@@ -35,7 +36,19 @@ export const SuperAdminDashboard: React.FC = () => {
   const [testReport, setTestReport] = useState<CrossTenantVerificationReport | null>(null);
   const [runningTests, setRunningTests] = useState(false);
   const [auditFilter, setAuditFilter] = useState({ tenantId: 'ALL', role: 'ALL', status: 'ALL', search: '' });
-  const [securitySubTab, setSecuritySubTab] = useState<'ALERTS' | 'AUDIT' | 'SOFT_DELETE' | 'VERIFICATION'>('ALERTS');
+  const [securitySubTab, setSecuritySubTab] = useState<'ALERTS' | 'AUDIT' | 'SOFT_DELETE' | 'VERIFICATION' | 'DPDP_REGISTRY'>('ALERTS');
+
+  // --- DPDP Subject-Access & Token Registry State ---
+  const [dpdpTokens, setDpdpTokens] = useState<WorkerAccessToken[]>([]);
+  const [dpdpFilter, setDpdpFilter] = useState({
+    tenantId: 'ALL',
+    scope: 'ALL',
+    status: 'ALL',
+    search: ''
+  });
+  const [tokenToRevoke, setTokenToRevoke] = useState<WorkerAccessToken | null>(null);
+  const [revocationReason, setRevocationReason] = useState<RevocationReason>('suspicious access');
+  const [isRevokingToken, setIsRevokingToken] = useState(false);
 
   // --- NEW: Create Reseller State ---
   const [showCreateReseller, setShowCreateReseller] = useState(false);
@@ -70,8 +83,10 @@ export const SuperAdminDashboard: React.FC = () => {
     setSecurityAlerts(alertsData);
     setAuditLogs(logsData);
     setSoftDeletedTenants(softDeletedData);
-    setGlobalPlans(plansData as Record<SubscriptionTier, PlanLimits>);
-    setResellers(resellersData);
+    
+    // DPDP Subject-Access: Load all magic access tokens across tenants
+    const allTokens = magicLinkService.getAllTokens();
+    setDpdpTokens(allTokens);
     
     const activeTenantsCount = tenantsData.filter(t => t.isActive).length;
     const grossMRR = activeTenantsCount * 500;
@@ -85,6 +100,25 @@ export const SuperAdminDashboard: React.FC = () => {
       totalCommission: totalCommission
     });
     setLoading(false);
+  };
+
+  const handleSuperAdminRevokeToken = async () => {
+    if (!tokenToRevoke) return;
+    setIsRevokingToken(true);
+    try {
+      await magicLinkService.revokeToken(
+        tokenToRevoke.token,
+        profile?.email || 'superadmin@workforcepro.app',
+        revocationReason
+      );
+      toast.success(`Token revoked. Worker web view will reject access within 60s.`);
+      setTokenToRevoke(null);
+      setDpdpTokens(magicLinkService.getAllTokens());
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to revoke token');
+    } finally {
+      setIsRevokingToken(false);
+    }
   };
 
   const toggleStatus = async (id: string, currentStatus: boolean) => {
@@ -605,6 +639,15 @@ export const SuperAdminDashboard: React.FC = () => {
                           >
                               <Activity size={14} /> Audit Trail ({auditLogs.length})
                           </button>
+                          <button
+                              onClick={() => {
+                                setDpdpTokens(magicLinkService.getAllTokens());
+                                setSecuritySubTab('DPDP_REGISTRY');
+                              }}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'DPDP_REGISTRY' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <Key size={14} /> DPDP Token Registry ({dpdpTokens.length})
+                          </button>
                       </div>
                   </div>
 
@@ -859,6 +902,361 @@ export const SuperAdminDashboard: React.FC = () => {
                           </div>
                       )}
 
+                      {/* SUBTAB 5: DPDP SUBJECT-ACCESS & TOKEN REGISTRY */}
+                      {securitySubTab === 'DPDP_REGISTRY' && (() => {
+                          const now = new Date();
+                          const filteredDpdpTokens = dpdpTokens.filter(t => {
+                              const matchesTenant = dpdpFilter.tenantId === 'ALL' || t.tenantId === dpdpFilter.tenantId;
+                              const matchesScope = dpdpFilter.scope === 'ALL' || t.scope === dpdpFilter.scope;
+                              const isRevoked = t.revoked;
+                              const isExpired = new Date(t.expiresAt) <= now;
+                              const isActive = !isRevoked && !isExpired;
+
+                              const matchesStatus = dpdpFilter.status === 'ALL' ||
+                                  (dpdpFilter.status === 'ACTIVE' && isActive) ||
+                                  (dpdpFilter.status === 'EXPIRED' && isExpired && !isRevoked) ||
+                                  (dpdpFilter.status === 'REVOKED' && isRevoked);
+
+                              const matchesSearch = !dpdpFilter.search ||
+                                  t.workerName.toLowerCase().includes(dpdpFilter.search.toLowerCase()) ||
+                                  t.workerId.toLowerCase().includes(dpdpFilter.search.toLowerCase()) ||
+                                  t.issuedBy.toLowerCase().includes(dpdpFilter.search.toLowerCase()) ||
+                                  t.tokenHash.toLowerCase().includes(dpdpFilter.search.toLowerCase());
+
+                              return matchesTenant && matchesScope && matchesStatus && matchesSearch;
+                          });
+
+                          const activeCount = dpdpTokens.filter(t => !t.revoked && new Date(t.expiresAt) > now).length;
+                          const revokedCount = dpdpTokens.filter(t => t.revoked).length;
+                          const flaggedCount = dpdpTokens.filter(t => {
+                              const list = t.accessLog || t.deviceAccessHistory || [];
+                              const recent = list.filter(h => 
+                                  Date.now() - new Date(h.timestamp).getTime() < 3600000
+                              );
+                              return new Set(recent.map(h => (h.deviceModel || h.deviceFingerprint))).size > 2;
+                          }).length;
+
+                          const exportDpdpCsv = () => {
+                              const rows = [
+                                  ['Token Hash', 'Worker ID', 'Worker Name', 'Tenant ID', 'Scope', 'Channel', 'Status', 'Issued By', 'Sent At', 'Expires At', 'Last Used At', 'Revoked At', 'Revoked By', 'Revocation Reason'],
+                                  ...filteredDpdpTokens.map(t => [
+                                      t.tokenHash,
+                                      t.workerId,
+                                      `"${t.workerName}"`,
+                                      t.tenantId,
+                                      t.scope,
+                                      t.channel,
+                                      t.revoked ? 'REVOKED' : new Date(t.expiresAt) <= now ? 'EXPIRED' : 'ACTIVE',
+                                      t.issuedBy,
+                                      t.issuedAt || t.sentAt || '',
+                                      t.expiresAt,
+                                      t.lastUsedAt || 'NEVER',
+                                      t.revokedAt || '',
+                                      t.revokedBy || '',
+                                      t.revocationReason || ''
+                                  ])
+                              ];
+                              const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
+                              const encodedUri = encodeURI(csvContent);
+                              const link = document.createElement('a');
+                              link.setAttribute('href', encodedUri);
+                              link.setAttribute('download', `DPDP_Token_Registry_${new Date().toISOString().slice(0, 10)}.csv`);
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              toast.success('DPDP access registry exported to CSV');
+                          };
+
+                          return (
+                              <div className="space-y-5">
+                                  {/* HEADER STRIP */}
+                                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-gray-100">
+                                      <div>
+                                          <div className="flex items-center gap-2">
+                                              <h3 className="font-bold text-gray-900 text-sm">DPDP Subject-Access &amp; Scoped Magic Link Registry</h3>
+                                              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                  India DPDP Act 2023 Compliant
+                                              </span>
+                                          </div>
+                                          <p className="text-xs text-gray-500 mt-0.5">
+                                              Cross-tenant visibility into all worker scoped access tokens. Managers and Super Admins can audit access or revoke tokens with immediate 60-second enforcement.
+                                          </p>
+                                      </div>
+
+                                      <div className="flex items-center gap-2 shrink-0">
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  setDpdpTokens(magicLinkService.getAllTokens());
+                                                  toast.info('Refreshed token registry');
+                                              }}
+                                              className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+                                              title="Refresh tokens"
+                                          >
+                                              <RefreshCw size={13} />
+                                              <span>Refresh</span>
+                                          </button>
+                                          <button
+                                              type="button"
+                                              onClick={exportDpdpCsv}
+                                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+                                              title="Export for DPDP inquiry"
+                                          >
+                                              <Download size={13} />
+                                              <span>Export Registry</span>
+                                          </button>
+                                      </div>
+                                  </div>
+
+                                  {/* METRICS ROW */}
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                      <div className="p-3.5 bg-white rounded-xl border border-gray-200 shadow-2xs">
+                                          <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block">Total Tokens</span>
+                                          <span className="text-xl font-extrabold text-gray-900 font-mono mt-0.5 block">{dpdpTokens.length}</span>
+                                          <span className="text-[10px] text-gray-400">Lifetime issued</span>
+                                      </div>
+                                      <div className="p-3.5 bg-white rounded-xl border border-gray-200 shadow-2xs">
+                                          <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Active Tokens</span>
+                                          <span className="text-xl font-extrabold text-emerald-700 font-mono mt-0.5 block">{activeCount}</span>
+                                          <span className="text-[10px] text-emerald-600">Valid TTL / unrevoked</span>
+                                      </div>
+                                      <div className="p-3.5 bg-white rounded-xl border border-gray-200 shadow-2xs">
+                                          <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block">Revoked Tokens</span>
+                                          <span className="text-xl font-extrabold text-rose-700 font-mono mt-0.5 block">{revokedCount}</span>
+                                          <span className="text-[10px] text-rose-600">Lost phone / exit / manual</span>
+                                      </div>
+                                      <div className="p-3.5 bg-white rounded-xl border border-gray-200 shadow-2xs">
+                                          <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Device Flags</span>
+                                          <span className="text-xl font-extrabold text-amber-700 font-mono mt-0.5 block">{flaggedCount}</span>
+                                          <span className="text-[10px] text-amber-600">&gt;2 devices in 1 hour</span>
+                                      </div>
+                                  </div>
+
+                                  {/* FILTER TOOLBAR */}
+                                  <div className="bg-gray-50/80 p-3 rounded-xl border border-gray-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                                      {/* Search */}
+                                      <div className="relative">
+                                          <Search className="absolute left-3 top-2.5 text-gray-400" size={14} />
+                                          <input
+                                              type="text"
+                                              placeholder="Search worker, ID, hash..."
+                                              value={dpdpFilter.search}
+                                              onChange={(e) => setDpdpFilter(prev => ({ ...prev, search: e.target.value }))}
+                                              className="w-full pl-9 pr-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-800 placeholder-gray-400 outline-none focus:border-indigo-600"
+                                          />
+                                      </div>
+
+                                      {/* Tenant Filter */}
+                                      <select
+                                          value={dpdpFilter.tenantId}
+                                          onChange={(e) => setDpdpFilter(prev => ({ ...prev, tenantId: e.target.value }))}
+                                          className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 font-medium outline-none"
+                                      >
+                                          <option value="ALL">All Tenants</option>
+                                          {tenants.map(t => (
+                                              <option key={t.id || t.tenantId} value={t.tenantId || t.id}>
+                                                  {t.companyName || t.name || t.tenantId} ({t.tenantId})
+                                              </option>
+                                          ))}
+                                      </select>
+
+                                      {/* Scope Filter */}
+                                      <select
+                                          value={dpdpFilter.scope}
+                                          onChange={(e) => setDpdpFilter(prev => ({ ...prev, scope: e.target.value }))}
+                                          className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 font-medium outline-none"
+                                      >
+                                          <option value="ALL">All Scopes</option>
+                                          <option value="PAYSLIP">Payslip</option>
+                                          <option value="SCHEDULE">Schedule</option>
+                                          <option value="ATTENDANCE_SUMMARY">Attendance Summary</option>
+                                      </select>
+
+                                      {/* Status Filter */}
+                                      <select
+                                          value={dpdpFilter.status}
+                                          onChange={(e) => setDpdpFilter(prev => ({ ...prev, status: e.target.value }))}
+                                          className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 font-medium outline-none"
+                                      >
+                                          <option value="ALL">All Statuses</option>
+                                          <option value="ACTIVE">Active (Valid TTL)</option>
+                                          <option value="EXPIRED">Expired</option>
+                                          <option value="REVOKED">Revoked</option>
+                                      </select>
+                                  </div>
+
+                                  {/* TOKEN REGISTRY TABLE */}
+                                  <div className="border border-gray-200 rounded-xl overflow-hidden shadow-2xs">
+                                      <div className="overflow-x-auto">
+                                          <table className="w-full text-xs text-left">
+                                              <thead className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase text-[10px]">
+                                                  <tr>
+                                                      <th className="py-2.5 px-3">Worker &amp; Tenant</th>
+                                                      <th className="py-2.5 px-3">Scope &amp; Channel</th>
+                                                      <th className="py-2.5 px-3">Device Audit</th>
+                                                      <th className="py-2.5 px-3">Sent / Expires</th>
+                                                      <th className="py-2.5 px-3">Status</th>
+                                                      <th className="py-2.5 px-3 text-right">Actions</th>
+                                                  </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-gray-100 bg-white font-mono">
+                                                  {filteredDpdpTokens.length === 0 ? (
+                                                      <tr>
+                                                          <td colSpan={6} className="py-8 text-center text-gray-400 font-sans">
+                                                              No worker tokens match the current filters.
+                                                          </td>
+                                                      </tr>
+                                                  ) : (
+                                                      filteredDpdpTokens.map(tokenItem => {
+                                                          const isRevoked = tokenItem.revoked;
+                                                          const isExpired = new Date(tokenItem.expiresAt) <= now;
+                                                          const isActive = !isRevoked && !isExpired;
+                                                          const deviceCount = tokenItem.accessLog?.length || 0;
+                                                          const distinctDevices = new Set((tokenItem.accessLog || []).map(d => (d.deviceModel || d.deviceFingerprint))).size;
+                                                          const isFlagged = distinctDevices > 2;
+
+                                                          return (
+                                                              <tr key={tokenItem.token} className="hover:bg-gray-50/70 transition-colors">
+                                                                  <td className="py-2.5 px-3">
+                                                                      <div className="font-bold text-gray-900 font-sans">{tokenItem.workerName}</div>
+                                                                      <div className="text-[10px] text-gray-500">ID: {tokenItem.workerId}</div>
+                                                                      <div className="text-[10px] text-indigo-600 font-mono">Tenant: {tokenItem.tenantId}</div>
+                                                                  </td>
+                                                                  <td className="py-2.5 px-3">
+                                                                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                          tokenItem.scope === 'PAYSLIP' ? 'bg-blue-100 text-blue-800' :
+                                                                          tokenItem.scope === 'SCHEDULE' ? 'bg-indigo-100 text-indigo-800' :
+                                                                          'bg-emerald-100 text-emerald-800'
+                                                                      }`}>
+                                                                          {tokenItem.scope}
+                                                                      </span>
+                                                                      <div className="text-[10px] text-gray-500 font-sans mt-0.5">
+                                                                          via {tokenItem.channel}
+                                                                      </div>
+                                                                  </td>
+                                                                  <td className="py-2.5 px-3">
+                                                                      <div className="flex items-center gap-1 text-gray-700">
+                                                                          <Smartphone size={13} className="text-gray-400" />
+                                                                          <span>{distinctDevices} device(s) ({deviceCount} hits)</span>
+                                                                      </div>
+                                                                      {isFlagged && (
+                                                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded mt-0.5">
+                                                                              <AlertTriangle size={10} /> Shared link flagged
+                                                                          </span>
+                                                                      )}
+                                                                  </td>
+                                                                  <td className="py-2.5 px-3 text-[11px]">
+                                                                      <div className="text-gray-600">Sent: {new Date(tokenItem.issuedAt || tokenItem.sentAt || Date.now()).toLocaleDateString()}</div>
+                                                                      <div className={isActive ? 'text-emerald-700 font-bold' : 'text-gray-400'}>
+                                                                          Exp: {new Date(tokenItem.expiresAt).toLocaleDateString()}
+                                                                      </div>
+                                                                  </td>
+                                                                  <td className="py-2.5 px-3">
+                                                                      {isRevoked ? (
+                                                                          <div>
+                                                                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                                                                                  REVOKED
+                                                                              </span>
+                                                                              <div className="text-[10px] text-rose-600 mt-0.5">
+                                                                                  Reason: {tokenItem.revocationReason || 'manual'}
+                                                                              </div>
+                                                                          </div>
+                                                                      ) : isExpired ? (
+                                                                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-700">
+                                                                              EXPIRED
+                                                                          </span>
+                                                                      ) : (
+                                                                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                                                              ACTIVE (60s check)
+                                                                          </span>
+                                                                      )}
+                                                                  </td>
+                                                                  <td className="py-2.5 px-3 text-right">
+                                                                      {isActive && (
+                                                                          <button
+                                                                              type="button"
+                                                                              onClick={() => setTokenToRevoke(tokenItem)}
+                                                                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                                                                              title="Single-tap revoke token"
+                                                                          >
+                                                                              Revoke
+                                                                          </button>
+                                                                      )}
+                                                                  </td>
+                                                              </tr>
+                                                          );
+                                                      })
+                                                  )}
+                                              </tbody>
+                                          </table>
+                                      </div>
+                                  </div>
+                              </div>
+                          );
+                      })()}
+
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* SUPER ADMIN REVOKE CONFIRMATION MODAL */}
+      {tokenToRevoke && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-gray-100">
+                  <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-rose-100">
+                      <ShieldAlert size={24} />
+                  </div>
+
+                  <h3 className="text-base font-bold text-center text-gray-900 mb-1">
+                      Revoke Magic Link Token?
+                  </h3>
+                  <p className="text-xs text-gray-500 text-center mb-4">
+                      Target: <strong>{tokenToRevoke.workerName}</strong> ({tokenToRevoke.scope})
+                  </p>
+
+                  <div className="bg-gray-50 p-3 rounded-xl border border-gray-100 mb-4 text-xs text-gray-600 space-y-1">
+                      <div>Tenant: <strong>{tokenToRevoke.tenantId}</strong></div>
+                      <div>Hash: <span className="font-mono text-[10px] text-gray-500">{tokenToRevoke.tokenHash.slice(0, 16)}...</span></div>
+                      <div className="text-rose-700 font-semibold pt-1">
+                          Takes effect within 60s: next worker view request or poll will be rejected immediately.
+                      </div>
+                  </div>
+
+                  <div className="mb-4">
+                      <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                          Select Revocation Reason:
+                      </label>
+                      <select
+                          value={revocationReason}
+                          onChange={(e) => setRevocationReason(e.target.value as RevocationReason)}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-xl text-xs bg-white outline-none focus:border-indigo-600 font-medium"
+                      >
+                          <option value="lost phone">Lost Phone</option>
+                          <option value="worker exit">Worker Exit</option>
+                          <option value="suspicious access">Suspicious Access</option>
+                          <option value="shared link">Shared Link (&gt;2 devices)</option>
+                          <option value="other">Other Administrative Reason</option>
+                      </select>
+                  </div>
+
+                  <div className="flex gap-2">
+                      <button
+                          type="button"
+                          onClick={() => setTokenToRevoke(null)}
+                          disabled={isRevokingToken}
+                          className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                          Cancel
+                      </button>
+                      <button
+                          type="button"
+                          onClick={handleSuperAdminRevokeToken}
+                          disabled={isRevokingToken}
+                          className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer"
+                      >
+                          {isRevokingToken ? 'Revoking...' : 'Confirm Revocation'}
+                      </button>
                   </div>
               </div>
           </div>

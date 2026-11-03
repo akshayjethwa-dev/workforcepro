@@ -1,18 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save, Lock, 
-  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload
+  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload,
+  Calendar, Clock, Send, Key, UserX, Shield, CheckCircle2, RotateCcw, Smartphone
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { Worker, OrgSettings, Advance, AttendanceRecord } from '../types/index';
+import { Worker, OrgSettings, Advance, AttendanceRecord, MagicLinkScope } from '../types/index';
 import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
 import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
 import { BulkImportModal } from '../components/BulkImportModal';
 import { employeeCapGuard, EmployeeCapExceededError } from '../services/employeeCapGuard';
 import { WorkerEwaModal } from '../components/WorkerEwaModal';
+import { SendMagicLinkModal } from '../components/SendMagicLinkModal';
+import { WorkerAccessModal } from '../components/WorkerAccessModal';
+import { magicLinkService } from '../services/magicLinkService';
 
 interface Props {
   onAddWorker: () => void;
@@ -30,6 +34,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
   const [ewaModalWorker, setEwaModalWorker] = useState<Worker | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [loading, setLoading] = useState(true);
 
   // Cap Enforcement Modals
@@ -40,6 +45,16 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
   // State for deletion modal
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // State for Worker-Exit Auto-Revocation confirmation
+  const [workerToExit, setWorkerToExit] = useState<Worker | null>(null);
+  const [isProcessingExit, setIsProcessingExit] = useState(false);
+
+  // State for Manager-Initiated Magic Links (One-Tap Scoped Links)
+  const [magicLinkWorker, setMagicLinkWorker] = useState<{ worker: Worker; scope: MagicLinkScope } | null>(null);
+
+  // State for Worker Access & DPDP Audit Modal
+  const [workerAccessTarget, setWorkerAccessTarget] = useState<Worker | null>(null);
 
   // State for Advance (Kharchi) Modal
   const [advanceModal, setAdvanceModal] = useState({
@@ -94,6 +109,57 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
       toast.error("Failed to delete worker. Please check network connection.");
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // Worker-Exit Auto-Revocation:
+  // Marking worker inactive auto-revokes all tokens and unbinds devices within 60s
+  const handleConfirmWorkerExit = async () => {
+    if (!workerToExit) return;
+    const tenantId = profile?.tenantId || 'demo-tenant-id';
+    const managerEmail = profile?.email || 'manager@factory.in';
+    setIsProcessingExit(true);
+
+    try {
+      // 1. Update worker record in DB / storage to INACTIVE
+      await dbService.updateWorker(workerToExit.id, {
+        status: 'INACTIVE',
+        isActive: false
+      });
+
+      // 2. Auto-revoke all active magic tokens and unbind devices within 60 seconds
+      const { revokedTokensCount, unboundDevicesCount } = await magicLinkService.revokeAllForWorker(
+        workerToExit.id,
+        tenantId,
+        managerEmail,
+        'worker exit'
+      );
+
+      // 3. Update local state
+      setWorkers(prev => prev.map(w => w.id === workerToExit.id ? { ...w, status: 'INACTIVE', isActive: false } : w));
+
+      toast.success(
+        `Worker ${workerToExit.name} marked inactive. Auto-revoked ${revokedTokensCount} magic link(s) & unbound ${unboundDevicesCount} device(s).`
+      );
+      setWorkerToExit(null);
+    } catch (err: any) {
+      console.error('Failed to complete worker exit:', err);
+      toast.error('Failed to mark worker inactive.');
+    } finally {
+      setIsProcessingExit(false);
+    }
+  };
+
+  const handleReactivateWorker = async (worker: Worker) => {
+    try {
+      await dbService.updateWorker(worker.id, {
+        status: 'ACTIVE',
+        isActive: true
+      });
+      setWorkers(prev => prev.map(w => w.id === worker.id ? { ...w, status: 'ACTIVE', isActive: true } : w));
+      toast.success(`${worker.name} reactivated.`);
+    } catch (err) {
+      toast.error('Failed to reactivate worker.');
     }
   };
 
@@ -177,7 +243,13 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                           w.phone.includes(searchTerm) ||
                           (w.designation && w.designation.toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesBranch = selectedBranch === 'ALL' || (w.branchId || 'default') === selectedBranch;
-    return matchesSearch && matchesBranch;
+    const isInactive = w.status === 'INACTIVE' || w.isActive === false;
+    const matchesStatus = statusFilter === 'ALL' 
+      ? true 
+      : statusFilter === 'ACTIVE' 
+      ? !isInactive 
+      : isInactive;
+    return matchesSearch && matchesBranch && matchesStatus;
   });
 
   const willOverBorrow = (Number(advanceModal.amount || 0) + advanceModal.existingAdvances) > advanceModal.earned;
@@ -242,6 +314,31 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
           )}
         </div>
 
+        {/* STATUS FILTER PILLS */}
+        <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-semibold shrink-0">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'ALL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            All ({workers.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ACTIVE')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'ACTIVE' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            Active ({workers.filter(w => w.status !== 'INACTIVE' && w.isActive !== false).length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('INACTIVE')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'INACTIVE' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            Exited ({workers.filter(w => w.status === 'INACTIVE' || w.isActive === false).length})
+          </button>
+        </div>
+
         {settings?.branches && settings.branches.length > 1 && (
           <select
             value={selectedBranch}
@@ -285,10 +382,18 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
               ? `₹${monthly.toLocaleString()} / mo` 
               : 'Rate unassigned';
 
+            const isInactive = worker.status === 'INACTIVE' || worker.isActive === false;
+            const workerTokens = magicLinkService.getTokensForWorker(worker.id);
+            const activeTokensCount = workerTokens.active.length;
+
             return (
               <div 
                 key={worker.id} 
-                className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between group"
+                className={`bg-white p-5 rounded-2xl border transition-all flex flex-col justify-between group ${
+                  isInactive 
+                    ? 'border-rose-200/80 bg-rose-50/10 opacity-90' 
+                    : 'border-slate-200/80 hover:border-slate-300 shadow-xs'
+                }`}
               >
                 <div>
                   {/* WORKER HEADER ROW */}
@@ -312,30 +417,60 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                         )}
                       </div>
                       <div className="min-w-0">
-                        <h3 className="font-bold text-sm text-slate-900 truncate group-hover:text-blue-600 transition-colors">
-                          {worker.name}
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-sm text-slate-900 truncate group-hover:text-blue-600 transition-colors">
+                            {worker.name}
+                          </h3>
+                          {isInactive ? (
+                            <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200">
+                              Exited
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+                              Active
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-slate-500 truncate mt-0.5">
                           {worker.designation || 'Factory Operator'}
                         </div>
                       </div>
                     </div>
 
-                    {/* ACTIONS: Edit & Delete */}
+                    {/* ACTIONS: Edit, Exit/Reactivate & Delete */}
                     <div className="flex items-center gap-1 shrink-0">
                       <button 
                         onClick={() => onEditWorker(worker)}
                         title="Edit profile & wage"
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                       >
                         <Edit2 size={15} />
                       </button>
+
+                      {/* WORKER-EXIT / REACTIVATE BUTTON */}
+                      {isInactive ? (
+                        <button
+                          onClick={() => handleReactivateWorker(worker)}
+                          title="Reactivate worker profile"
+                          className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setWorkerToExit(worker)}
+                          title="Exit Worker (Auto-revokes all magic links & unbinds devices within 60s)"
+                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <UserX size={15} />
+                        </button>
+                      )}
                       
                       {profile?.role === 'FACTORY_OWNER' && (
                         <button 
                           onClick={() => setWorkerToDelete(worker)}
                           title="Remove worker"
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                         >
                           <Trash2 size={15} />
                         </button>
@@ -398,6 +533,75 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                     }`}
                   >
                     <span>Kharchi</span>
+                  </button>
+                </div>
+
+                {/* ONE-TAP MAGIC LINK ACTIONS (PAYSLIP, SCHEDULE, ATTENDANCE SUMMARY) */}
+                <div className="mt-3 pt-2.5 border-t border-slate-100">
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                    <span className="flex items-center gap-1 text-slate-500">
+                      <Sparkles size={11} className="text-amber-500" />
+                      <span>One-Tap Magic Links</span>
+                    </span>
+                    <span className="text-[10px] text-emerald-600 font-semibold lowercase">WhatsApp • SMS</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isInactive}
+                      onClick={() => setMagicLinkWorker({ worker, scope: 'PAYSLIP' })}
+                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-blue-50/80 hover:bg-blue-100 disabled:opacity-40 text-blue-700 border border-blue-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                      title={isInactive ? 'Worker is inactive' : 'Send Payslip to Worker via WhatsApp or SMS'}
+                    >
+                      <IndianRupee size={11} className="text-blue-600" />
+                      <span>Payslip</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isInactive}
+                      onClick={() => setMagicLinkWorker({ worker, scope: 'SCHEDULE' })}
+                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-indigo-50/80 hover:bg-indigo-100 disabled:opacity-40 text-indigo-700 border border-indigo-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                      title={isInactive ? 'Worker is inactive' : 'Send Duty Schedule to Worker via WhatsApp or SMS'}
+                    >
+                      <Calendar size={11} className="text-indigo-600" />
+                      <span>Schedule</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isInactive}
+                      onClick={() => setMagicLinkWorker({ worker, scope: 'ATTENDANCE_SUMMARY' })}
+                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-emerald-50/80 hover:bg-emerald-100 disabled:opacity-40 text-emerald-700 border border-emerald-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                      title={isInactive ? 'Worker is inactive' : 'Send Attendance Summary to Worker via WhatsApp or SMS'}
+                    >
+                      <Clock size={11} className="text-emerald-600" />
+                      <span>Attendance</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isInactive}
+                      onClick={() => setMagicLinkWorker({ worker, scope: 'PUNCH' })}
+                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-purple-50/80 hover:bg-purple-100 disabled:opacity-40 text-purple-700 border border-purple-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                      title={isInactive ? 'Worker is inactive' : 'Send One-Tap Mobile Punch Link to Worker via WhatsApp or SMS'}
+                    >
+                      <Smartphone size={11} className="text-purple-600" />
+                      <span>Punch</span>
+                    </button>
+                  </div>
+
+                  {/* WORKER ACCESS, BOUND DEVICES & DPDP AUDIT BUTTON */}
+                  <button
+                    type="button"
+                    onClick={() => setWorkerAccessTarget(worker)}
+                    className="w-full mt-2 py-2 px-3 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200/80 hover:border-slate-300 flex items-center justify-between text-slate-700 transition-all cursor-pointer shadow-2xs"
+                    title="Inspect active magic tokens, bound devices, revocation audit log & DPDP subject-access report"
+                  >
+                    <span className="flex items-center gap-1.5 text-slate-800 font-bold">
+                      <Key size={13} className="text-indigo-600" />
+                      <span>Worker Access &amp; Audit</span>
+                    </span>
+                    <span className="font-mono text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/70 px-2 py-0.5 rounded-md">
+                      {activeTokensCount} active
+                    </span>
                   </button>
                 </div>
 
@@ -598,6 +802,86 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
           advances={advances}
           orgSettings={settings}
           onAdvanceCreated={(newAdv) => setAdvances(prev => [...prev, newAdv])}
+        />
+      )}
+
+      {/* ONE-TAP MAGIC LINK DELIVERY MODAL */}
+      {magicLinkWorker && (
+        <SendMagicLinkModal
+          worker={magicLinkWorker.worker}
+          initialScope={magicLinkWorker.scope}
+          tenantId={profile?.tenantId || 'demo-tenant-id'}
+          issuedByEmail={profile?.email || 'manager@factory.in'}
+          onClose={() => setMagicLinkWorker(null)}
+          onEditWorker={(w) => {
+            setMagicLinkWorker(null);
+            onEditWorker(w);
+          }}
+        />
+      )}
+
+      {/* WORKER-EXIT AUTO-REVOCATION CONFIRMATION MODAL */}
+      {workerToExit && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-slate-100">
+            <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-amber-200">
+              <UserX size={24} />
+            </div>
+
+            <h2 className="text-base font-bold text-center text-slate-900 mb-1">
+              Mark Worker as Exited?
+            </h2>
+            <p className="text-xs text-slate-600 text-center mb-4">
+              You are marking <strong>{workerToExit.name}</strong> as inactive.
+            </p>
+
+            <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 space-y-2 mb-5 text-xs text-amber-900">
+              <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                <span>Automatic 60-Second Security Invariants:</span>
+              </div>
+              <ul className="list-disc pl-5 space-y-1 text-[11px] text-amber-800">
+                <li>All active magic links (payslip, schedule, attendance) will be <strong>auto-revoked</strong> immediately.</li>
+                <li>All bound kiosk &amp; mobile devices will be <strong>unbound</strong>.</li>
+                <li>Subsequent kiosk &amp; quick-switch punch attempts will immediately fail with <em>&quot;You are no longer active.&quot;</em></li>
+                <li>Any queued offline punches will be rejected upon sync with <code>WORKER_INACTIVE_AT_PUNCH_TIME</code> and routed to the E3 Inbox.</li>
+              </ul>
+            </div>
+
+            <div className="flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setWorkerToExit(null)}
+                disabled={isProcessingExit}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button 
+                type="button"
+                onClick={handleConfirmWorkerExit}
+                disabled={isProcessingExit}
+                className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer"
+              >
+                {isProcessingExit ? 'Revoking Access...' : 'Confirm Worker Exit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WORKER ACCESS, BOUND DEVICES & DPDP AUDIT MODAL */}
+      {workerAccessTarget && (
+        <WorkerAccessModal
+          worker={workerAccessTarget}
+          tenantId={profile?.tenantId || 'demo-tenant-id'}
+          managerEmail={profile?.email || 'manager@factory.in'}
+          onClose={() => setWorkerAccessTarget(null)}
+          onSendMagicLink={(scope) => {
+            const target = workerAccessTarget;
+            setWorkerAccessTarget(null);
+            setMagicLinkWorker({ worker: target, scope });
+          }}
         />
       )}
 

@@ -1,4 +1,5 @@
 import { conflictService } from './conflictService';
+import { inboxService } from './inboxService';
 // src/services/syncService.ts
 import { dbService } from './db';
 import { SyncStatus, OfflineQueueItem, StorageHealth, AttendanceRecord } from '../types/index';
@@ -274,6 +275,50 @@ export const syncService = {
 
         try {
           if (item.entityType === 'ATTENDANCE') {
+            // Edge Case 2: Worker exits while an offline punch is queued
+            // On sync, punch is rejected with WORKER_INACTIVE_AT_PUNCH_TIME and routed to E3 Inbox for supervisor review. Never silently accept.
+            try {
+              const allWorkers = await dbService.getWorkers(item.tenantId);
+              const targetWorker = allWorkers.find(w => w.id === item.workerId);
+              if (targetWorker && (targetWorker.status === 'INACTIVE' || targetWorker.isActive === false)) {
+                console.warn(`[SyncManager] Worker ${item.workerName} is inactive at punch sync time. Rejecting with WORKER_INACTIVE_AT_PUNCH_TIME`);
+                item.syncStatus = 'CONFLICT';
+                item.lastError = 'WORKER_INACTIVE_AT_PUNCH_TIME: Worker is inactive';
+                item.conflictDetails = {
+                  serverTimestamp: new Date().toISOString(),
+                  message: 'WORKER_INACTIVE_AT_PUNCH_TIME: Punch occurred while worker was marked inactive or pending exit.'
+                };
+                await this.updateItem(item);
+                
+                // Route to E3 Inbox for supervisor review
+                try {
+                  await inboxService.createCustomItem(item.tenantId, {
+                    id: `inbox-inactive-punch-${item.recordId || item.id || Date.now()}`,
+                    tenantId: item.tenantId,
+                    type: 'PUNCH_ANOMALY',
+                    title: `Offline Punch Rejected: Worker Inactive (${item.workerName})`,
+                    description: `An offline punch for ${item.workerName} was rejected with WORKER_INACTIVE_AT_PUNCH_TIME. Worker was marked inactive. Supervisor review required.`,
+                    status: 'PENDING',
+                    urgency: 'URGENT',
+                    timestamp: new Date().toISOString(),
+                    workerId: item.workerId,
+                    workerName: item.workerName,
+                    source: 'OFFLINE_SYNC_ENGINE',
+                    actionPayload: {
+                      attendanceRecord: item.payload,
+                      reason: 'WORKER_INACTIVE_AT_PUNCH_TIME'
+                    }
+                  } as any);
+                } catch (inboxErr) {
+                  console.warn('Failed to route inactive punch to inbox:', inboxErr);
+                }
+                conflictCount++;
+                continue;
+              }
+            } catch (workerCheckErr) {
+              console.warn('[SyncManager] Worker active check skipped:', workerCheckErr);
+            }
+
             // AC 1: Server-authoritative conflict strategy with user-visible review
             try {
               const serverAttendance = await dbService.getTodayAttendance(item.tenantId);
