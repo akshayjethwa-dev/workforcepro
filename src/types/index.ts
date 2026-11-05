@@ -161,6 +161,8 @@ export interface Branch {
   dwellTimeMinutes?: number; // default 2 minutes
   enterRadius?: number; // meters (e.g. 100m)
   exitRadius?: number; // meters (e.g. 115m hysteresis buffer)
+  trackingMode?: TrackingMode; // Per-site override: PUNCH_ONLY vs BREADCRUMB
+  safetyCheckInConfig?: SafetyCheckInConfig;
 }
 
 export interface EwaConfig {
@@ -209,6 +211,8 @@ export interface OrgSettings {
   allowLowAccuracy?: boolean; // allow low accuracy punch with flag
   autoPunchEnabled?: boolean;
   breadcrumbsEnabled?: boolean;
+  breadcrumbsConfig?: BreadcrumbsConfig;
+  safetyCheckInConfig?: SafetyCheckInConfig;
   whatsappConfig?: WhatsAppBridgeConfig;
 }
 
@@ -778,6 +782,8 @@ export interface InboxItem {
     withdrawnPurposes?: string[];
     dpdpAction?: string;
     ticketId?: string;
+    safetyAlert?: any;
+    panicAlert?: any;
   };
   resolution?: {
     action: 'APPROVE' | 'REJECT' | 'RESOLVE';
@@ -1017,6 +1023,235 @@ export interface LocationDeletionRequest {
   legalHoldReason?: string;
   resolvedAt?: string;
   notes?: string;
+}
+
+// ==========================================
+// SHIFT-SCOPED BREADCRUMBS & FIELD ROUTE TRACKING
+// ==========================================
+
+export type TrackingMode = 'PUNCH_ONLY' | 'BREADCRUMB';
+
+export interface BreadcrumbsConfig {
+  enabled: boolean;
+  trackingMode: TrackingMode; // Default PUNCH_ONLY on Growth; BREADCRUMB on Pro/Enterprise or via tenant override
+  movingIntervalMinutes: number; // default: 8
+  stationaryIntervalMinutes: number; // default: 30
+  hardCapIntervalMinutes?: number; // Battery protection floor (min 5 min)
+  privacyPauseDurationsMinutes?: number[]; // [15, 30, 60]
+  retentionDays?: number; // 30 days
+}
+
+export type FieldShiftStatus = 
+  | 'ACTIVE' 
+  | 'COMPLETED' 
+  | 'PAUSED_BREAK' 
+  | 'PAUSED_PRIVACY' 
+  | 'TIMED_OUT' 
+  | 'CONSENT_WITHDRAWN';
+
+export interface ShiftPauseRecord {
+  type: 'BREAK' | 'PRIVACY';
+  startedAt: string;
+  resumedAt?: string;
+  durationMinutes?: number;
+  reason?: string;
+}
+
+export interface FieldShiftSession {
+  id: string; // "shift-sess-workerId-timestamp"
+  tenantId: string;
+  siteId: string;
+  siteName: string;
+  workerId: string;
+  workerName: string;
+  deviceBindingId: string;
+  deviceFingerprint: string;
+  startedAt: string; // ISO
+  endedAt?: string; // ISO
+  status: FieldShiftStatus;
+  pauseHistory: ShiftPauseRecord[];
+  lastBreadcrumbAt?: string;
+  lastMotionStatus?: 'MOVING' | 'STATIONARY';
+  totalBreadcrumbsCount: number;
+  mockedDetectedCount: number;
+  trackingMode: TrackingMode;
+  degradedReason?: 'OEM_BATTERY_DECLINED' | 'PWA_BROWSER' | 'PERMISSION_REVOKED' | 'CONSENT_WITHDRAWN';
+  // Lone Worker Safety Extensions
+  safetyStatus?: 'OPTED_IN' | 'DECLINED' | 'DISABLED';
+  safetyDeclinedAt?: string;
+  nextCheckInDueAt?: string;
+  activePanicId?: string;
+  activeCheckInId?: string;
+}
+
+// ==========================================
+// LONE WORKER SAFETY CHECK-IN & PANIC SOS
+// ==========================================
+
+export interface EmergencyContact {
+  id: string;
+  name: string;
+  phone: string;
+  role: 'SUPERVISOR' | 'BRANCH_MANAGER' | 'FALLBACK_DISPATCH' | 'SAFETY_OFFICER';
+  isFallback?: boolean; // Guarantees no single point of failure
+  email?: string;
+}
+
+export interface EscalationLadderConfig {
+  workerReNotifyMinutes: number; // default 5 (T+5)
+  supervisorNotifyMinutes: number; // default 15 (T+15)
+  branchManagerNotifyMinutes: number; // default 30 (T+30)
+}
+
+export interface SafetyCheckInConfig {
+  enabled: boolean; // Off by default. Opt-in per tenant/site
+  intervalMinutes: number; // default 60 min for remote sites
+  gracePeriodMinutes: number; // default 5
+  escalationLadder: EscalationLadderConfig;
+  emergencyContacts: EmergencyContact[];
+  channels: ('IN_APP' | 'WHATSAPP' | 'SMS')[];
+  allowDeclineWithoutInsubordination: boolean; // default true
+  requireVoiceNoteOption?: boolean;
+}
+
+export type SafetyCheckInStatus = 
+  | 'SCHEDULED' 
+  | 'DUE' 
+  | 'RESPONDED_OK' 
+  | 'MISSED_ESCALATING' 
+  | 'ESCALATED' 
+  | 'RESOLVED_LATE' 
+  | 'DECLINED_BY_WORKER' 
+  | 'EXPIRED_SHIFT_CLOSED';
+
+export type SafetyResponseChannel = 'IN_APP' | 'WHATSAPP' | 'SMS';
+
+export interface SafetyCheckInRecord {
+  id: string;
+  sessionId: string; // Strictly FieldShiftSession.id
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  siteId: string;
+  siteName: string;
+  scheduledAt: string; // ISO
+  dueAt: string; // ISO
+  respondedAt?: string; // ISO
+  status: SafetyCheckInStatus;
+  responseChannel?: SafetyResponseChannel;
+  voiceNoteSnippet?: string; // Audio snippet data URL or transcript
+  voiceNoteDurationSec?: number;
+  escalationLevel?: 'NONE' | 'WORKER_T5' | 'SUPERVISOR_T15' | 'BRANCH_MANAGER_T30';
+  escalationLogs?: {
+    at: string;
+    target: string;
+    channel: string;
+    note: string;
+  }[];
+  lastKnownLocation?: {
+    lat: number;
+    lng: number;
+    accuracy: number;
+    address?: string;
+    isOffline?: boolean;
+    lastSeenAt: string;
+  };
+  batteryPct?: number;
+  rejectionReason?: string;
+  lateReason?: string;
+  notes?: string;
+}
+
+export interface PanicAlertRecord {
+  id: string;
+  sessionId?: string; // FieldShiftSession.id if during active shift
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  workerPhotoUrl?: string;
+  siteId?: string;
+  siteName?: string;
+  triggeredAt: string; // ISO
+  resolvedAt?: string; // ISO
+  status: 'ACTIVE' | 'RESOLVED' | 'FALSE_ALARM';
+  location?: {
+    lat: number;
+    lng: number;
+    accuracy: number;
+    address?: string;
+  };
+  batteryPct?: number;
+  shiftContext?: {
+    shiftName?: string;
+    startTime?: string;
+    elapsedMinutes?: number;
+  };
+  contactsNotified: {
+    name: string;
+    phone: string;
+    role: string;
+    channel: string;
+    timestamp: string;
+  }[];
+  resolvedBy?: string;
+  resolutionNotes?: string;
+}
+
+export type BreadcrumbSource = 'GPS' | 'NETWORK' | 'CELL' | 'OFFLINE_BUFFER';
+
+export type BreadcrumbEventType = 
+  | 'POINT' 
+  | 'BREAK_PAUSE' 
+  | 'BREAK_RESUME' 
+  | 'PRIVACY_PAUSE' 
+  | 'PRIVACY_RESUME' 
+  | 'GAP_MARKER';
+
+export interface ShiftBreadcrumb {
+  id: string;
+  sessionId: string; // FieldShiftSession.id
+  tenantId: string;
+  workerId: string;
+  siteId: string;
+  lat: number;
+  lng: number;
+  accuracy: number; // in meters
+  capturedAt: string; // ISO
+  source: BreadcrumbSource;
+  isMocked: boolean;
+  batteryPct: number;
+  isMoving: boolean;
+  speedMps?: number;
+  eventType: BreadcrumbEventType;
+  gapDetails?: {
+    startAt: string;
+    endAt: string;
+    reason: string; // e.g. "No signal 10:12–10:48"
+  };
+}
+
+export interface RoutePlaybackAudit {
+  id: string;
+  tenantId: string;
+  sessionId: string;
+  workerId: string;
+  workerName: string;
+  viewedAt: string;
+  viewerId: string;
+  viewerName: string;
+  viewerRole: string;
+  date: string;
+  source: 'MANAGER_MAP' | 'HISTORICAL_PLAYBACK';
+}
+
+export interface OemBatteryOptState {
+  deviceId: string;
+  osType: 'XIAOMI' | 'OPPO_REALME' | 'VIVO' | 'SAMSUNG' | 'STOCK_ANDROID' | 'OTHER';
+  walkthroughCompleted: boolean;
+  declined: boolean;
+  timestamp: string;
 }
 
 // ==========================================

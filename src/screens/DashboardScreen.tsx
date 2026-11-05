@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot,
-  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox
+  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox, Navigation, ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
@@ -14,6 +14,10 @@ import { SetupGuideModal } from '../components/SetupGuideModal';
 import { inboxService } from '../services/inboxService';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
 import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
+import { ShiftRouteMapModal } from '../components/ShiftRouteMapModal';
+import { SupervisorSafetyMonitorModal } from '../components/SupervisorSafetyMonitorModal';
+import { breadcrumbService } from '../services/breadcrumbService';
+import { safetyCheckInService } from '../services/safetyCheckInService';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
@@ -48,6 +52,10 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
   // AI Chat state
   const [showAIChat, setShowAIChat] = useState(false);
   const [inboxPendingCount, setInboxPendingCount] = useState<number>(0);
+  const [showRouteModal, setShowRouteModal] = useState(false);
+  const [activeShiftCount, setActiveShiftCount] = useState(0);
+  const [showSafetyMonitorModal, setShowSafetyMonitorModal] = useState(false);
+  const [activePanicCount, setActivePanicCount] = useState(0);
 
   const refreshData = async () => {
     if (!profile?.tenantId) return;
@@ -62,6 +70,14 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
 
       setInboxPendingCount(pendingActions);
       setOrgSettings(settings);
+
+      // Check live field shift breadcrumb sessions (Key AC 6)
+      const liveShifts = breadcrumbService.getActiveShiftWorkers(profile.tenantId);
+      setActiveShiftCount(liveShifts.length);
+
+      // Check active emergency panic SOS alerts
+      const livePanics = safetyCheckInService.getActivePanicAlerts(profile.tenantId);
+      setActivePanicCount(livePanics.length);
 
       const activeWorkers = workers.filter(w => 
           w.status === 'ACTIVE' && 
@@ -264,6 +280,32 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                        ))}
                     </select>
                 )}
+                <button 
+                  onClick={() => setShowRouteModal(true)}
+                  className="px-3 py-2 bg-slate-900 rounded-xl text-white shadow-xs hover:bg-slate-800 active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px]"
+                  title="Inspect live field routes and shift breadcrumbs"
+                >
+                  <Navigation size={15} className="text-emerald-400" />
+                  <span className="hidden sm:inline">Field Routes</span>
+                  {activeShiftCount > 0 && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
+                  )}
+                </button>
+                <button 
+                  onClick={() => setShowSafetyMonitorModal(true)}
+                  className={`px-3 py-2 rounded-xl text-white shadow-xs active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px] cursor-pointer ${
+                    activePanicCount > 0 ? 'bg-rose-700 hover:bg-rose-800 animate-pulse' : 'bg-slate-900 hover:bg-slate-800'
+                  }`}
+                  title="Inspect lone worker check-in statuses and panic SOS alerts"
+                >
+                  <ShieldAlert size={15} className={activePanicCount > 0 ? 'text-white' : 'text-rose-400'} />
+                  <span className="hidden sm:inline">Lone Safety</span>
+                  {activePanicCount > 0 && (
+                    <span className="px-1 py-0.2 rounded font-mono text-[9px] font-black bg-rose-500 text-white ml-0.5">
+                      {activePanicCount} SOS
+                    </span>
+                  )}
+                </button>
                 <button 
                   onClick={() => setShowGuide(true)}
                   className="px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-xs hover:bg-slate-50 hover:border-slate-300 text-slate-700 active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px]"
@@ -573,6 +615,21 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                 )}
             </div>
         </div>
+
+        {/* SHIFT-SCOPED BREADCRUMBS & FIELD ROUTE MODAL (KEY AC 6) */}
+        <ShiftRouteMapModal
+          isOpen={showRouteModal}
+          onClose={() => setShowRouteModal(false)}
+          tenantId={profile?.tenantId || ''}
+        />
+
+        {/* LONE WORKER SAFETY COMMAND MODAL */}
+        <SupervisorSafetyMonitorModal
+          isOpen={showSafetyMonitorModal}
+          onClose={() => setShowSafetyMonitorModal(false)}
+          tenantId={profile?.tenantId || ''}
+          branches={orgSettings?.branches}
+        />
     </div>
   );
 };

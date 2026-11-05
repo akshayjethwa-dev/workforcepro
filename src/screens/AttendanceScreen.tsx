@@ -27,7 +27,9 @@ import {
   Sparkles,
   Zap,
   Sun,
-  IndianRupee
+  IndianRupee,
+  Navigation,
+  ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -43,6 +45,10 @@ import { FrontlineErgonomicsModal } from '../components/FrontlineErgonomicsModal
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
 import { A11yAuditModal } from '../components/A11yAuditModal';
 import { WorkerEwaModal } from '../components/WorkerEwaModal';
+import { ShiftRouteMapModal } from '../components/ShiftRouteMapModal';
+import { SupervisorSafetyMonitorModal } from '../components/SupervisorSafetyMonitorModal';
+import { breadcrumbService } from '../services/breadcrumbService';
+import { safetyCheckInService } from '../services/safetyCheckInService';
 
 export const AttendanceScreen: React.FC = () => {
   const { profile } = useAuth();
@@ -75,6 +81,24 @@ export const AttendanceScreen: React.FC = () => {
   // Frontline Leave / Field Reason Modal state
   const [leaveModalWorker, setLeaveModalWorker] = useState<Worker | null>(null);
   const [selectedLeaveReason, setSelectedLeaveReason] = useState('Sick / Medical Leave');
+
+  // Shift-Scoped Breadcrumbs Modal State (Key AC 6)
+  const [showShiftRouteModal, setShowShiftRouteModal] = useState<boolean>(false);
+  const [selectedWorkerForRoute, setSelectedWorkerForRoute] = useState<string | undefined>(undefined);
+  const [activeShiftCount, setActiveShiftCount] = useState<number>(0);
+
+  // Lone Worker Safety Monitor Modal State
+  const [showSafetyMonitorModal, setShowSafetyMonitorModal] = useState<boolean>(false);
+  const [activePanicCount, setActivePanicCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (profile?.tenantId) {
+      const active = breadcrumbService.getActiveShiftWorkers(profile.tenantId);
+      setActiveShiftCount(active.length);
+      const panics = safetyCheckInService.getActivePanicAlerts(profile.tenantId);
+      setActivePanicCount(panics.length);
+    }
+  }, [profile?.tenantId, attendanceMap]);
   const [leaveDurationDays, setLeaveDurationDays] = useState(1);
   const [leaveFieldNotes, setLeaveFieldNotes] = useState('');
 
@@ -517,6 +541,68 @@ export const AttendanceScreen: React.FC = () => {
 
         {/* Supervisor Controls & Sunlight Field Mode Trigger (min-h-[56px] for gloves) */}
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Field Shift Routes & Breadcrumbs Modal Trigger (Key AC 6) */}
+          <button
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              setShowShiftRouteModal(true);
+            }}
+            type="button"
+            className="min-h-[56px] px-4 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs border-2 border-slate-900 shadow-md flex items-center gap-2.5 transition-all cursor-pointer"
+            title="Inspect worker shift routes, breadcrumbs, and live GPS positions"
+            aria-label="Open Shift-Scoped Field Routes"
+          >
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+              <Navigation size={18} />
+            </div>
+            <div className="text-left">
+              <div className="leading-tight flex items-center gap-1.5">
+                <span>Field Routes</span>
+                {activeShiftCount > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </div>
+              <span className="text-[10px] text-slate-300 font-mono block mt-0.5">
+                {activeShiftCount > 0 ? `${activeShiftCount} Active Shifts` : 'Route Playback'}
+              </span>
+            </div>
+          </button>
+
+          {/* Lone Worker Safety Command Modal Trigger */}
+          <button
+            onClick={() => {
+              triggerFrontlineHaptic('light');
+              setShowSafetyMonitorModal(true);
+            }}
+            type="button"
+            className={`min-h-[56px] px-4 py-2.5 rounded-2xl font-bold text-xs border-2 shadow-md flex items-center gap-2.5 transition-all cursor-pointer ${
+              activePanicCount > 0
+                ? 'bg-rose-700 hover:bg-rose-800 text-white border-rose-500 animate-pulse'
+                : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-900'
+            }`}
+            title="Inspect lone worker check-in statuses, escalation ladder, and panic alerts"
+            aria-label="Open Lone Worker Safety Command"
+          >
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+              activePanicCount > 0 ? 'bg-white text-rose-700' : 'bg-rose-600 text-white'
+            }`}>
+              <ShieldAlert size={18} />
+            </div>
+            <div className="text-left">
+              <div className="leading-tight flex items-center gap-1.5">
+                <span>Lone Safety</span>
+                {activePanicCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded font-mono text-[9px] font-black bg-rose-500 text-white animate-bounce">
+                    {activePanicCount} SOS
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] text-slate-300 font-mono block mt-0.5">
+                Check-Ins & SOS
+              </span>
+            </div>
+          </button>
+
           {/* Quick-Access Field Mode (Sunlight Mode) Toggle */}
           <button
             onClick={() => {
@@ -1322,6 +1408,26 @@ export const AttendanceScreen: React.FC = () => {
           onAdvanceCreated={(newAdv) => setAllAdvances(prev => [...prev, newAdv])}
         />
       )}
+
+      {/* SHIFT-SCOPED BREADCRUMBS & FIELD ROUTE MODAL (KEY AC 6) */}
+      <ShiftRouteMapModal
+        isOpen={showShiftRouteModal}
+        onClose={() => {
+          setShowShiftRouteModal(false);
+          setSelectedWorkerForRoute(undefined);
+        }}
+        tenantId={profile?.tenantId || ''}
+        workers={workers}
+        initialWorkerId={selectedWorkerForRoute}
+      />
+
+      {/* LONE WORKER SAFETY COMMAND MODAL */}
+      <SupervisorSafetyMonitorModal
+        isOpen={showSafetyMonitorModal}
+        onClose={() => setShowSafetyMonitorModal(false)}
+        tenantId={profile?.tenantId || ''}
+        branches={settings.branches}
+      />
     </div>
   );
 };

@@ -14,7 +14,9 @@ export type FeatureFlagKey =
   | 'MULTI_BRANCH'
   | 'AUDIT_EXPORT'
   | 'GEOFENCE_AUTO_PUNCH'
-  | 'WHATSAPP_BRIDGE';
+  | 'WHATSAPP_BRIDGE'
+  | 'SHIFT_BREADCRUMBS'
+  | 'LONE_WORKER_SAFETY';
 
 export type FeatureCategory = 'CORE' | 'ATTENDANCE' | 'PAYROLL' | 'ENTERPRISE' | 'AI_AND_ANALYTICS';
 
@@ -146,6 +148,24 @@ export const ALL_FEATURE_FLAGS: FeatureFlagDefinition[] = [
     minRecommendedTier: 'STARTER',
     isSensitiveGated: true,
   },
+  {
+    key: 'SHIFT_BREADCRUMBS',
+    label: 'Shift-Scoped Breadcrumbs (Route Tracking)',
+    description: 'Opt-in shift-scoped location tracking during active work shifts for route verification and worker safety.',
+    category: 'ATTENDANCE',
+    globalDefault: false,
+    minRecommendedTier: 'PRO',
+    isSensitiveGated: true,
+  },
+  {
+    key: 'LONE_WORKER_SAFETY',
+    label: 'Lone Worker Safety Check-In & Panic SOS',
+    description: 'Automated periodic safety check-ins with multi-tier escalation ladder, single-tap I am OK with optional voice notes, and instant Panic SOS.',
+    category: 'ATTENDANCE',
+    globalDefault: false,
+    minRecommendedTier: 'PRO',
+    isSensitiveGated: true,
+  },
 ];
 
 // Level 2: Default Plan-Level Overrides Matrix
@@ -164,6 +184,8 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     MULTI_BRANCH: false,
     AUDIT_EXPORT: false,
     WHATSAPP_BRIDGE: false,
+    SHIFT_BREADCRUMBS: false,
+    LONE_WORKER_SAFETY: false,
   },
   TRIAL: {
     ADVANCED_PAYROLL: true,
@@ -179,6 +201,8 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     MULTI_BRANCH: true,
     AUDIT_EXPORT: true,
     WHATSAPP_BRIDGE: true,
+    SHIFT_BREADCRUMBS: true,
+    LONE_WORKER_SAFETY: true,
   },
   STARTER: {
     ADVANCED_PAYROLL: false,
@@ -194,6 +218,8 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     MULTI_BRANCH: false,
     AUDIT_EXPORT: false,
     WHATSAPP_BRIDGE: true,
+    SHIFT_BREADCRUMBS: false,
+    LONE_WORKER_SAFETY: false,
   },
   PRO: {
     ADVANCED_PAYROLL: true,
@@ -209,6 +235,8 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     MULTI_BRANCH: true,
     AUDIT_EXPORT: false,
     WHATSAPP_BRIDGE: true,
+    SHIFT_BREADCRUMBS: true,
+    LONE_WORKER_SAFETY: true,
   },
   ENTERPRISE: {
     ADVANCED_PAYROLL: true,
@@ -224,6 +252,8 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     MULTI_BRANCH: true,
     AUDIT_EXPORT: true,
     WHATSAPP_BRIDGE: true,
+    SHIFT_BREADCRUMBS: true,
+    LONE_WORKER_SAFETY: true,
   },
 };
 

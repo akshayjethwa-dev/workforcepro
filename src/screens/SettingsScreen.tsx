@@ -4,14 +4,15 @@ import {
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
   CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
-  IndianRupee, MessageSquare
+  IndianRupee, MessageSquare, Navigation, ShieldAlert, PhoneCall
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
-import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig } from '../types/index';
+import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig, SafetyCheckInConfig } from '../types/index';
 import { whatsappService } from '../services/whatsappService';
+import { safetyCheckInService, DEFAULT_SAFETY_CONFIG } from '../services/safetyCheckInService';
 import { WhatsAppChatSimulator } from '../components/WhatsAppChatSimulator';
 import { SetupGuideModal } from '../components/SetupGuideModal';
 import { A11yAuditModal } from '../components/A11yAuditModal';
@@ -22,7 +23,7 @@ import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/fir
 import { db } from '../lib/firebase';
 
 export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => void }> = ({ onNavigate }) => {
-  const { profile, limits } = useAuth();
+  const { profile, limits, tenantPlan } = useAuth();
   const { toast } = useToast();
   const { isFieldMode, toggleFieldMode, setFieldMode } = useTheme();
   
@@ -1619,6 +1620,318 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
             </div>
           </div>
 
+          {/* SHIFT-SCOPED BREADCRUMBS CONFIGURATION (KEY AC 1, 4) */}
+          <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                  <Navigation size={19} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-slate-900 text-sm">Shift-Scoped Breadcrumbs (Route Tracking)</h4>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                      Opt-In &bull; E16-S3
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                    Shift-scoped location tracking during active work shifts for route verification and worker safety. Starts strictly at Punch IN and ends on Punch OUT.
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer"
+                  checked={settings?.breadcrumbsConfig?.enabled ?? false}
+                  disabled={tenantPlan === 'FREE'}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setSettings(prev => {
+                      if (!prev) return prev;
+                      return {
+                        ...prev,
+                        breadcrumbsEnabled: enabled,
+                        breadcrumbsConfig: {
+                          enabled,
+                          trackingMode: enabled ? 'BREADCRUMB' : 'PUNCH_ONLY',
+                          movingIntervalMinutes: prev.breadcrumbsConfig?.movingIntervalMinutes || 8,
+                          stationaryIntervalMinutes: prev.breadcrumbsConfig?.stationaryIntervalMinutes || 30,
+                          hardCapIntervalMinutes: 5,
+                          privacyPauseDurationsMinutes: [15, 30, 60],
+                          retentionDays: 30
+                        }
+                      };
+                    });
+                  }}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+
+            {tenantPlan === 'FREE' ? (
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-500 flex items-center gap-2">
+                <Lock size={15} className="text-slate-400 shrink-0" />
+                <span>Shift-scoped breadcrumbs are disabled entirely on Free plan. Upgrade to Pro or Enterprise to enable route tracking.</span>
+              </div>
+            ) : settings?.breadcrumbsConfig?.enabled && (
+              <div className="pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                    Moving Heartbeat Cadence
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="number" 
+                      min={5} 
+                      max={20} 
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:bg-white outline-none"
+                      value={settings?.breadcrumbsConfig?.movingIntervalMinutes || 8}
+                      onChange={(e) => {
+                        const val = Math.max(5, parseInt(e.target.value) || 8); // Hard cap min 5 min
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          return {
+                            ...prev,
+                            breadcrumbsConfig: {
+                              enabled: prev.breadcrumbsConfig?.enabled ?? true,
+                              trackingMode: prev.breadcrumbsConfig?.trackingMode ?? 'BREADCRUMB',
+                              stationaryIntervalMinutes: prev.breadcrumbsConfig?.stationaryIntervalMinutes ?? 30,
+                              hardCapIntervalMinutes: 5,
+                              privacyPauseDurationsMinutes: [15, 30, 60],
+                              retentionDays: 30,
+                              ...prev.breadcrumbsConfig,
+                              movingIntervalMinutes: val
+                            }
+                          };
+                        });
+                      }}
+                    />
+                    <span className="font-mono text-slate-500 text-xs">mins</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 mt-1 block">Default: 8 min (Hard cap: min 5m battery protection)</span>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                    Stationary Cadence
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="number" 
+                      min={15} 
+                      max={60} 
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:bg-white outline-none"
+                      value={settings?.breadcrumbsConfig?.stationaryIntervalMinutes || 30}
+                      onChange={(e) => {
+                        const val = Math.max(15, parseInt(e.target.value) || 30);
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          return {
+                            ...prev,
+                            breadcrumbsConfig: {
+                              enabled: prev.breadcrumbsConfig?.enabled ?? true,
+                              trackingMode: prev.breadcrumbsConfig?.trackingMode ?? 'BREADCRUMB',
+                              movingIntervalMinutes: prev.breadcrumbsConfig?.movingIntervalMinutes ?? 8,
+                              hardCapIntervalMinutes: 5,
+                              privacyPauseDurationsMinutes: [15, 30, 60],
+                              retentionDays: 30,
+                              ...prev.breadcrumbsConfig,
+                              stationaryIntervalMinutes: val
+                            }
+                          };
+                        });
+                      }}
+                    />
+                    <span className="font-mono text-slate-500 text-xs">mins</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 mt-1 block">Near-zero GPS usage when stationary</span>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                    Statutory Data Retention
+                  </label>
+                  <div className="p-2 bg-slate-100 rounded-lg text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span>30-Day Window</span>
+                    <span className="text-[10px] text-emerald-600 font-normal">Auto-purged</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 mt-1 block">DPDP compliant auto-purge unless legal hold</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* LONE WORKER SAFETY CHECK-IN & PANIC SOS CONFIGURATION (KEY AC 1-6) */}
+          <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                  <ShieldAlert size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-slate-900 text-sm">Lone Worker Safety Check-In &amp; Panic SOS</h4>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                      Off by Default &bull; Opt-In per Site
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                    Automated scheduled safety check-ins with multi-tier escalation ladder (T+5 worker, T+15 supervisor, T+30 branch manager + fallback). 3-second hold Panic SOS and single-tap "I'm OK" responses.
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer"
+                  checked={settings?.safetyCheckInConfig?.enabled ?? false}
+                  disabled={tenantPlan === 'FREE'}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setSettings(prev => {
+                      if (!prev) return prev;
+                      const currentCfg = prev.safetyCheckInConfig || DEFAULT_SAFETY_CONFIG;
+                      const updated: SafetyCheckInConfig = {
+                        ...currentCfg,
+                        enabled
+                      };
+                      if (profile?.tenantId) {
+                        safetyCheckInService.saveSafetyConfig(profile.tenantId, updated);
+                      }
+                      return {
+                        ...prev,
+                        safetyCheckInConfig: updated
+                      };
+                    });
+                  }}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+              </label>
+            </div>
+
+            {tenantPlan === 'FREE' ? (
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-500 flex items-center gap-2">
+                <Lock size={15} className="text-slate-400 shrink-0" />
+                <span>Lone worker safety monitoring is disabled entirely on Free plan. Upgrade to Pro or Enterprise to enable safety check-ins.</span>
+              </div>
+            ) : settings?.safetyCheckInConfig?.enabled && (
+              <div className="pt-3 border-t border-slate-100 space-y-4 text-xs">
+                {/* Cadence & Escalation Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                      Check-In Frequency (Remote Sites)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:bg-white outline-none"
+                        value={settings?.safetyCheckInConfig?.intervalMinutes || 60}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 60;
+                          setSettings(prev => {
+                            if (!prev) return prev;
+                            const updated: SafetyCheckInConfig = {
+                              ...(prev.safetyCheckInConfig || DEFAULT_SAFETY_CONFIG),
+                              intervalMinutes: val
+                            };
+                            if (profile?.tenantId) safetyCheckInService.saveSafetyConfig(profile.tenantId, updated);
+                            return { ...prev, safetyCheckInConfig: updated };
+                          });
+                        }}
+                      >
+                        <option value="30">Every 30 minutes (Subterranean / High Risk)</option>
+                        <option value="60">Every 60 minutes (Default Remote Site)</option>
+                        <option value="90">Every 90 minutes (Standard Field)</option>
+                        <option value="120">Every 120 minutes (Low Risk Campus)</option>
+                      </select>
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-1 block">Countdown visible on worker's punch view</span>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                      Multi-Tier Escalation Ladder
+                    </label>
+                    <div className="p-2 bg-slate-50 rounded-lg text-xs space-y-1 font-mono text-slate-700 border border-slate-200">
+                      <div className="flex justify-between"><span>Worker Re-notify:</span><span className="font-bold text-slate-900">T+5 min</span></div>
+                      <div className="flex justify-between"><span>Supervisor Alert:</span><span className="font-bold text-amber-700">T+15 min</span></div>
+                      <div className="flex justify-between"><span>Manager + Fallback:</span><span className="font-bold text-rose-700">T+30 min (URGENT)</span></div>
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-1 block">Clock-authoritative (triggers even if phone offline)</span>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                      Delivery Channels
+                    </label>
+                    <div className="p-2 bg-slate-50 rounded-lg text-xs space-y-1.5 border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-700">In-App Prompt</span>
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded">Active</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-700">WhatsApp (E11)</span>
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded">Enabled</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-700">SMS Fallback</span>
+                        <span className="text-[10px] font-bold text-slate-700 bg-slate-200 px-1.5 py-0.2 rounded">Carrier Q</span>
+                      </div>
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-1 block">Channel-agnostic single-tap responses</span>
+                  </div>
+                </div>
+
+                {/* Multi-Tier Emergency Contacts List with SPOF Validation */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                      Designated Emergency Escalation Contacts (No Single Point of Failure)
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      Fallback Protected
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {(settings.safetyCheckInConfig?.emergencyContacts || DEFAULT_SAFETY_CONFIG.emergencyContacts).map((contact, ci) => (
+                      <div key={ci} className="p-2.5 bg-white rounded-xl border border-slate-200 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-xs text-slate-800">{contact.name}</span>
+                            {contact.isFallback && (
+                              <span className="text-[9px] font-mono font-bold bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded">
+                                Fallback
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-slate-500 font-mono block mt-0.5">{contact.phone}</span>
+                        </div>
+                        <span className="text-[9px] font-semibold text-slate-400 uppercase mt-2">
+                          Role: {contact.role}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Worker Insubordination Immunity Compliance Notice */}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-2xl text-[11px] text-blue-900 flex items-start gap-2.5 leading-relaxed">
+                  <Info size={16} className="text-blue-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold">Worker Non-Insubordination Safeguard (Key AC 6):</strong>
+                    <span>
+                      Workers can decline safety check-ins at shift start without losing their punch ability. Declines are recorded for supervisor roster awareness and must <u>never</u> be treated as insubordination by the system or management.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-between items-end px-1">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Factory Locations</h3>
               <button onClick={addBranch} className="text-indigo-600 text-sm font-bold flex items-center bg-indigo-50 px-4 min-h-11 rounded-xl hover:bg-indigo-100 transition-colors">
@@ -1757,6 +2070,50 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
                                         </div>
                                       </div>
                                     )}
+                                  </div>
+
+                                  {/* Site Shift Tracking Mode (Opt-in per site) (Key AC 1) */}
+                                  <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl flex items-center justify-between text-xs">
+                                    <div>
+                                      <h5 className="text-xs font-bold text-slate-800">Site Route Tracking Mode</h5>
+                                      <p className="text-[10px] text-slate-500">Configure PUNCH_ONLY vs BREADCRUMB for workers visiting this facility.</p>
+                                    </div>
+                                    <select
+                                      value={branch.trackingMode || 'BREADCRUMB'}
+                                      onChange={(e) => updateBranchDetails(branch.id, { trackingMode: e.target.value as any })}
+                                      className="text-xs font-bold p-2 rounded-lg border border-slate-200 bg-white text-slate-800 outline-none"
+                                    >
+                                      <option value="BREADCRUMB">BREADCRUMB (Shift Route)</option>
+                                      <option value="PUNCH_ONLY">PUNCH_ONLY (Punch Only)</option>
+                                    </select>
+                                  </div>
+
+                                  {/* Site Lone Worker Safety (Key AC 1: Configurable per site) */}
+                                  <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl flex items-center justify-between text-xs">
+                                    <div>
+                                      <h5 className="text-xs font-bold text-slate-800">Site Lone Worker Safety</h5>
+                                      <p className="text-[10px] text-slate-500">Configure safety check-in interval for lone workers at this site.</p>
+                                    </div>
+                                    <select
+                                      value={branch.safetyCheckInConfig?.intervalMinutes ?? 'DEFAULT'}
+                                      onChange={(e) => {
+                                        const val = e.target.value === 'DEFAULT' ? undefined : parseInt(e.target.value);
+                                        updateBranchDetails(branch.id, {
+                                          safetyCheckInConfig: val ? {
+                                            ...DEFAULT_SAFETY_CONFIG,
+                                            ...branch.safetyCheckInConfig,
+                                            enabled: true,
+                                            intervalMinutes: val
+                                          } : undefined
+                                        });
+                                      }}
+                                      className="text-xs font-bold p-2 rounded-lg border border-slate-200 bg-white text-slate-800 outline-none"
+                                    >
+                                      <option value="DEFAULT">Tenant Default ({settings?.safetyCheckInConfig?.intervalMinutes || 60}m)</option>
+                                      <option value="30">30 minutes (Subterranean / High Risk)</option>
+                                      <option value="60">60 minutes (Standard Remote Site)</option>
+                                      <option value="120">120 minutes (Low Risk Campus)</option>
+                                    </select>
                                   </div>
                               </div>
                           ) : (

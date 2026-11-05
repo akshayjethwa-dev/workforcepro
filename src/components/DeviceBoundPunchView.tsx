@@ -6,7 +6,7 @@ import {
   ChevronRight, Building, Key, Sparkles, Send, BellRing, 
   Info, Check, ShieldAlert, Wifi, WifiOff, Eye, Shield, HelpCircle,
   Battery, BatteryCharging, AlertOctagon, Download, Compass, Crosshair,
-  Layers, Radio, Activity, CheckCircle
+  Layers, Radio, Activity, CheckCircle, Coffee, Play, Pause, Navigation, X
 } from 'lucide-react';
 import { 
   Worker, 
@@ -21,7 +21,8 @@ import {
   SiteDistanceInfo,
   GeofenceEvent,
   Branch,
-  OrgSettings
+  OrgSettings,
+  FieldShiftSession
 } from '../types/index';
 import { 
   magicLinkService, 
@@ -35,6 +36,12 @@ import { LocationPrivacyModal } from './LocationPrivacyModal';
 import { geoUtils, GeofenceEvaluation } from '../utils/geo';
 import { syncService } from '../services/syncService';
 import { autoPunchService } from '../services/autoPunchService';
+import { breadcrumbService } from '../services/breadcrumbService';
+import { safetyCheckInService } from '../services/safetyCheckInService';
+import { OemBatteryOptimizationModal } from './OemBatteryOptimizationModal';
+import { LoneWorkerCheckInModal } from './LoneWorkerCheckInModal';
+import { PanicSosModal } from './PanicSosModal';
+import { SafetyCheckInRecord, PanicAlertRecord } from '../types/index';
 
 interface Props {
   tokenRecord: WorkerAccessToken;
@@ -172,6 +179,27 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   const [branches, setBranches] = useState<Branch[]>([]);
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
 
+  // --- SHIFT-SCOPED BREADCRUMBS STATE (KEY AC 1-10) ---
+  const [activeShiftSession, setActiveShiftSession] = useState<FieldShiftSession | null>(() => 
+    breadcrumbService.getActiveSession(initialWorker.id, tokenRecord.tenantId)
+  );
+  const [showOemBatteryModal, setShowOemBatteryModal] = useState<boolean>(false);
+  const [showPrivacyPauseModal, setShowPrivacyPauseModal] = useState<boolean>(false);
+  const [privacyPauseMinutes, setPrivacyPauseMinutes] = useState<number>(30);
+  const [privacyPauseReason, setPrivacyPauseReason] = useState<string>('Personal / Sensitive Location');
+  const [trackingLoading, setTrackingLoading] = useState<boolean>(false);
+
+  // --- LONE WORKER SAFETY CHECK-IN & PANIC SOS STATE ---
+  const [activeSafetyCheckIn, setActiveSafetyCheckIn] = useState<SafetyCheckInRecord | null>(() => 
+    safetyCheckInService.getPendingCheckInForWorker(initialWorker.id, activeShiftSession?.id)
+  );
+  const [showCheckInModal, setShowCheckInModal] = useState<boolean>(false);
+  const [showPanicModal, setShowPanicModal] = useState<boolean>(false);
+  const [activePanicAlert, setActivePanicAlert] = useState<PanicAlertRecord | null>(() => 
+    safetyCheckInService.getActivePanicForWorker(initialWorker.id)
+  );
+  const [safetyMinutesRemaining, setSafetyMinutesRemaining] = useState<number>(60);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -265,6 +293,16 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
           setUndoCountdownSeconds(remainingSecs);
         }
 
+        // Check active shift breadcrumb session
+        const currentFieldSession = breadcrumbService.getActiveSession(worker.id, tokenRecord.tenantId);
+        setActiveShiftSession(currentFieldSession);
+
+        // Check active lone worker safety check-in & panic
+        const pendingCheckIn = safetyCheckInService.getPendingCheckInForWorker(worker.id, currentFieldSession?.id);
+        setActiveSafetyCheckIn(pendingCheckIn);
+        const currentPanic = safetyCheckInService.getActivePanicForWorker(worker.id);
+        setActivePanicAlert(currentPanic);
+
         // Load historical geofence events
         setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
 
@@ -307,6 +345,33 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   useEffect(() => {
     checkCurrentBinding();
   }, [worker.id]);
+
+  // Lone Worker Safety Monitor Interval & Prompt Trigger
+  useEffect(() => {
+    const checkSafety = () => {
+      if (activeShiftSession && activeShiftSession.status === 'ACTIVE') {
+        const checkIn = safetyCheckInService.getPendingCheckInForWorker(worker.id, activeShiftSession.id);
+        setActiveSafetyCheckIn(checkIn);
+        const panic = safetyCheckInService.getActivePanicForWorker(worker.id);
+        setActivePanicAlert(panic);
+
+        if (checkIn) {
+          const diffMs = new Date(checkIn.dueAt).getTime() - Date.now();
+          const mins = Math.round(diffMs / (60 * 1000));
+          setSafetyMinutesRemaining(mins);
+
+          // If due time reached and not yet responded
+          if (diffMs <= 0 && checkIn.status === 'SCHEDULED') {
+            checkIn.status = 'DUE';
+          }
+        }
+      }
+    };
+
+    checkSafety();
+    const interval = setInterval(checkSafety, 8000);
+    return () => clearInterval(interval);
+  }, [activeShiftSession, worker.id]);
 
   // Evaluate Auto-Punch logic for given coordinates
   const evaluateAutoPunchForCoords = async (coords: { lat: number; lng: number; accuracy: number; isMock?: boolean }) => {
@@ -892,6 +957,93 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
   };
 
+  // --- SHIFT-SCOPED BREADCRUMBS HANDLERS & HEARTBEAT (KEY AC 1-10) ---
+  const handlePauseForBreak = async () => {
+    if (!activeShiftSession) return;
+    setTrackingLoading(true);
+    try {
+      const updated = await breadcrumbService.pauseForBreak(activeShiftSession.id);
+      setActiveShiftSession(updated);
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
+
+  const handlePauseForPrivacy = async () => {
+    if (!activeShiftSession) return;
+    setTrackingLoading(true);
+    try {
+      const updated = await breadcrumbService.pauseForPrivacy(
+        activeShiftSession.id, 
+        privacyPauseMinutes, 
+        privacyPauseReason
+      );
+      setActiveShiftSession(updated);
+      setShowPrivacyPauseModal(false);
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
+
+  const handleResumeTracking = async () => {
+    if (!activeShiftSession) return;
+    setTrackingLoading(true);
+    try {
+      const updated = await breadcrumbService.resumeTracking(activeShiftSession.id);
+      setActiveShiftSession(updated);
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
+
+  // Shift-Scoped Breadcrumbs Heartbeat Poller (Key AC 4)
+  useEffect(() => {
+    if (!activeShiftSession || activeShiftSession.status !== 'ACTIVE' || activeShiftSession.trackingMode !== 'BREADCRUMB') {
+      return;
+    }
+
+    const intervalMinutes = activeShiftSession.lastMotionStatus === 'MOVING'
+      ? (orgSettings?.breadcrumbsConfig?.movingIntervalMinutes || 8)
+      : (orgSettings?.breadcrumbsConfig?.stationaryIntervalMinutes || 30);
+
+    const timer = setInterval(() => {
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const isMock = !!(pos as any).mocked || pos.coords.accuracy < 1;
+            breadcrumbService.recordBreadcrumb({
+              sessionId: activeShiftSession.id,
+              tenantId: tokenRecord.tenantId,
+              workerId: worker.id,
+              siteId: activeShiftSession.siteId,
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              batteryPct: batteryInfo.level,
+              isMocked: isMock,
+              speedMps: pos.coords.speed || 0,
+              isOffline: !navigator.onLine
+            }).then(() => {
+              const current = breadcrumbService.getActiveSession(worker.id, tokenRecord.tenantId);
+              if (current) setActiveShiftSession({ ...current });
+            });
+          },
+          () => {},
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      }
+    }, Math.max(15000, intervalMinutes * 60 * 1000));
+
+    return () => clearInterval(timer);
+  }, [activeShiftSession?.id, activeShiftSession?.status, activeShiftSession?.lastMotionStatus, activeShiftSession?.trackingMode, orgSettings?.breadcrumbsConfig]);
+
+  // Synchronize buffered offline breadcrumbs upon reconnection
+  useEffect(() => {
+    if (!isOffline && worker.id) {
+      breadcrumbService.syncOfflineBuffer(tokenRecord.tenantId, worker.id).catch(() => {});
+    }
+  }, [isOffline, worker.id, tokenRecord.tenantId]);
+
   // Master Verified Field Punch Action (Key AC 2, 3, 4, 5, 6, 9 & Top Edge Cases)
   const handlePunch = async (punchType: 'IN' | 'OUT') => {
     if (punchLoading) return; // Prevent double-tap race conditions
@@ -987,6 +1139,72 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
       setTodayRecord(result.record || null);
       if (result.boundDevice) {
         setBoundDevice(result.boundDevice);
+      }
+
+      // Shift-Scoped Breadcrumbs Session Lifecycle (Key AC 2)
+      if (punchType === 'IN') {
+        const siteObj = branches.find(b => b.name === (result.siteName || locationStatus.siteName) || b.id === (result.record as any)?.branchId) || branches[0];
+        const tenantMode = breadcrumbService.getTenantTrackingMode(tokenRecord.tenantId, orgSettings || undefined);
+        const trackingMode = breadcrumbService.getSiteTrackingMode(siteObj, tenantMode);
+        const isNative = breadcrumbService.isNativePlatform();
+        const degradedReason = !isNative && trackingMode === 'BREADCRUMB' ? 'PWA_BROWSER' : undefined;
+
+        breadcrumbService.startShiftSession({
+          tenantId: tokenRecord.tenantId,
+          siteId: siteObj?.id || 'main-site',
+          siteName: result.siteName || locationStatus.siteName || 'Plant #1',
+          workerId: worker.id,
+          workerName: worker.name,
+          deviceBindingId: (boundDevice?.id || result.boundDevice?.id) || 'bound-device',
+          deviceFingerprint: deviceInfo.deviceFingerprint,
+          punchTime: result.serverTimestamp || clientTimestamp,
+          trackingMode,
+          initialLocation: locationStatus.lat && locationStatus.lng ? {
+            lat: locationStatus.lat,
+            lng: locationStatus.lng,
+            accuracy: locationStatus.accuracy || 15
+          } : undefined,
+          batteryPct: batteryInfo.level,
+          degradedReason
+        }).then(sess => {
+          setActiveShiftSession(sess);
+          const oem = breadcrumbService.detectDeviceOem();
+          if (oem !== 'OTHER' && trackingMode === 'BREADCRUMB') {
+            const savedState = breadcrumbService.getOemBatteryOptState(deviceInfo.deviceId);
+            if (!savedState || !savedState.walkthroughCompleted) {
+              setShowOemBatteryModal(true);
+            }
+          }
+
+          // Lone Worker Safety Check-In (Flow: Initial T+60 scheduled on Punch IN)
+          safetyCheckInService.scheduleCheckIn({
+            sessionId: sess.id,
+            tenantId: tokenRecord.tenantId,
+            workerId: worker.id,
+            workerName: worker.name,
+            workerPhone: worker.phone,
+            siteId: siteObj?.id || 'main-site',
+            siteName: result.siteName || locationStatus.siteName || 'Plant #1',
+            batteryPct: batteryInfo.level,
+            lastKnownLocation: locationStatus.lat && locationStatus.lng ? {
+              lat: locationStatus.lat,
+              lng: locationStatus.lng,
+              accuracy: locationStatus.accuracy || 15,
+              address: result.siteName || locationStatus.siteName,
+              isOffline: !navigator.onLine,
+              lastSeenAt: new Date().toISOString()
+            } : undefined
+          }).then(chk => {
+            if (chk) {
+              setActiveSafetyCheckIn(chk);
+            }
+          });
+        });
+      } else {
+        breadcrumbService.endShiftSession(worker.id, tokenRecord.tenantId, 'PUNCH_OUT').then(() => {
+          setActiveShiftSession(null);
+          setActiveSafetyCheckIn(null);
+        });
       }
 
       const formattedTime = new Date(result.serverTimestamp || Date.now()).toLocaleTimeString('en-IN', {
@@ -1112,6 +1330,17 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
             <span className="hidden sm:inline">Privacy</span>
           </button>
 
+          {/* EMERGENCY PANIC SOS QUICK ACTION */}
+          <button
+            type="button"
+            onClick={() => setShowPanicModal(true)}
+            className="text-xs font-black px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white flex items-center gap-1 shadow-xs transition-all cursor-pointer"
+            title="Emergency Panic SOS"
+          >
+            <AlertOctagon size={13} />
+            <span>SOS</span>
+          </button>
+
           {onExit && (
             <button 
               onClick={onExit}
@@ -1122,6 +1351,237 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* NATIVE APP REQUIRED FOR BACKGROUND LOCATION BANNER (KEY AC: BROWSER CANNOT DO RELIABLE BACKGROUND LOCATION) */}
+      {!breadcrumbService.isNativePlatform() && (orgSettings?.breadcrumbsConfig?.trackingMode === 'BREADCRUMB' || activeShiftSession?.trackingMode === 'BREADCRUMB') && (
+        <div className="mb-3 p-3.5 rounded-2xl bg-slate-900 text-white shadow-sm border border-slate-800 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-blue-600/30 text-blue-400 flex items-center justify-center shrink-0 mt-0.5 border border-blue-500/30">
+            <Smartphone size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-bold text-xs text-white">Native App Required for Background Route Sharing</span>
+              <span className="px-1.5 py-0.2 rounded font-mono text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                PWA Browser Notice
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+              Web browsers cannot reliably collect background GPS while your phone screen is locked. Shift tracking will record punches, but continuous 8-minute breadcrumbs require the installed Android APK.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* PERSISTENT NON-DISMISSIBLE SHIFT TRACKING INDICATOR (KEY AC 3) */}
+      {activeShiftSession && (
+        <div className="mb-3.5 rounded-2xl border-2 shadow-sm overflow-hidden transition-all bg-white border-blue-600">
+          <div className={`p-3.5 flex items-center justify-between text-white ${
+            activeShiftSession.status === 'PAUSED_BREAK' 
+              ? 'bg-amber-600' 
+              : activeShiftSession.status === 'PAUSED_PRIVACY'
+                ? 'bg-purple-700'
+                : 'bg-blue-600'
+          }`}>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-white shrink-0">
+                {activeShiftSession.status === 'PAUSED_BREAK' ? (
+                  <Coffee size={16} />
+                ) : activeShiftSession.status === 'PAUSED_PRIVACY' ? (
+                  <Lock size={16} />
+                ) : (
+                  <Navigation size={16} className="animate-pulse" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-extrabold text-xs text-white">
+                    {activeShiftSession.status === 'PAUSED_BREAK' 
+                      ? 'Tracking Paused — On Break' 
+                      : activeShiftSession.status === 'PAUSED_PRIVACY'
+                        ? 'Privacy Pause Active'
+                        : `Location sharing ON — shift started ${new Date(activeShiftSession.startedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                </div>
+                <div className="text-[11px] text-white/80 font-medium flex items-center gap-2 mt-0.5">
+                  <span>{activeShiftSession.siteName}</span>
+                  <span>&bull;</span>
+                  <span>{activeShiftSession.lastMotionStatus === 'MOVING' ? 'Moving (8m cadence)' : 'Stationary (30m cadence)'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] bg-black/20 px-2 py-1 rounded-lg">
+              <Battery size={13} />
+              <span>{batteryInfo.level}%</span>
+            </div>
+          </div>
+
+          {/* Action Row: Break Pause, Privacy Pause, and Resume */}
+          <div className="p-2.5 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <Shield size={12} className="text-blue-600" />
+              <span>Android Doze protected (~8–9m wake)</span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              {activeShiftSession.status === 'ACTIVE' ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={trackingLoading}
+                    onClick={handlePauseForBreak}
+                    className="px-2.5 py-1 rounded-lg font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+                  >
+                    <Coffee size={13} className="text-amber-600" />
+                    <span>Pause Break</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={trackingLoading}
+                    onClick={() => setShowPrivacyPauseModal(true)}
+                    className="px-2.5 py-1 rounded-lg font-semibold bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 transition-colors shadow-2xs"
+                  >
+                    <Lock size={13} className="text-purple-600" />
+                    <span>Privacy Pause</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={trackingLoading}
+                  onClick={handleResumeTracking}
+                  className="px-3 py-1 rounded-lg font-bold bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 transition-colors shadow-xs"
+                >
+                  <Play size={13} />
+                  <span>Resume Tracking</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LONE WORKER SAFETY & PANIC STATUS BANNER (KEY AC 1-4) */}
+      {activePanicAlert && (
+        <div className="mb-3.5 rounded-2xl bg-rose-600 text-white p-4 shadow-lg border-2 border-rose-500 animate-pulse">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <AlertOctagon size={24} className="animate-bounce shrink-0 text-white" />
+              <div>
+                <div className="font-black text-xs uppercase tracking-wider">CRITICAL EMERGENCY SOS ACTIVE</div>
+                <p className="text-[11px] text-rose-100 mt-0.5">
+                  Multi-tier dispatch notified with your live GPS coordinates & shift context.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPanicModal(true)}
+              className="px-3 py-1.5 bg-white text-rose-700 font-black rounded-xl text-xs shadow-xs hover:bg-rose-50 shrink-0 cursor-pointer"
+            >
+              SOS Status
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeShiftSession && activeShiftSession.status !== 'COMPLETED' && !activePanicAlert && (
+        activeShiftSession.safetyStatus === 'DECLINED' ? (
+          <div className="mb-3.5 p-3 rounded-2xl bg-slate-100 border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <UserX size={16} className="text-slate-400 shrink-0" />
+              <div>
+                <span className="font-bold text-slate-700">Safety Check-Ins Opted Out</span>
+                <p className="text-[10px] text-slate-500">Corporate policy: No insubordination penalty applied</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const chk = await safetyCheckInService.scheduleCheckIn({
+                  sessionId: activeShiftSession.id,
+                  tenantId: tokenRecord.tenantId,
+                  workerId: worker.id,
+                  workerName: worker.name,
+                  workerPhone: worker.phone,
+                  siteId: activeShiftSession.siteId,
+                  siteName: activeShiftSession.siteName,
+                  batteryPct: batteryInfo.level
+                });
+                if (chk) {
+                  setActiveSafetyCheckIn(chk);
+                  setActiveShiftSession(prev => prev ? { ...prev, safetyStatus: 'OPTED_IN' } : null);
+                }
+              }}
+              className="text-xs text-indigo-600 hover:text-indigo-800 font-bold underline cursor-pointer"
+            >
+              Opt Back In
+            </button>
+          </div>
+        ) : activeSafetyCheckIn ? (
+          activeSafetyCheckIn.status === 'DUE' || activeSafetyCheckIn.status === 'MISSED_ESCALATING' || safetyMinutesRemaining <= 0 ? (
+            <div className="mb-3.5 p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-400 text-rose-950 shadow-sm animate-pulse">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                    <ShieldAlert size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-black text-xs uppercase tracking-wider text-rose-800">
+                        Safety Check-In Due
+                      </span>
+                      {safetyMinutesRemaining < 0 && (
+                        <span className="px-1.5 py-0.2 rounded font-mono text-[9px] font-bold bg-rose-200 text-rose-800">
+                          {Math.abs(safetyMinutesRemaining)}m Overdue
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                      Supervisor escalation active. Tap to confirm safety:
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCheckInModal(true)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-md shrink-0 active:scale-95 transition-all cursor-pointer"
+                >
+                  I'M OK
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-3.5 p-3 rounded-2xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-200">
+                  <ShieldCheck size={16} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-xs text-slate-900">Lone Worker Safety Active</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                    Next check-in: <strong className="text-slate-800 font-mono">{safetyMinutesRemaining > 0 ? `${safetyMinutesRemaining}m` : 'moments'}</strong> ({new Date(activeSafetyCheckIn.dueAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowCheckInModal(true)}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs border border-emerald-200 transition-colors cursor-pointer"
+                >
+                  I'm OK
+                </button>
+              </div>
+            </div>
+          )
+        ) : null
+      )}
 
       {/* 5-MINUTE AUTO-PUNCH UNDO COUNTDOWN BANNER (KEY AC 5 & TOP EDGE CASE 4) */}
       {activeAutoPunchSession && activeAutoPunchSession.status === 'PENDING_UNDO' && (
@@ -2015,6 +2475,106 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         </div>
       )}
 
+      {/* PRIVACY PAUSE DIALOG (SENSITIVE LOCATION: HOSPITAL, WORSHIP, COMPETITOR) */}
+      {showPrivacyPauseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center">
+                  <Lock size={16} />
+                </div>
+                <h4 className="font-bold text-sm text-slate-900">Sensitive Location Privacy Pause</h4>
+              </div>
+              <button onClick={() => setShowPrivacyPauseModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              Visiting a hospital, place of worship, or competitor facility? Suppress shift location tracking without clocking out. The pause event is logged, but your exact coordinates are never captured.
+            </p>
+
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase block mb-1">
+                  Pause Duration
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[15, 30, 60].map(mins => (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => setPrivacyPauseMinutes(mins)}
+                      className={`py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                        privacyPauseMinutes === mins 
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-xs' 
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {mins} mins
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase block mb-1">
+                  Reason Category
+                </label>
+                <select
+                  value={privacyPauseReason}
+                  onChange={(e) => setPrivacyPauseReason(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
+                >
+                  <option value="Personal / Sensitive Location">Personal / Sensitive Location</option>
+                  <option value="Medical / Hospital Visit">Medical / Hospital Visit</option>
+                  <option value="Place of Worship">Place of Worship</option>
+                  <option value="Competitor Facility">Competitor Facility</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPrivacyPauseModal(false)}
+                className="flex-1 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={trackingLoading}
+                onClick={handlePauseForPrivacy}
+                className="flex-1 py-2 text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-xl shadow-xs"
+              >
+                Start Privacy Pause
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OEM BATTERY OPTIMIZATION WALKTHROUGH MODAL */}
+      <OemBatteryOptimizationModal
+        isOpen={showOemBatteryModal}
+        onClose={() => setShowOemBatteryModal(false)}
+        deviceId={deviceInfo.deviceId}
+        workerId={worker.id}
+        workerName={worker.name}
+        tenantId={tokenRecord.tenantId}
+        onCompleted={(optInSuccess) => {
+          if (!optInSuccess && activeShiftSession) {
+            setActiveShiftSession({
+              ...activeShiftSession,
+              trackingMode: 'PUNCH_ONLY',
+              degradedReason: 'OEM_BATTERY_DECLINED'
+            });
+          }
+        }}
+      />
+
       {/* LOCATION & PRIVACY TRANSPARENCY MODAL */}
       <LocationPrivacyModal
         worker={worker}
@@ -2025,6 +2585,54 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
           checkCurrentBinding();
         }}
       />
+
+      {/* LONE WORKER CHECK-IN PROMPT MODAL */}
+      {activeSafetyCheckIn && activeShiftSession && (
+        <LoneWorkerCheckInModal
+          checkIn={activeSafetyCheckIn}
+          session={activeShiftSession}
+          isOpen={showCheckInModal}
+          onClose={() => setShowCheckInModal(false)}
+          onSuccess={() => {
+            setShowCheckInModal(false);
+            // Refresh state
+            const nextChk = safetyCheckInService.getPendingCheckInForWorker(worker.id, activeShiftSession.id);
+            setActiveSafetyCheckIn(nextChk);
+          }}
+          onDecline={() => {
+            setShowCheckInModal(false);
+            setActiveShiftSession(prev => prev ? { ...prev, safetyStatus: 'DECLINED' } : null);
+            setActiveSafetyCheckIn(null);
+          }}
+        />
+      )}
+
+      {/* EMERGENCY PANIC SOS MODAL (KEY AC 4: PRESS & HOLD 3S / LOCK SCREEN / QUICK ACTION) */}
+      <PanicSosModal
+        isOpen={showPanicModal}
+        onClose={() => setShowPanicModal(false)}
+        session={activeShiftSession}
+        tenantId={tokenRecord.tenantId}
+        workerId={worker.id}
+        workerName={worker.name}
+        workerPhone={worker.phone}
+        siteId={activeShiftSession?.siteId}
+        siteName={activeShiftSession?.siteName}
+      />
+
+      {/* PERSISTENT FLOATING EMERGENCY SOS QUICK BUTTON (LOCK SCREEN / WORKER ACCESS) */}
+      {activeShiftSession && activeShiftSession.status === 'ACTIVE' && (
+        <button
+          type="button"
+          onClick={() => setShowPanicModal(true)}
+          className="fixed bottom-24 right-4 z-40 w-14 h-14 rounded-full bg-rose-600 hover:bg-rose-700 active:scale-90 text-white shadow-xl shadow-rose-600/40 flex flex-col items-center justify-center border-2 border-white transition-all cursor-pointer"
+          title="Emergency Panic SOS"
+          aria-label="Emergency Panic SOS"
+        >
+          <AlertOctagon size={20} className="stroke-[2.5]" />
+          <span className="text-[9px] font-black uppercase tracking-wider leading-none mt-0.5">SOS</span>
+        </button>
+      )}
 
     </div>
   );

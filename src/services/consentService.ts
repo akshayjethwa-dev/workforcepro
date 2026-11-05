@@ -255,11 +255,27 @@ export const consentService = {
       });
     } catch {}
 
+    // Key AC: Tracking stops within 60 seconds -> worker switched to PUNCH_ONLY
+    try {
+      const { breadcrumbService } = await import('./breadcrumbService');
+      await breadcrumbService.handleConsentWithdrawal(params.workerId, params.tenantId);
+    } catch (err) {
+      console.warn('Failed to stop shift breadcrumbs on consent withdrawal:', err);
+    }
+
     return {
       success: true,
       updatedConsent: current,
       message: 'Location consent withdrawn. Effective immediately (within 60s). You will punch in PUNCH_ONLY mode.'
     };
+  },
+
+  /**
+   * Checks whether worker has an active statutory legal hold preserving records
+   */
+  isLegalHoldActive: (workerId: string): boolean => {
+    const tickets = getStoredDeletionTickets();
+    return tickets.some(t => t.workerId === workerId && t.status === 'UNDER_LEGAL_HOLD');
   },
 
   /**
