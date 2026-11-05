@@ -4,7 +4,7 @@ import {
   X, ShieldAlert, Key, Smartphone, Trash2, AlertTriangle, 
   CheckCircle2, Clock, Calendar, IndianRupee, Download, 
   FileText, ExternalLink, RefreshCw, Send, Check, Copy, UserCheck,
-  Shield, ShieldCheck, MapPin, Eye, Lock
+  Shield, ShieldCheck, MapPin, Eye, Lock, MessageSquare
 } from 'lucide-react';
 import { 
   Worker, 
@@ -18,6 +18,7 @@ import {
 import { magicLinkService } from '../services/magicLinkService';
 import { consentService } from '../services/consentService';
 import { LocationPrivacyModal } from './LocationPrivacyModal';
+import { WhatsAppChatSimulator } from './WhatsAppChatSimulator';
 import { CURRENT_CONSENT_POLICY_VERSION } from '../utils/consentTranslations';
 import { useToast } from '../contexts/ToastContext';
 
@@ -48,6 +49,7 @@ export const WorkerAccessModal: React.FC<Props> = ({
 
   // Privacy Modal state
   const [showPrivacyModal, setShowPrivacyModal] = useState<boolean>(false);
+  const [showWhatsAppSimulator, setShowWhatsAppSimulator] = useState<boolean>(false);
   const [showAssistedWithdrawModal, setShowAssistedWithdrawModal] = useState<boolean>(false);
   const [isWithdrawingAssisted, setIsWithdrawingAssisted] = useState<boolean>(false);
 
@@ -301,9 +303,19 @@ export const WorkerAccessModal: React.FC<Props> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs text-slate-500">
                 <span>Active read-only links issued to {worker.name}</span>
-                <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
-                  60s Real-time Revocation Active
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowWhatsAppSimulator(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold shadow-2xs transition-colors"
+                  >
+                    <MessageSquare size={12} className="text-emerald-600" />
+                    <span>WhatsApp Bot Test</span>
+                  </button>
+                  <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                    60s Real-time Revocation Active
+                  </span>
+                </div>
               </div>
 
               {activeTokens.length === 0 ? (
@@ -976,6 +988,16 @@ export const WorkerAccessModal: React.FC<Props> = ({
             loadData();
           }}
           onConsentUpdated={loadData}
+        />
+      )}
+
+      {/* WhatsApp Chat Simulator for Worker (E11) */}
+      {showWhatsAppSimulator && (
+        <WhatsAppChatSimulator
+          isOpen={showWhatsAppSimulator}
+          onClose={() => setShowWhatsAppSimulator(false)}
+          tenantId={tenantId}
+          initialWorkerId={worker.id}
         />
       )}
 

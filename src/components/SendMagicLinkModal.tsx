@@ -421,10 +421,10 @@ export const SendMagicLinkModal: React.FC<Props> = ({
               type="button"
               onClick={handleOpenPreview}
               className="px-3 py-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-colors"
-              title="Test the read-only portal view as seen by worker"
+              title="Test the field punch view as seen by worker"
             >
               <ExternalLink size={13} />
-              <span>Preview Portal</span>
+              <span>{scope === 'PUNCH' ? 'Launch Field Punch View' : 'Preview Portal'}</span>
             </button>
           </div>
         </div>

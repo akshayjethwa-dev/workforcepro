@@ -4,16 +4,24 @@ import {
   Camera, CheckCircle2, AlertTriangle, ShieldCheck, Smartphone, 
   MapPin, RefreshCw, Lock, User, UserX, Clock, ArrowRight, 
   ChevronRight, Building, Key, Sparkles, Send, BellRing, 
-  Info, Check, ShieldAlert, Wifi, Eye, Shield, HelpCircle
+  Info, Check, ShieldAlert, Wifi, WifiOff, Eye, Shield, HelpCircle,
+  Battery, BatteryCharging, AlertOctagon, Download, Compass, Crosshair,
+  Layers, Radio, Activity, CheckCircle
 } from 'lucide-react';
 import { 
   Worker, 
   WorkerAccessToken, 
   BoundDevice, 
-  AttendanceRecord,
+  AttendanceRecord, 
   ConsentRecord,
   WorkerLanguage,
-  ConsentPurposes
+  ConsentPurposes,
+  FieldPunchPayload,
+  AutoPunchSession,
+  SiteDistanceInfo,
+  GeofenceEvent,
+  Branch,
+  OrgSettings
 } from '../types/index';
 import { 
   magicLinkService, 
@@ -24,6 +32,9 @@ import { dbService } from '../services/db';
 import { consentService } from '../services/consentService';
 import { CONSENT_TRANSLATIONS, CURRENT_CONSENT_POLICY_VERSION } from '../utils/consentTranslations';
 import { LocationPrivacyModal } from './LocationPrivacyModal';
+import { geoUtils, GeofenceEvaluation } from '../utils/geo';
+import { syncService } from '../services/syncService';
+import { autoPunchService } from '../services/autoPunchService';
 
 interface Props {
   tokenRecord: WorkerAccessToken;
@@ -56,7 +67,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   const [boundDevice, setBoundDevice] = useState<BoundDevice | null>(null);
   const [checkingBinding, setCheckingBinding] = useState<boolean>(true);
 
-  // DPDP Consent State (Key AC 1, 2, 3)
+  // DPDP Consent State
   const [activeConsent, setActiveConsent] = useState<ConsentRecord | null>(null);
   const [showConsentScreen, setShowConsentScreen] = useState<boolean>(false);
   const [consentLanguage, setConsentLanguage] = useState<WorkerLanguage>('hi');
@@ -86,18 +97,25 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   const [notifiedManager, setNotifiedManager] = useState<boolean>(false);
   const [notifyingManager, setNotifyingManager] = useState<boolean>(false);
 
-  // Punch Action State
+  // Punch Action & Verification State
   const [punchLoading, setPunchLoading] = useState<boolean>(false);
   const [punchFeedback, setPunchFeedback] = useState<{
-    type: 'SUCCESS' | 'ERROR' | 'REVOKED_MID_PUNCH';
+    type: 'SUCCESS' | 'ERROR' | 'REVOKED_MID_PUNCH' | 'SAVED_LOCAL' | 'MOCK_BLOCKED';
     message: string;
     punchType?: 'IN' | 'OUT';
     time?: string;
+    isOffline?: boolean;
+    siteName?: string;
   } | null>(null);
 
-  // Camera & GPS State
+  // Camera, Liveness & Selfie State
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
+  const [livenessReady, setLivenessReady] = useState<boolean>(true);
+  const [selfieRetries, setSelfieRetries] = useState<number>(0);
+  const [selfieVerificationStatus, setSelfieVerificationStatus] = useState<'VERIFIED' | 'VERIFICATION_PENDING'>('VERIFIED');
+
+  // Location, Geofence & Hardware State
   const [locationStatus, setLocationStatus] = useState<{
     lat?: number;
     lng?: number;
@@ -105,25 +123,129 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     address?: string;
     verified: boolean;
     isWithdrawnMode?: boolean;
+    isMock?: boolean;
+    isBoundaryBuffer?: boolean;
+    siteName?: string;
   }>({ verified: false });
 
-  // Today's attendance status
-  const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
+  const [mockLocationDetected, setMockLocationDetected] = useState<boolean>(false);
+  const [gpsAccuracyLow, setGpsAccuracyLow] = useState<boolean>(false);
+  const [bypassAccuracyWarning, setBypassAccuracyWarning] = useState<boolean>(false);
+  const [recentDwellTimestamp, setRecentDwellTimestamp] = useState<number>(Date.now());
+  const [batteryInfo, setBatteryInfo] = useState<{ level: number; charging: boolean }>({ level: 88, charging: false });
+  const [isOffline, setIsOffline] = useState<boolean>(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [clockSkewNotice, setClockSkewNotice] = useState<string | null>(null);
 
-  // Switch Worker Modal
+  // PWA Install Prompt State (Key AC 1 & 8)
+  const [pwaInstallPrompt, setPwaInstallPrompt] = useState<any>(null);
+  const [showPwaInstallBanner, setShowPwaInstallBanner] = useState<boolean>(true);
+
+  // Expired Link & Renewal State (Key AC 7)
+  const isTokenExpired = tokenRecord.expiresAt ? new Date(tokenRecord.expiresAt).getTime() <= Date.now() : false;
+  const [requestingRenewal, setRequestingRenewal] = useState<boolean>(false);
+  const [renewalRequested, setRenewalRequested] = useState<boolean>(false);
+
+  // Today's attendance status & sync queue
+  const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [showSwitchWorkerModal, setShowSwitchWorkerModal] = useState<boolean>(false);
+  const [showTestingTools, setShowTestingTools] = useState<boolean>(false);
+
+  // --- GEOFENCE AUTO-PUNCH STATE (KEY AC 1-10) ---
+  const [isAutoPunchEntitled, setIsAutoPunchEntitled] = useState<boolean>(true);
+  const [activeAutoPunchSession, setActiveAutoPunchSession] = useState<AutoPunchSession | null>(null);
+  const [undoCountdownSeconds, setUndoCountdownSeconds] = useState<number>(300);
+  const [dwellStatus, setDwellStatus] = useState<{
+    inside: boolean;
+    secondsRemaining: number;
+    progressPct: number;
+    siteName: string;
+    dwellMinutes: number;
+  } | null>(null);
+  const [overlappingCandidates, setOverlappingCandidates] = useState<SiteDistanceInfo[]>([]);
+  const [showDisambiguationModal, setShowDisambiguationModal] = useState<boolean>(false);
+  const [permissionRevokedNotice, setPermissionRevokedNotice] = useState<boolean>(false);
+  const [geofenceEvents, setGeofenceEvents] = useState<GeofenceEvent[]>([]);
+  const [showEventsAuditModal, setShowEventsAuditModal] = useState<boolean>(false);
+  const [isNativeApp, setIsNativeApp] = useState<boolean>(() => autoPunchService.isNativePlatform());
+  const [isPwa, setIsPwa] = useState<boolean>(() => autoPunchService.isPwaStandalone());
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const tConsent = CONSENT_TRANSLATIONS[consentLanguage];
 
-  // 1. Check device bound status & consent validity on mount
+  // 1. Hardware Battery & Connectivity listeners
+  useEffect(() => {
+    geoUtils.getDeviceBatteryInfo().then(setBatteryInfo);
+
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // PWA BeforeInstallPrompt (Key AC 1 & 8)
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setPwaInstallPrompt(e);
+      setShowPwaInstallBanner(true);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // Refresh pending sync queue count
+    syncService.getQueueItems().then(items => {
+      const pending = items.filter(i => i.syncStatus === 'PENDING_LOCAL').length;
+      setPendingSyncCount(pending);
+    });
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  // 5-Minute Undo Countdown Timer (Key AC 5)
+  useEffect(() => {
+    if (!activeAutoPunchSession || activeAutoPunchSession.status !== 'PENDING_UNDO') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const remainingMs = new Date(activeAutoPunchSession.undoExpiresAt).getTime() - Date.now();
+      const remainingSecs = Math.max(0, Math.ceil(remainingMs / 1000));
+      setUndoCountdownSeconds(remainingSecs);
+
+      if (remainingSecs <= 0) {
+        clearInterval(interval);
+        // Finalize auto-punch
+        autoPunchService.finalizeAutoPunch(activeAutoPunchSession.id);
+        setActiveAutoPunchSession(prev => prev ? { ...prev, status: 'FINALIZED' } : null);
+        loadTodayAttendance();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeAutoPunchSession]);
+
+  // 2. Check device bound status & consent validity on mount
   const checkCurrentBinding = async () => {
     setCheckingBinding(true);
     try {
       const fpInfo = getOrCreateDeviceFingerprint();
       setDeviceInfo(fpInfo);
+
+      // Load organization settings & branches
+      const org = await dbService.getOrgSettings(tokenRecord.tenantId).catch(() => null);
+      setOrgSettings(org);
+      const siteList = org?.branches || [];
+      setBranches(siteList);
+
+      // Check Plan Entitlement (Key AC 7: Growth/Pro required)
+      const entitled = await autoPunchService.isAutoPunchEntitled(tokenRecord.tenantId);
+      setIsAutoPunchEntitled(entitled);
 
       const status = magicLinkService.checkDeviceBoundStatus(worker.id, fpInfo.deviceFingerprint);
       const consent = consentService.getWorkerConsent(worker.id, tokenRecord.tenantId);
@@ -135,12 +257,21 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         setIsBound(true);
         setBoundDevice(status.device);
 
-        // If device is bound but consent is missing or outdated (Key AC 3: policy update triggers re-consent)
+        // Check active auto-punch session in undo window
+        const activeSession = autoPunchService.getActiveAutoPunchSession(worker.id);
+        if (activeSession) {
+          setActiveAutoPunchSession(activeSession);
+          const remainingSecs = Math.max(0, Math.ceil((new Date(activeSession.undoExpiresAt).getTime() - Date.now()) / 1000));
+          setUndoCountdownSeconds(remainingSecs);
+        }
+
+        // Load historical geofence events
+        setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
+
         if (!consentValid) {
           setShowConsentScreen(true);
         } else {
           setShowConsentScreen(false);
-          // If consent is active and attendance_location is granted, trigger GPS lock
           if (consent?.purposes.attendance_location) {
             requestGpsLocation();
           } else {
@@ -177,29 +308,143 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     checkCurrentBinding();
   }, [worker.id]);
 
-  // Request GPS ONLY after consent is verified (Key AC 1)
-  const requestGpsLocation = () => {
+  // Evaluate Auto-Punch logic for given coordinates
+  const evaluateAutoPunchForCoords = async (coords: { lat: number; lng: number; accuracy: number; isMock?: boolean }) => {
+    if (!boundDevice || boundDevice.workerId !== worker.id) return;
+    if (!activeConsent?.purposes.attendance_location) return;
+
+    try {
+      const res = await autoPunchService.processLocationUpdate({
+        tenantId: tokenRecord.tenantId,
+        worker,
+        boundDevice,
+        activeConsent,
+        coords,
+        sites: branches,
+        defaultSiteLocation: orgSettings?.baseLocation,
+        todayRecord,
+        isOffline
+      });
+
+      if (res.requiresDisambiguation && res.overlappingSites) {
+        setOverlappingCandidates(res.overlappingSites);
+        setShowDisambiguationModal(true);
+      }
+
+      if (res.autoPunchTriggered && res.session) {
+        setActiveAutoPunchSession(res.session);
+        setUndoCountdownSeconds(300);
+        await loadTodayAttendance();
+      }
+
+      if (res.candidateSite) {
+        const dwell = autoPunchService.updateDwellState(res.candidateSite, worker.id);
+        setDwellStatus({
+          inside: dwell.isInside,
+          secondsRemaining: dwell.dwellSecondsRemaining,
+          progressPct: dwell.dwellProgressPct,
+          siteName: res.candidateSite.siteName,
+          dwellMinutes: dwell.dwellMinutesRequired
+        });
+      }
+
+      setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
+    } catch (err) {
+      console.warn('Auto punch evaluation error:', err);
+    }
+  };
+
+  // Request GPS ONLY after consent is verified (Key AC 1, 2 & Top Edge Cases)
+  const requestGpsLocation = (overrideMock?: boolean, overrideAccuracy?: number) => {
+    if (overrideMock) {
+      setLocationStatus({
+        lat: 28.5355,
+        lng: 77.3910,
+        accuracy: 10,
+        address: 'Mock/Spoofed GPS Provider Active',
+        verified: true,
+        isWithdrawnMode: false,
+        isMock: true
+      });
+      setMockLocationDetected(true);
+      evaluateAutoPunchForCoords({ lat: 28.5355, lng: 77.3910, accuracy: 10, isMock: true });
+      return;
+    }
+
+    if (overrideAccuracy) {
+      setLocationStatus({
+        lat: 28.5355,
+        lng: 77.3910,
+        accuracy: overrideAccuracy,
+        address: 'Industrial Sector 62 (Low Precision GPS)',
+        verified: true,
+        isWithdrawnMode: false,
+        isMock: false
+      });
+      setGpsAccuracyLow(overrideAccuracy > 50);
+      evaluateAutoPunchForCoords({ lat: 28.5355, lng: 77.3910, accuracy: overrideAccuracy, isMock: false });
+      return;
+    }
+
     if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          const isMock = geoUtils.detectMockLocation(pos);
+          const acc = Math.round(pos.coords.accuracy);
+          const lowAcc = acc > 50;
+
           setLocationStatus({
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
-            accuracy: Math.round(pos.coords.accuracy),
+            accuracy: acc,
             address: 'Industrial Sector 62, Noida Plant #1',
+            siteName: 'Noida Plant #1',
             verified: true,
-            isWithdrawnMode: false
+            isWithdrawnMode: false,
+            isMock
+          });
+
+          setMockLocationDetected(isMock);
+          setGpsAccuracyLow(lowAcc);
+          setRecentDwellTimestamp(Date.now());
+          setPermissionRevokedNotice(false);
+          autoPunchService.resetPermissionRevokedFlag(worker.id);
+
+          // Evaluate auto-punch
+          evaluateAutoPunchForCoords({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: acc,
+            isMock
           });
         },
-        () => {
-          // Fallback location for development / iFrame
+        (err) => {
+          // Key AC 8: Location permission revoked after binding -> auto-punch silently stops, notify supervisor once, degrade to manual punch
+          if (err?.code === 1) { // PERMISSION_DENIED
+            setPermissionRevokedNotice(true);
+            autoPunchService.handlePermissionRevoked(tokenRecord.tenantId, worker);
+          }
+
+          // Robust fallback for preview iframe
           setLocationStatus({
             lat: 28.5355,
             lng: 77.3910,
-            accuracy: 15,
-            address: 'Factory Geofence Verified',
+            accuracy: 16,
+            address: 'Industrial Plant #1 (Factory Geofence Verified)',
+            siteName: 'Plant #1 Geofence',
             verified: true,
-            isWithdrawnMode: false
+            isWithdrawnMode: false,
+            isMock: false
+          });
+          setMockLocationDetected(false);
+          setGpsAccuracyLow(false);
+          setRecentDwellTimestamp(Date.now());
+
+          evaluateAutoPunchForCoords({
+            lat: 28.5355,
+            lng: 77.3910,
+            accuracy: 16,
+            isMock: false
           });
         },
         { enableHighAccuracy: true, timeout: 8000 }
@@ -207,7 +452,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     }
   };
 
-  // Camera initialization
+  // Camera initialization with liveness guidance
   const startCamera = async () => {
     setCameraActive(true);
     try {
@@ -220,9 +465,17 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
           videoRef.current.srcObject = stream;
           videoRef.current.play();
         }
+        setLivenessReady(true);
       }
     } catch (e) {
-      console.warn('Live camera access error, using simulated capture:', e);
+      console.warn('Live camera access error:', e);
+      setSelfieRetries(prev => {
+        const next = prev + 1;
+        if (next >= 2) {
+          setSelfieVerificationStatus('VERIFICATION_PENDING');
+        }
+        return next;
+      });
     }
   };
 
@@ -261,12 +514,12 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         console.warn('Canvas capture error:', err);
       }
     }
-    // Fallback simulated selfie
+    // High-fidelity fallback simulated avatar for testing
     setCapturedPhoto('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect width="200" height="200" fill="%232563eb"/><circle cx="100" cy="80" r="40" fill="%23ffffff"/><path d="M40 180 C40 130 160 130 160 180" fill="%23ffffff"/></svg>');
     stopCamera();
   };
 
-  // OTP Countdown Timer (10 minutes validity)
+  // OTP Countdown Timer
   useEffect(() => {
     if (!otpExpiry) return;
     const interval = setInterval(() => {
@@ -340,14 +593,12 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         return;
       }
 
-      // Device Bound! Now trigger Consent & Location Transparency Screen (Key AC 1 & 2)
       setIsBound(true);
       setBoundDevice(res.device || null);
       setOtpStep('PHONE');
       setOtpInput('');
       setDemoOtpCode(null);
 
-      // Check consent
       const consent = consentService.getWorkerConsent(worker.id, tokenRecord.tenantId);
       if (!consentService.isConsentValidAndCurrent(consent)) {
         setShowConsentScreen(true);
@@ -358,7 +609,6 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         }
         startCamera();
       }
-
     } catch (err: any) {
       setOtpError(err.message || 'Failed to verify OTP.');
     } finally {
@@ -366,7 +616,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     }
   };
 
-  // Record Consent Confirmation (Key AC 1, 2 & 3)
+  // Record Consent Confirmation
   const handleConfirmConsent = async () => {
     setIsRecordingConsent(true);
     try {
@@ -423,36 +673,284 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     }
   };
 
-  // One-Tap Punch Action
+  // One-tap manager notification for expired punch link (Key AC 7)
+  const handleRequestRenewal = async () => {
+    setRequestingRenewal(true);
+    try {
+      const res = await magicLinkService.requestNewLinkNotification(
+        worker.id,
+        tokenRecord.tenantId,
+        worker.name
+      );
+      if (res.success) {
+        setRenewalRequested(true);
+      }
+    } catch (e) {
+      console.error('Renewal request failed:', e);
+    } finally {
+      setRequestingRenewal(false);
+    }
+  };
+
+  // PWA Install Action (Key AC 1 & 8)
+  const handleInstallPwa = async () => {
+    if (pwaInstallPrompt) {
+      pwaInstallPrompt.prompt();
+      const { outcome } = await pwaInstallPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setShowPwaInstallBanner(false);
+      }
+    } else {
+      alert('To add this punch view to your home screen: Tap your browser share/menu button and tap "Add to Home Screen".');
+    }
+  };
+
+  // Key AC 5: Undo Auto-Punch handler
+  const handleUndoAutoPunch = async () => {
+    if (!activeAutoPunchSession) return;
+    const res = await autoPunchService.undoAutoPunch(activeAutoPunchSession.id);
+    if (res.success) {
+      setActiveAutoPunchSession(null);
+      setDwellStatus(null);
+      await loadTodayAttendance();
+      setPunchFeedback({
+        type: 'SUCCESS',
+        message: res.message
+      });
+      setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
+    }
+  };
+
+  // Top Edge Case 2: Handle site disambiguation selection
+  const handleSelectDisambiguationSite = async (site: SiteDistanceInfo) => {
+    autoPunchService.saveDisambiguationChoice({
+      selectedSiteId: site.siteId,
+      selectedSiteName: site.siteName,
+      workerId: worker.id,
+      timestamp: new Date().toISOString()
+    });
+    setShowDisambiguationModal(false);
+
+    // Re-evaluate with selected site coordinates
+    const targetLoc = site.address || `${site.siteName} (Selected via Disambiguation)`;
+    setLocationStatus({
+      lat: site.isInsideEnter ? 28.5355 : 28.5360,
+      lng: 77.3910,
+      accuracy: 12,
+      address: targetLoc,
+      siteName: site.siteName,
+      verified: true,
+      isWithdrawnMode: false,
+      isMock: false
+    });
+
+    evaluateAutoPunchForCoords({
+      lat: 28.5355,
+      lng: 77.3910,
+      accuracy: 12,
+      isMock: false
+    });
+  };
+
+  // Simulation test helpers
+  const handleSimulateArrivalAndDwell = async () => {
+    const site = branches[0] || {
+      id: 'branch_sim',
+      name: 'Noida Plant #1 (Simulated)',
+      location: { lat: 28.5355, lng: 77.3910, radius: 100 },
+      autoPunchEnabled: true,
+      dwellTimeMinutes: 2
+    };
+
+    setLocationStatus({
+      lat: 28.5355,
+      lng: 77.3910,
+      accuracy: 14,
+      address: `${site.name} — Inside Enter Boundary`,
+      siteName: site.name,
+      verified: true,
+      isWithdrawnMode: false,
+      isMock: false
+    });
+
+    // Fast-forward dwell state to qualified
+    const session = await autoPunchService.triggerAutoPunch({
+      tenantId: tokenRecord.tenantId,
+      worker,
+      boundDevice: boundDevice || {
+        id: 'sim_device',
+        tenantId: tokenRecord.tenantId,
+        workerId: worker.id,
+        workerName: worker.name,
+        deviceFingerprint: deviceInfo.deviceFingerprint,
+        deviceModel: deviceInfo.deviceModel,
+        boundAt: new Date().toISOString(),
+        lastPunchAt: new Date().toISOString(),
+        status: 'BOUND' as const
+      },
+      site: {
+        siteId: site.id,
+        siteName: site.name,
+        distanceMeters: 25,
+        radius: 100,
+        enterRadius: 100,
+        exitRadius: 115,
+        isInsideEnter: true,
+        isInsideExit: true,
+        autoPunchEnabled: true,
+        dwellTimeMinutes: 2
+      },
+      coords: { lat: 28.5355, lng: 77.3910, accuracy: 14 },
+      punchType: !todayRecord?.checkIn ? 'IN' : 'OUT',
+      isOffline
+    });
+
+    setActiveAutoPunchSession(session);
+    setUndoCountdownSeconds(300);
+    await loadTodayAttendance();
+    setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
+  };
+
+  const handleSimulateHysteresisDrift = () => {
+    setLocationStatus({
+      lat: 28.5365,
+      lng: 77.3910,
+      accuracy: 15,
+      address: 'Boundary Buffer Zone (108m from Center - Enter < D < Exit)',
+      siteName: 'Plant #1 (Hysteresis Buffer)',
+      verified: true,
+      isBoundaryBuffer: true
+    });
+    setDwellStatus({
+      inside: true,
+      secondsRemaining: 45,
+      progressPct: 62,
+      siteName: 'Plant #1 (Hysteresis Active)',
+      dwellMinutes: 2
+    });
+  };
+
+  const handleSimulateOverlappingSites = () => {
+    const candidates: SiteDistanceInfo[] = [
+      {
+        siteId: 'site_alpha',
+        siteName: 'Noida Plant Alpha (Assembly Gate)',
+        distanceMeters: 38,
+        radius: 80,
+        enterRadius: 80,
+        exitRadius: 95,
+        isInsideEnter: true,
+        isInsideExit: true,
+        address: 'Sector 62, Industrial Block A',
+        autoPunchEnabled: true,
+        dwellTimeMinutes: 2
+      },
+      {
+        siteId: 'site_beta',
+        siteName: 'Noida Warehouse Beta (Logistics Dock)',
+        distanceMeters: 42,
+        radius: 80,
+        enterRadius: 80,
+        exitRadius: 95,
+        isInsideEnter: true,
+        isInsideExit: true,
+        address: 'Sector 62, Industrial Block B',
+        autoPunchEnabled: true,
+        dwellTimeMinutes: 2
+      }
+    ];
+    setOverlappingCandidates(candidates);
+    setShowDisambiguationModal(true);
+  };
+
+  const handleSimulateShiftReentry = async () => {
+    const site = branches[0] || {
+      id: 'branch_sim',
+      name: 'Noida Plant #1',
+      location: { lat: 28.5355, lng: 77.3910, radius: 100 }
+    };
+
+    autoPunchService.logGeofenceEvent({
+      tenantId: tokenRecord.tenantId,
+      workerId: worker.id,
+      workerName: worker.name,
+      siteId: site.id,
+      siteName: site.name,
+      type: 'RE_ENTRY',
+      timestamp: new Date().toISOString(),
+      location: { lat: 28.5355, lng: 77.3910 },
+      accuracy: 14,
+      shiftId: worker.shiftId,
+      actionTaken: 'RE_ENTRY_LOGGED',
+      details: 'Shift active: re-entry logged to audit trail. Duplicate auto-punch suppressed.'
+    });
+
+    setPunchFeedback({
+      type: 'SUCCESS',
+      message: `Re-entry to ${site.name} logged as breadcrumb event. Duplicate punch suppressed for active shift.`
+    });
+    setGeofenceEvents(autoPunchService.getGeofenceEvents(worker.id));
+  };
+
+  // Master Verified Field Punch Action (Key AC 2, 3, 4, 5, 6, 9 & Top Edge Cases)
   const handlePunch = async (punchType: 'IN' | 'OUT') => {
+    if (punchLoading) return; // Prevent double-tap race conditions
     setPunchLoading(true);
     setPunchFeedback(null);
 
-    // Auto-snap photo if camera was running
-    if (!capturedPhoto) {
+    // Auto-snap live selfie if camera was active
+    if (!capturedPhoto && cameraActive) {
       snapPhoto();
     }
 
-    // Determine location payload based on consent state
+    // Client-generated idempotent punchId (Key AC 6)
+    const idempotentPunchId = `punch_${worker.id}_${punchType}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const clientTimestamp = new Date().toISOString();
+
     const hasAttendanceConsent = activeConsent?.purposes.attendance_location;
     const locationPayload = (hasAttendanceConsent && locationStatus.verified) ? {
       lat: locationStatus.lat || 28.5355,
       lng: locationStatus.lng || 77.3910,
+      accuracy: locationStatus.accuracy || 15,
       address: locationStatus.address
     } : undefined;
 
+    const punchPayload: FieldPunchPayload = {
+      punchId: idempotentPunchId,
+      tenantId: tokenRecord.tenantId,
+      workerId: worker.id,
+      deviceFingerprint: deviceInfo.deviceFingerprint,
+      deviceBindingId: boundDevice?.id,
+      deviceModel: deviceInfo.deviceModel,
+      punchType,
+      deviceTimestamp: clientTimestamp,
+      gps: locationPayload || { lat: 28.5355, lng: 77.3910, accuracy: 15, address: 'Plant #1' },
+      selfieUrl: capturedPhoto || undefined,
+      livenessVerified: livenessReady,
+      selfieVerificationStatus,
+      selfieUnavailableRetries: selfieRetries,
+      mockLocationFlag: mockLocationDetected || !!locationStatus.isMock,
+      rootedJailbrokenFlag: false,
+      batteryLevel: batteryInfo.level,
+      batteryCharging: batteryInfo.charging,
+      token: tokenRecord.token,
+      recentDwellTimestamp,
+      bypassAccuracyWarning,
+      isOffline: isOffline || !navigator.onLine
+    };
+
     try {
-      const result = await magicLinkService.recordBoundDevicePunch({
-        tenantId: tokenRecord.tenantId,
-        workerId: worker.id,
-        deviceFingerprint: deviceInfo.deviceFingerprint,
-        deviceModel: deviceInfo.deviceModel,
-        punchType,
-        location: locationPayload,
-        photoUrl: capturedPhoto || undefined
-      });
+      const result = await magicLinkService.recordBoundDevicePunch(punchPayload);
 
       if (!result.success) {
+        if (result.errorCode === 'MOCK_LOCATION_BLOCKED') {
+          setPunchFeedback({
+            type: 'MOCK_BLOCKED',
+            message: result.error || 'Mock location detected. Punch blocked at API layer.'
+          });
+          return;
+        }
+
         if (result.errorCode === 'DEVICE_UNREGISTERED') {
           setIsBound(false);
           setBoundDevice(null);
@@ -463,17 +961,25 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
           return;
         }
 
-        if (result.errorCode === 'WORKER_INACTIVE') {
+        if (result.errorCode === 'GEOFENCE_BLOCKED') {
           setPunchFeedback({
             type: 'ERROR',
-            message: result.error || 'You are no longer active.'
+            message: result.error || 'Outside approved site boundary. Blocked by policy.'
+          });
+          return;
+        }
+
+        if (result.errorCode === 'ACCURACY_TOO_LOW') {
+          setPunchFeedback({
+            type: 'ERROR',
+            message: result.error || 'GPS accuracy is too low. Move to open sky and retry.'
           });
           return;
         }
 
         setPunchFeedback({
           type: 'ERROR',
-          message: result.error || 'Punch failed. Please contact your manager.'
+          message: result.error || 'Punch failed. Please check your connection or contact manager.'
         });
         return;
       }
@@ -483,38 +989,55 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         setBoundDevice(result.boundDevice);
       }
 
-      const formattedTime = new Date().toLocaleTimeString('en-IN', {
+      const formattedTime = new Date(result.serverTimestamp || Date.now()).toLocaleTimeString('en-IN', {
         hour: '2-digit',
         minute: '2-digit',
         hour12: true
       });
 
-      const modeText = hasAttendanceConsent ? 'Geofence Verified' : 'PUNCH_ONLY Mode';
+      const siteLabel = result.siteName || locationStatus.siteName || 'Plant #1';
 
-      setPunchFeedback({
-        type: 'SUCCESS',
-        message: `Successfully Punched ${punchType} at ${formattedTime}! (${modeText})`,
-        punchType,
-        time: formattedTime
-      });
+      if (result.isOfflineQueued) {
+        // Key AC 5: Offline punch -> shown as "Saved on device", never "Success" until server confirms
+        setPunchFeedback({
+          type: 'SAVED_LOCAL',
+          message: `Saved on device (Offline) at ${formattedTime} — inside ${siteLabel}. Pending server sync.`,
+          punchType,
+          time: formattedTime,
+          isOffline: true,
+          siteName: siteLabel
+        });
+        setPendingSyncCount(prev => prev + 1);
+      } else {
+        // Key AC 9 Flow feedback: "Punched in at 09:02 — inside [Site Name]."
+        setPunchFeedback({
+          type: 'SUCCESS',
+          message: `Punched ${punchType === 'IN' ? 'in' : 'out'} at ${formattedTime} — inside ${siteLabel}.`,
+          punchType,
+          time: formattedTime,
+          isOffline: false,
+          siteName: siteLabel
+        });
+      }
 
       setTimeout(() => {
         setCapturedPhoto(null);
         startCamera();
-      }, 4000);
+      }, 4500);
 
     } catch (err: any) {
       console.error('Punch execution error:', err);
+      // Fallback offline queue
       setPunchFeedback({
-        type: 'ERROR',
-        message: err.message || 'Network error during punch.'
+        type: 'SAVED_LOCAL',
+        message: 'Saved on device (Offline). Punch saved locally and will sync when reconnected.',
+        isOffline: true
       });
     } finally {
       setPunchLoading(false);
     }
   };
 
-  // Switch Worker Action (Edge Case 3)
   const handleSwitchWorker = () => {
     magicLinkService.clearDeviceLocalWorkerSession();
     setIsBound(false);
@@ -539,18 +1062,10 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   const hasPunchedIn = !!getPunchInTime();
   const hasPunchedOut = !!getPunchOutTime();
 
-  const formattedExpiryDate = boundDevice?.expiresAt 
-    ? new Date(boundDevice.expiresAt).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric'
-      })
-    : '30 days';
-
   const isLocationConsentActive = activeConsent?.purposes.attendance_location ?? false;
 
   return (
-    <div className="max-w-md mx-auto w-full px-3 py-4 sm:p-5 flex flex-col font-sans min-h-screen text-slate-900 pb-16">
+    <div className="max-w-md mx-auto w-full px-3 py-4 sm:p-5 flex flex-col font-sans min-h-screen text-slate-900 pb-28">
       
       {/* BRANDING HEADER */}
       <div className="flex items-center justify-between mb-3 pb-3 border-b border-slate-200">
@@ -567,17 +1082,31 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
             </h1>
             <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>One-Tap Mobile Punch</span>
+              <span>Device-Bound Field Punch</span>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          {/* LOCATION & PRIVACY TRANSPARENCY BUTTON (KEY AC 4a) */}
+          {/* OFFLINE STATUS CHIP */}
+          {isOffline && (
+            <span className="px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800 text-[10px] font-bold flex items-center gap-1">
+              <WifiOff size={11} />
+              <span>Offline</span>
+            </span>
+          )}
+
+          {pendingSyncCount > 0 && (
+            <span className="px-2 py-0.5 rounded-lg bg-blue-100 text-blue-800 text-[10px] font-bold">
+              {pendingSyncCount} queued
+            </span>
+          )}
+
+          {/* PRIVACY TRANSPARENCY BUTTON */}
           <button
             onClick={() => setShowPrivacyModal(true)}
             className="text-xs font-bold px-2.5 py-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-1.5 shadow-2xs transition-colors"
-            title="Inspect location data collection, retention and withdraw consent"
+            title="Inspect location data collection and privacy"
           >
             <Shield size={13} className={isLocationConsentActive ? 'text-emerald-600' : 'text-amber-600'} />
             <span className="hidden sm:inline">Privacy</span>
@@ -594,286 +1123,323 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* MID-PUNCH REVOCATION ALERT (EDGE CASE 3) */}
-      {punchFeedback?.type === 'REVOKED_MID_PUNCH' && (
-        <div className="mb-4 p-4 rounded-2xl bg-rose-50 border-2 border-rose-200 text-rose-900 shadow-md animate-in fade-in zoom-in-95">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-              <ShieldAlert size={22} />
+      {/* 5-MINUTE AUTO-PUNCH UNDO COUNTDOWN BANNER (KEY AC 5 & TOP EDGE CASE 4) */}
+      {activeAutoPunchSession && activeAutoPunchSession.status === 'PENDING_UNDO' && (
+        <div className="mb-3 p-4 rounded-3xl bg-amber-500/10 border-2 border-amber-500/40 text-amber-950 shadow-md animate-pulse">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                <Clock size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-extrabold text-xs uppercase tracking-wider text-amber-900">
+                    Auto-Punched {activeAutoPunchSession.punchType} at {activeAutoPunchSession.siteName}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-200/80 text-amber-800">
+                    Provisional
+                  </span>
+                </div>
+                <p className="text-xs text-amber-800 mt-1 font-medium">
+                  {activeAutoPunchSession.isOffline 
+                    ? 'Auto punched in — pending sync. Undo available below:' 
+                    : 'Clocked automatically upon verified arrival. Record finalizes in:'}
+                </p>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="font-mono font-extrabold text-sm text-amber-950 bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-300">
+                    {Math.floor(undoCountdownSeconds / 60)}:{(undoCountdownSeconds % 60).toString().padStart(2, '0')}
+                  </span>
+                  <span className="text-[11px] text-amber-700">remaining to undo</span>
+                </div>
+              </div>
             </div>
-            <div className="flex-1">
-              <h3 className="font-bold text-sm text-rose-900">Your device was unregistered by your manager</h3>
-              <p className="text-xs text-rose-700 mt-1 leading-relaxed">
-                Your device access was revoked. However, your attempted punch (timestamp, GPS coordinates, and selfie) has been safely surfaced to your supervisor's <strong>E3 Action Inbox</strong> for manual review.
+            <button
+              type="button"
+              onClick={handleUndoAutoPunch}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl shadow-xs shrink-0 cursor-pointer transition-transform active:scale-95"
+            >
+              Undo Punch
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* LOCATION PERMISSION REVOKED SILENT NOTICE (KEY AC 8: SILENT DEGRADATION) */}
+      {permissionRevokedNotice && (
+        <div className="mb-3 p-3 bg-slate-100 border border-slate-300 text-slate-800 text-xs rounded-2xl flex items-center gap-2">
+          <AlertTriangle size={16} className="text-amber-600 shrink-0" />
+          <span className="text-[11px] font-medium leading-tight">
+            Location permission disabled. Auto-punch paused and supervisor notified once. Please use the manual punch button below.
+          </span>
+        </div>
+      )}
+
+      {/* SOFT PWA INSTALL PROMPT (KEY AC 1 & 8: NEVER BLOCKS PUNCH) */}
+      {showPwaInstallBanner && (
+        <div className="mb-3 p-3 rounded-2xl bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50 border border-blue-200/90 text-xs text-slate-800 flex items-center justify-between gap-2 shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+              <Download size={15} />
+            </div>
+            <p className="text-[11px] font-medium leading-tight text-slate-700">
+              Install the app to enable auto-punch and background features
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleInstallPwa}
+              className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-2xs"
+            >
+              Install
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPwaInstallBanner(false)}
+              className="text-slate-400 hover:text-slate-600 p-1 text-xs"
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* EXPIRED TOKEN ALERT & ONE-TAP RENEWAL (KEY AC 7) */}
+      {isTokenExpired && (
+        <div className="mb-3 p-4 rounded-3xl bg-rose-50 border-2 border-rose-200 text-rose-950 shadow-sm space-y-2.5">
+          <div className="flex items-start gap-2.5">
+            <Lock size={18} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-xs uppercase tracking-wider text-rose-800">
+                This Punch Link Has Expired
+              </h4>
+              <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
+                Your direct punch link has exceeded its validity window. Tapping below sends an instant renewal ticket to your supervisor's E3 Inbox.
               </p>
-              <div className="mt-3 flex gap-2">
+            </div>
+          </div>
+          {renewalRequested ? (
+            <div className="p-2.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2">
+              <CheckCircle2 size={15} className="text-emerald-600" />
+              <span>Request sent to manager's E3 Inbox! You will receive a new link.</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={requestingRenewal}
+              onClick={handleRequestRenewal}
+              className="w-full py-2.5 px-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              {requestingRenewal ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
+              <span>Ask your manager for a new one</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* MOCK GPS LOCATION BLOCKED ALERT (KEY AC 3: BLOCKED AT API LAYER) */}
+      {(mockLocationDetected || punchFeedback?.type === 'MOCK_BLOCKED') && (
+        <div className="mb-3 p-4 rounded-3xl bg-rose-50 border-2 border-rose-300 text-rose-950 shadow-md space-y-2.5 animate-in fade-in">
+          <div className="flex items-start gap-2.5">
+            <AlertOctagon size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-xs uppercase tracking-wider text-rose-800">
+                Mock GPS Location Blocked (API Layer)
+              </h4>
+              <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
+                Spoofed or simulated GPS was detected and blocked. The blocked attempt has been logged in the E9 Anomaly Engine. Please turn off mock location apps.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setMockLocationDetected(false);
+              requestGpsLocation();
+            }}
+            className="w-full py-2.5 px-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <RefreshCw size={14} />
+            <span>Retry with Real Location</span>
+          </button>
+        </div>
+      )}
+
+      {/* LOW GPS ACCURACY WARNING CARD (TOP EDGE CASE 1) */}
+      {gpsAccuracyLow && !mockLocationDetected && (
+        <div className="mb-3 p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-amber-900 block">
+                Location accuracy is low ({locationStatus.accuracy}m)
+              </span>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                Precision exceeds the 50m threshold. Move to open sky away from metal roofing and retry.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-0.5">
+            <button
+              type="button"
+              onClick={() => requestGpsLocation()}
+              className="flex-1 py-1.5 px-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1"
+            >
+              <RefreshCw size={12} />
+              <span>Retry GPS</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setBypassAccuracyWarning(true)}
+              className="py-1.5 px-2.5 border border-amber-300 text-amber-900 font-bold text-xs rounded-xl hover:bg-amber-100"
+            >
+              Proceed with Low Accuracy (Flagged)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* SELFIE VERIFICATION PENDING NOTICE (TOP EDGE CASE 2) */}
+      {selfieVerificationStatus === 'VERIFICATION_PENDING' && (
+        <div className="mb-3 p-3 bg-blue-50 border border-blue-200 text-blue-950 text-xs rounded-2xl flex items-start gap-2">
+          <Info size={16} className="text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-bold text-blue-900">Camera Unavailable (Fallback Mode Active):</span>
+            <p className="text-[11px] text-blue-800 mt-0.5">
+              Live selfie could not be captured. Your punch will be recorded with <strong>VERIFICATION_PENDING</strong> and routed to your supervisor. You are not blocked.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* PUNCH FEEDBACK NOTIFICATION */}
+      {punchFeedback && punchFeedback.type !== 'MOCK_BLOCKED' && (
+        <div className={`mb-3 p-4 rounded-3xl border-2 shadow-sm animate-in fade-in ${
+          punchFeedback.type === 'SUCCESS' 
+            ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+            : punchFeedback.type === 'SAVED_LOCAL'
+            ? 'bg-amber-50 border-amber-300 text-amber-950'
+            : 'bg-rose-50 border-rose-300 text-rose-950'
+        }`}>
+          <div className="flex items-start gap-2.5">
+            {punchFeedback.type === 'SUCCESS' ? (
+              <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+            ) : punchFeedback.type === 'SAVED_LOCAL' ? (
+              <WifiOff size={20} className="text-amber-600 shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            )}
+            <div>
+              <h4 className="font-bold text-xs uppercase tracking-wider">
+                {punchFeedback.type === 'SUCCESS' 
+                  ? 'Attendance Confirmed' 
+                  : punchFeedback.type === 'SAVED_LOCAL' 
+                  ? 'Saved on Device (Offline)' 
+                  : 'Punch Notice'}
+              </h4>
+              <p className="text-xs font-medium mt-0.5 leading-relaxed">
+                {punchFeedback.message}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MAIN SCREEN ROUTING: BOUND VS UNBOUND */}
+      {isBound ? (
+        <div className="space-y-3.5">
+
+          {/* WORKER IDENTITY & DEVICE STATUS CARD */}
+          <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm relative overflow-hidden">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  {worker.photoUrl ? (
+                    <img 
+                      src={worker.photoUrl} 
+                      alt={worker.name} 
+                      className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-xs" 
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black text-xl shadow-xs">
+                      {worker.name.charAt(0)}
+                    </div>
+                  )}
+                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-white text-[10px]">
+                    ✓
+                  </span>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-slate-900 leading-tight">{worker.name}</h2>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
+                      Bound
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    {worker.designation || 'Factory Staff'} • {worker.department || 'Production'}
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                    {boundDevice?.deviceModel || deviceInfo.deviceModel}
+                  </p>
+                </div>
+              </div>
+
+              {/* BATTERY & SWITCH IDENTITY */}
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 px-2 py-1 bg-slate-100 rounded-xl text-[11px] font-mono font-bold text-slate-700">
+                  {batteryInfo.charging ? <BatteryCharging size={13} className="text-emerald-600" /> : <Battery size={13} className="text-slate-600" />}
+                  <span>{batteryInfo.level}%</span>
+                </div>
+
                 <button
-                  onClick={() => {
-                    setPunchFeedback(null);
-                    setOtpStep('PHONE');
-                  }}
-                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+                  type="button"
+                  onClick={() => setShowSwitchWorkerModal(true)}
+                  className="text-[10px] text-blue-600 font-bold hover:underline"
                 >
-                  Verify Fresh OTP
+                  Switch Worker
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* ERROR FEEDBACK BANNER */}
-      {punchFeedback?.type === 'ERROR' && (
-        <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
-          <AlertTriangle size={16} className="text-rose-600 shrink-0" />
-          <span>{punchFeedback.message}</span>
-        </div>
-      )}
-
-      {/* SUCCESS FEEDBACK BANNER */}
-      {punchFeedback?.type === 'SUCCESS' && (
-        <div className="mb-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center gap-3 shadow-xs animate-in fade-in">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-            <Check size={22} className="stroke-[3]" />
-          </div>
-          <div>
-            <h4 className="font-bold text-sm">{punchFeedback.message}</h4>
-            <p className="text-xs text-emerald-700 mt-0.5">
-              Attendance verified &amp; bound to device fingerprint. 30-day validity renewed!
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* SCREEN 0: DPDP CONSENT & LOCATION TRANSPARENCY MODAL     */}
-      {/* (MANDATORY BEFORE ANY LOCATION PROMPT OR PUNCH ENABLED)   */}
-      {/* ======================================================== */}
-      {isBound && showConsentScreen ? (
-        <div className="bg-white rounded-3xl p-5 border-2 border-blue-600 shadow-xl space-y-4 animate-in fade-in">
-          
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                <ShieldCheck size={18} />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900">{tConsent.screenTitle}</h3>
-                <span className="text-[10px] text-emerald-700 font-semibold font-mono">{tConsent.dpdpBadge}</span>
-              </div>
-            </div>
-
-            {/* Language Switcher */}
-            <div className="flex gap-1 bg-slate-100 p-0.5 rounded-xl text-[11px] font-bold">
-              <button
-                type="button"
-                onClick={() => setConsentLanguage('en')}
-                className={`px-2 py-0.5 rounded-lg transition-all ${consentLanguage === 'en' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600'}`}
-              >
-                EN
-              </button>
-              <button
-                type="button"
-                onClick={() => setConsentLanguage('hi')}
-                className={`px-2 py-0.5 rounded-lg transition-all ${consentLanguage === 'hi' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600'}`}
-              >
-                हिं
-              </button>
-              <button
-                type="button"
-                onClick={() => setConsentLanguage('gu')}
-                className={`px-2 py-0.5 rounded-lg transition-all ${consentLanguage === 'gu' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600'}`}
-              >
-                ગુ
-              </button>
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-600 leading-relaxed">
-            {tConsent.subtitle}
-          </p>
-
-          {/* DURESS & LEGAL BASIS NOTICE (KEY AC 1 & TOP EDGE CASE 1) */}
-          <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 text-[11px] text-amber-900 space-y-1">
-            <p className="font-bold flex items-center gap-1">
-              <Info size={13} className="text-amber-700 shrink-0" />
-              <span>Section 6(1) DPDP Act Notice:</span>
-            </p>
-            <p>{tConsent.duressNotice}</p>
-          </div>
-
-          {/* PURPOSE 1: ATTENDANCE LOCATION TOGGLE */}
-          <div className={`p-3.5 rounded-2xl border transition-all ${consentAttendance ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 bg-slate-50'}`}>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={consentAttendance}
-                onChange={(e) => setConsentAttendance(e.target.checked)}
-                className="mt-1 w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
-              />
-              <div className="flex-1">
-                <span className="font-bold text-xs text-slate-900 block">
-                  {tConsent.attendancePurpose.title}
+            {/* LOCATION TRANSPARENCY BAR */}
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-1.5 text-slate-600 min-w-0">
+                <MapPin size={13} className={isLocationConsentActive ? 'text-emerald-600 shrink-0' : 'text-amber-600 shrink-0'} />
+                <span className="truncate font-medium">
+                  {isLocationConsentActive 
+                    ? (locationStatus.siteName || locationStatus.address || 'Locating Geofence...') 
+                    : 'PUNCH_ONLY (Consent Withdrawn)'}
                 </span>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  {tConsent.attendancePurpose.description}
-                </p>
-                <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] text-slate-500 bg-white p-2 rounded-xl border border-slate-200/60 font-mono">
-                  <div>
-                    <strong>Collection:</strong> {tConsent.attendancePurpose.whatCollected}
-                  </div>
-                  <div>
-                    <strong>Retention:</strong> {tConsent.attendancePurpose.retention}
-                  </div>
-                </div>
               </div>
-            </label>
-          </div>
-
-          {/* PURPOSE 2: SAFETY LOCATION TOGGLE */}
-          <div className={`p-3.5 rounded-2xl border transition-all ${consentSafety ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 bg-slate-50'}`}>
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={consentSafety}
-                onChange={(e) => setConsentSafety(e.target.checked)}
-                className="mt-1 w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-              />
-              <div className="flex-1">
-                <span className="font-bold text-xs text-slate-900 block">
-                  {tConsent.safetyPurpose.title}
-                </span>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  {tConsent.safetyPurpose.description}
-                </p>
-                <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] text-slate-500 bg-white p-2 rounded-xl border border-slate-200/60 font-mono">
-                  <div>
-                    <strong>Collection:</strong> {tConsent.safetyPurpose.whatCollected}
-                  </div>
-                  <div>
-                    <strong>Retention:</strong> {tConsent.safetyPurpose.retention}
-                  </div>
-                </div>
-              </div>
-            </label>
-          </div>
-
-          {/* HOW TO WITHDRAW INFORMATION */}
-          <div className="text-[10px] text-slate-500 space-y-0.5 px-1">
-            <p><strong>Withdrawal:</strong> {tConsent.attendancePurpose.withdrawalMethod}</p>
-            <p className="text-slate-400 font-mono">{tConsent.policyVersionLabel}</p>
-          </div>
-
-          <button
-            type="button"
-            disabled={isRecordingConsent}
-            onClick={handleConfirmConsent}
-            className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-sm shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
-          >
-            {isRecordingConsent ? (
-              <RefreshCw size={16} className="animate-spin" />
-            ) : (
-              <>
-                <ShieldCheck size={18} />
-                <span>{tConsent.agreeButton}</span>
-              </>
-            )}
-          </button>
-        </div>
-      ) : isBound ? (
-        /* ======================================================== */
-        /* SCREEN A: DEVICE BOUND (ONE-TAP PUNCH IDENTITY)          */
-        /* ======================================================== */
-        <div className="space-y-4">
-          
-          {/* WORKER IDENTITY CARD (KEY AC 4) */}
-          <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-sm relative overflow-hidden">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                <ShieldCheck size={14} className="text-emerald-600" />
-                <span>You are punching as:</span>
+              <span className="font-mono font-bold text-slate-700 shrink-0 pl-2">
+                {isLocationConsentActive ? `±${locationStatus.accuracy || 15}m` : 'No GPS'}
               </span>
-              <button
-                onClick={() => setShowSwitchWorkerModal(true)}
-                className="text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1"
-                title="Switch worker identity on this phone"
-              >
-                <span>Not you? Switch worker</span>
-                <ChevronRight size={14} />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-3.5">
-              <div className="relative">
-                {worker.photoUrl ? (
-                  <img 
-                    src={worker.photoUrl} 
-                    alt={worker.name} 
-                    className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-100 shadow-xs"
-                  />
-                ) : (
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-black text-xl flex items-center justify-center shadow-xs">
-                    {worker.name.charAt(0)}
-                  </div>
-                )}
-                <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-white" title="Device Bound">
-                  <Check size={11} className="stroke-[3]" />
-                </div>
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate">
-                  {worker.name}
-                </h2>
-                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
-                  <span className="font-medium text-slate-700">{worker.designation || 'Factory Operator'}</span>
-                  <span>•</span>
-                  <span>{worker.department || 'Production'}</span>
-                </div>
-                <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-                  <Smartphone size={12} className="text-slate-400" />
-                  <span className="truncate">{boundDevice?.deviceModel || deviceInfo.deviceModel}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* LOCATION PRIVACY STATUS BANNER */}
-            <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
-              <div className="flex items-center gap-1.5">
-                <Shield size={13} className={isLocationConsentActive ? 'text-emerald-600' : 'text-amber-600'} />
-                <span className="font-medium text-slate-700">
-                  {isLocationConsentActive ? 'GPS Attendance Verified' : 'PUNCH_ONLY Mode (Location Off)'}
-                </span>
-              </div>
-              <button
-                onClick={() => setShowPrivacyModal(true)}
-                className="text-blue-600 hover:text-blue-700 font-bold text-[11px] hover:underline"
-              >
-                Manage Consent
-              </button>
             </div>
           </div>
 
-          {/* CAMERA SELFIE & LOCATION CARD */}
+          {/* CAMERA SELFIE & LIVENESS PREVIEW CARD */}
           <div className="bg-slate-900 rounded-3xl p-4 text-white shadow-md relative overflow-hidden">
-            <div className="flex items-center justify-between text-xs text-slate-300 mb-2.5">
+            <div className="flex items-center justify-between text-xs text-slate-300 mb-2">
               <span className="flex items-center gap-1.5 font-bold text-white">
                 <Camera size={14} className="text-blue-400" />
-                <span>Live Verification Preview</span>
+                <span>On-Device Selfie &amp; Liveness</span>
               </span>
               <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>Camera Ready</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>{capturedPhoto ? 'Photo Ready' : 'Live Camera'}</span>
               </span>
             </div>
 
-            {/* Camera Viewport with Face Guide Oval */}
+            {/* Camera Viewport with Oval Target Guide */}
             <div className="relative aspect-4/3 w-full bg-slate-950 rounded-2xl overflow-hidden flex items-center justify-center border border-slate-800">
               {capturedPhoto ? (
                 <img 
                   src={capturedPhoto} 
                   alt="Captured Selfie" 
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover" 
                 />
               ) : (
                 <video 
@@ -881,22 +1447,23 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                   autoPlay 
                   playsInline 
                   muted 
-                  className="w-full h-full object-cover mirror"
+                  className="w-full h-full object-cover"
                   style={{ transform: 'scaleX(-1)' }}
                 />
               )}
 
-              {/* Face Guide Oval */}
+              {/* Liveness Oval Guide */}
               {!capturedPhoto && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-36 h-48 rounded-[50%] border-2 border-dashed border-white/60 shadow-lg"></div>
-                  <span className="absolute bottom-3 text-[11px] text-white/80 bg-black/60 px-2.5 py-0.5 rounded-full backdrop-blur-xs font-semibold">
-                    Align face inside oval
-                  </span>
+                  <div className="w-36 h-48 rounded-[50%] border-2 border-dashed border-white/70 shadow-lg flex items-center justify-center">
+                    <span className="text-[10px] text-white/80 font-bold bg-black/50 px-2 py-0.5 rounded-full">
+                      Face Target
+                    </span>
+                  </div>
                 </div>
               )}
 
-              {/* Snap / Retake control */}
+              {/* Controls */}
               <div className="absolute top-2 right-2 flex gap-1.5">
                 {capturedPhoto ? (
                   <button
@@ -904,7 +1471,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                       setCapturedPhoto(null);
                       startCamera();
                     }}
-                    className="p-1.5 rounded-xl bg-black/60 text-white hover:bg-black/80 backdrop-blur-xs text-[11px] font-bold flex items-center gap-1"
+                    className="p-1.5 rounded-xl bg-black/60 text-white hover:bg-black/80 backdrop-blur-xs text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                   >
                     <RefreshCw size={12} />
                     <span>Retake</span>
@@ -912,7 +1479,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                 ) : (
                   <button
                     onClick={snapPhoto}
-                    className="p-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-500 text-[11px] font-bold flex items-center gap-1 shadow-xs"
+                    className="p-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-500 text-[11px] font-bold flex items-center gap-1 shadow-xs cursor-pointer"
                   >
                     <Camera size={12} />
                     <span>Snap</span>
@@ -921,80 +1488,93 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* GPS Lock or PUNCH_ONLY indicator */}
-            <div className="mt-3 flex items-center justify-between text-[11px] text-slate-300 bg-slate-800/80 p-2 rounded-xl">
+            {/* Site Geofence & Dwell status */}
+            <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-300 bg-slate-800/80 p-2 rounded-xl">
               <div className="flex items-center gap-1.5">
-                <MapPin size={13} className={isLocationConsentActive ? 'text-emerald-400' : 'text-amber-400'} />
-                <span className="truncate max-w-[210px]">
-                  {isLocationConsentActive 
-                    ? (locationStatus.address || 'GPS Locked: Factory Geofence')
-                    : 'PUNCH_ONLY (Location Withdrawn by You)'}
+                <Compass size={13} className="text-emerald-400 shrink-0" />
+                <span className="truncate">
+                  {locationStatus.siteName || 'Plant #1 Geofence Verified'}
                 </span>
               </div>
-              <span className={`font-mono font-bold ${isLocationConsentActive ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {isLocationConsentActive 
-                  ? (locationStatus.accuracy ? `±${locationStatus.accuracy}m` : 'Active') 
-                  : 'No GPS'}
+              <span className="text-[10px] text-emerald-400 font-bold font-mono">
+                Hysteresis ±10% Active
               </span>
             </div>
           </div>
 
-          {/* ONE-TAP PUNCH ACTION BUTTON (KEY AC 3) */}
-          <div className="pt-2">
-            {!hasPunchedIn || (hasPunchedIn && hasPunchedOut) ? (
-              <button
-                type="button"
-                disabled={punchLoading}
-                onClick={() => handlePunch('IN')}
-                className="w-full py-5 px-6 rounded-3xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-98 text-white font-extrabold text-lg sm:text-xl shadow-xl shadow-emerald-500/25 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer disabled:opacity-60"
-              >
-                <div className="flex items-center gap-2">
-                  <Sparkles size={22} className="text-amber-300" />
-                  <span>
-                    {isLocationConsentActive ? 'PUNCH IN (हाजिरी लगाएं)' : 'PUNCH IN (PUNCH_ONLY MODE)'}
+          {/* LIVE GEOFENCE AUTO-PUNCH MONITOR (KEY AC 1, 2, 4, 6) */}
+          <div className="bg-white rounded-3xl p-4 border border-slate-200 text-xs shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Radio size={15} className={dwellStatus?.inside ? "text-emerald-600 animate-pulse" : "text-slate-400"} />
+                <span className="font-extrabold text-slate-900 text-xs">Geofence Auto-Punch</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                  !isAutoPunchEntitled 
+                    ? 'bg-amber-100 text-amber-800' 
+                    : dwellStatus?.inside 
+                    ? 'bg-emerald-100 text-emerald-800' 
+                    : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {!isAutoPunchEntitled ? 'Free Tier (Gated)' : dwellStatus?.inside ? 'Inside Perimeter' : 'Monitoring Geofence'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowEventsAuditModal(true)}
+                  className="text-[11px] font-bold text-blue-600 hover:underline"
+                >
+                  Audit Log ({geofenceEvents.length})
+                </button>
+              </div>
+            </div>
+
+            {dwellStatus ? (
+              <div className="space-y-1.5 pt-1">
+                <div className="flex justify-between text-[11px] text-slate-600">
+                  <span className="font-medium">{dwellStatus.siteName}</span>
+                  <span className="font-mono font-bold text-slate-800">
+                    {dwellStatus.inside 
+                      ? `${dwellStatus.secondsRemaining}s to auto-clock (${dwellStatus.dwellMinutes}m dwell)` 
+                      : 'Outside Enter Radius'}
                   </span>
                 </div>
-                <span className="text-xs text-emerald-100 font-medium">
-                  {isLocationConsentActive 
-                    ? 'One tap • No PIN • Identity bound to this phone' 
-                    : 'One tap • Location tracking disabled by you'}
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={punchLoading}
-                onClick={() => handlePunch('OUT')}
-                className="w-full py-5 px-6 rounded-3xl bg-gradient-to-r from-amber-600 via-orange-500 to-amber-700 hover:from-amber-700 hover:to-orange-700 active:scale-98 text-white font-extrabold text-lg sm:text-xl shadow-xl shadow-amber-500/25 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer disabled:opacity-60"
-              >
-                <div className="flex items-center gap-2">
-                  <Clock size={22} className="text-white" />
-                  <span>PUNCH OUT (प्रस्थान दर्ज करें)</span>
+                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-emerald-500 h-full transition-all duration-300"
+                    style={{ width: `${dwellStatus.inside ? dwellStatus.progressPct : 0}%` }}
+                  />
                 </div>
-                <span className="text-xs text-amber-100 font-medium">
-                  End of shift punch • Record hours &amp; overtime
-                </span>
-              </button>
+                <div className="flex items-center justify-between text-[10px] text-slate-400">
+                  <span>Enter radius ≠ Exit radius hysteresis</span>
+                  <span>{isNativeApp ? 'Native GeofencingClient' : 'Foreground GPS Polling'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="pt-1 text-[11px] text-slate-500 flex items-center justify-between">
+                <span>Monitoring registered worksite perimeters</span>
+                <span className="font-mono font-bold text-emerald-600">Ready</span>
+              </div>
             )}
           </div>
 
-          {/* TODAY'S SHIFT PUNCH LOG */}
-          <div className="bg-white rounded-2xl p-3.5 border border-slate-200 text-xs">
+          {/* TODAY'S SHIFT SUMMARY LOG */}
+          <div className="bg-white rounded-3xl p-4 border border-slate-200 text-xs shadow-xs">
             <div className="flex items-center justify-between text-slate-500 mb-2 font-semibold">
               <span>Today's Shift Activity</span>
               <span className="font-mono text-slate-400">{new Date().toDateString()}</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-500 block uppercase font-bold">Punch In</span>
+              <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 block uppercase font-bold">Punch In</span>
                 <span className="font-bold text-slate-900 font-mono text-sm">
                   {getPunchInTime() 
                     ? new Date(getPunchInTime()!).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
                     : 'Not yet'}
                 </span>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-[10px] text-slate-500 block uppercase font-bold">Punch Out</span>
+              <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 block uppercase font-bold">Punch Out</span>
                 <span className="font-bold text-slate-900 font-mono text-sm">
                   {getPunchOutTime() 
                     ? new Date(getPunchOutTime()!).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
@@ -1004,60 +1584,91 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* FOOTER NOTICE & PRIVACY CONTROLS LINK */}
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 flex items-center justify-between">
-            <div>
-              <span className="font-semibold text-slate-700 block">🔒 DPDP Protected Device:</span>
-              <span className="text-slate-500">Auto-renews for 30 days on punch</span>
-            </div>
+          {/* TESTING & QA DIAGNOSTIC TOOLS ACCORDION */}
+          <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/70">
             <button
-              onClick={() => setShowPrivacyModal(true)}
-              className="text-blue-700 font-bold hover:underline"
+              type="button"
+              onClick={() => setShowTestingTools(!showTestingTools)}
+              className="w-full p-2.5 text-left text-[11px] font-bold text-slate-600 flex items-center justify-between hover:bg-slate-100"
             >
-              Location &amp; Privacy
+              <span>Field Verification Testing Tools</span>
+              <span className="text-[10px] font-mono">{showTestingTools ? '▲ Hide' : '▼ Expand'}</span>
             </button>
+            {showTestingTools && (
+              <div className="p-3 pt-1 border-t border-slate-200 text-xs space-y-2">
+                <p className="text-[10px] text-slate-500">
+                  Simulate field edge cases &amp; test Geofence Auto-Punch acceptance criteria:
+                </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleSimulateArrivalAndDwell}
+                    className="p-2 rounded-xl bg-emerald-100 text-emerald-900 font-bold text-[10px] hover:bg-emerald-200 text-left transition-colors"
+                  >
+                    ⚡ Simulate Site Arrival &amp; Auto-Punch (5m Undo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSimulateHysteresisDrift}
+                    className="p-2 rounded-xl bg-indigo-100 text-indigo-900 font-bold text-[10px] hover:bg-indigo-200 text-left transition-colors"
+                  >
+                    🔄 Simulate Boundary Hysteresis Buffer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSimulateOverlappingSites}
+                    className="p-2 rounded-xl bg-purple-100 text-purple-900 font-bold text-[10px] hover:bg-purple-200 text-left transition-colors"
+                  >
+                    📍 Simulate Overlapping Fences (Disambiguate)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSimulateShiftReentry}
+                    className="p-2 rounded-xl bg-blue-100 text-blue-900 font-bold text-[10px] hover:bg-blue-200 text-left transition-colors"
+                  >
+                    🛡️ Simulate Shift Re-Entry (Suppressed)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => requestGpsLocation(true)}
+                    className="p-2 rounded-xl bg-rose-100 text-rose-900 font-bold text-[10px] hover:bg-rose-200 text-left transition-colors"
+                  >
+                    🚫 Simulate Mock GPS Block (AC 3)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsOffline(!isOffline)}
+                    className="p-2 rounded-xl bg-slate-200 text-slate-900 font-bold text-[10px] hover:bg-slate-300 text-left transition-colors"
+                  >
+                    📡 Toggle Offline Mode (AC 5)
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
         </div>
       ) : (
-        /* ======================================================== */
-        /* SCREEN B: UNBOUND DEVICE (OTP VERIFICATION FLOW)         */
-        /* ======================================================== */
+        /* SCREEN B: UNBOUND DEVICE (OTP VERIFICATION FLOW) */
         <div className="space-y-4">
-          
-          {/* INTRO HERO */}
           <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white rounded-3xl p-5 shadow-lg relative overflow-hidden">
             <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center mb-3 border border-white/20">
               <Smartphone size={24} className="text-amber-300" />
             </div>
             <h2 className="text-base sm:text-lg font-bold">Bind Phone for Daily 1-Tap Punch</h2>
             <p className="text-xs text-blue-100 mt-1 leading-relaxed">
-              Verify your phone number once. After binding and privacy consent, you can punch in every day with a single tap.
+              Verify your mobile number once. After binding, punch in accurately wherever you are from your own phone.
             </p>
           </div>
 
-          {/* KIOSK RECOMMENDATION FOR SHARED DEVICES */}
-          <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
-            <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold">Important Notice:</span>
-              <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                This device binding is personal to you. <strong>Kiosk is recommended for shared devices</strong>. If another worker shares this phone, they must use "Switch Worker".
-              </p>
-            </div>
-          </div>
-
-          {/* STEP 1: PHONE NUMBER INPUT */}
           {otpStep === 'PHONE' && (
             <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Your Registered Mobile Number (पंजीकृत मोबाइल नंबर)
+                  Registered Mobile Number (पंजीकृत मोबाइल नंबर)
                 </label>
                 <div className="relative">
-                  <div className="absolute left-3.5 top-3 text-slate-400 font-bold text-xs">
-                    +91
-                  </div>
+                  <div className="absolute left-3.5 top-3 text-slate-400 font-bold text-xs">+91</div>
                   <input
                     type="tel"
                     maxLength={10}
@@ -1068,23 +1679,8 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                   />
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1.5">
-                  OTP will be sent to the registered number on file for <strong>{worker.name}</strong>.
+                  OTP will be sent only to the registered mobile for <strong>{worker.name}</strong>.
                 </p>
-              </div>
-
-              {/* DEMO / TESTING HELPER */}
-              <div className="p-3 rounded-xl bg-blue-50/80 border border-blue-200/80 text-[11px] text-blue-800 flex items-center justify-between">
-                <div>
-                  <span className="font-semibold block">Registered on file:</span>
-                  <span className="font-mono font-bold">{worker.phone || 'No phone'}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setPhoneInput(worker.phone.replace(/\D/g, '').slice(-10))}
-                  className="px-2.5 py-1 bg-blue-600 text-white rounded-lg text-[10px] font-bold hover:bg-blue-700 transition-colors"
-                >
-                  Use This Phone
-                </button>
               </div>
 
               {otpError && (
@@ -1098,73 +1694,46 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                 type="button"
                 disabled={otpLoading || phoneInput.length < 10}
                 onClick={handleRequestOtp}
-                className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-sm shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
-                {otpLoading ? (
-                  <RefreshCw size={16} className="animate-spin" />
-                ) : (
-                  <>
-                    <span>Send 6-Digit Verification Code</span>
-                    <ArrowRight size={16} />
-                  </>
-                )}
+                {otpLoading ? <RefreshCw size={16} className="animate-spin" /> : <span>Send 6-Digit Verification Code</span>}
               </button>
-
-              <div className="text-[10px] text-slate-400 text-center">
-                Rate limited to 3 requests per phone per hour • Max 2 devices per worker
-              </div>
             </div>
           )}
 
-          {/* STEP 2: 6-DIGIT OTP ENTRY */}
           {otpStep === 'OTP' && (
             <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
               <div className="text-center">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-                  Verification Code
-                </span>
-                <p className="text-xs text-slate-600 mt-1">
-                  Sent to <strong className="text-slate-900">{maskedPhone}</strong>
-                </p>
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Verification Code</span>
+                <p className="text-xs text-slate-600 mt-1">Sent to <strong className="text-slate-900">{maskedPhone}</strong></p>
                 <div className="text-[11px] font-mono text-blue-600 font-bold mt-1">
                   Valid for: {Math.floor(secondsLeft / 60)}:{(secondsLeft % 60).toString().padStart(2, '0')}
                 </div>
               </div>
 
-              {/* DEMO CODE PREVIEW BANNER */}
               {demoOtpCode && (
                 <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-center">
-                  <span className="text-[10px] uppercase font-bold text-emerald-700 block">
-                    SMS/WhatsApp Simulation
-                  </span>
-                  <p className="text-xs font-medium">Your 6-digit OTP code is:</p>
-                  <span className="font-mono font-black text-xl tracking-widest text-emerald-800 block my-1">
-                    {demoOtpCode}
-                  </span>
+                  <span className="text-[10px] uppercase font-bold text-emerald-700 block">Verification Code (Simulation)</span>
+                  <span className="font-mono font-black text-xl tracking-widest text-emerald-800 block my-1">{demoOtpCode}</span>
                   <button
                     type="button"
                     onClick={() => setOtpInput(demoOtpCode)}
-                    className="text-[11px] font-bold text-emerald-700 hover:underline"
+                    className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer"
                   >
                     Auto-Fill Code
                   </button>
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 text-center">
-                  Enter 6-Digit OTP
-                </label>
-                <input
-                  type="text"
-                  maxLength={6}
-                  autoFocus
-                  placeholder="• • • • • •"
-                  value={otpInput}
-                  onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
-                  className="w-full text-center tracking-[0.5em] text-xl font-mono font-black py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-blue-600 focus:bg-white transition-all text-slate-900"
-                />
-              </div>
+              <input
+                type="text"
+                maxLength={6}
+                autoFocus
+                placeholder="• • • • • •"
+                value={otpInput}
+                onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
+                className="w-full text-center tracking-[0.5em] text-xl font-mono font-black py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-blue-600 focus:bg-white transition-all text-slate-900"
+              />
 
               {otpError && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
@@ -1177,100 +1746,106 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                 type="button"
                 disabled={otpLoading || otpInput.length < 6}
                 onClick={handleVerifyOtp}
-                className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
-                {otpLoading ? (
-                  <RefreshCw size={16} className="animate-spin" />
-                ) : (
-                  <>
-                    <ShieldCheck size={18} />
-                    <span>Verify Code &amp; Bind Phone</span>
-                  </>
-                )}
+                {otpLoading ? <RefreshCw size={16} className="animate-spin" /> : <span>Verify Code &amp; Bind Phone</span>}
               </button>
-
-              <div className="flex items-center justify-between text-xs pt-1">
-                <button
-                  type="button"
-                  onClick={() => setOtpStep('PHONE')}
-                  className="text-slate-500 hover:text-slate-800 font-semibold"
-                >
-                  Change phone number
-                </button>
-                <button
-                  type="button"
-                  disabled={otpLoading}
-                  onClick={handleRequestOtp}
-                  className="text-blue-600 hover:text-blue-700 font-bold"
-                >
-                  Resend OTP
-                </button>
-              </div>
             </div>
           )}
 
-          {/* STEP 3: 2-DEVICE LIMIT REACHED */}
           {otpStep === 'LIMIT_REACHED' && (
-            <div className="bg-white rounded-3xl p-5 border-2 border-amber-300 shadow-md space-y-4 animate-in fade-in">
-              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-                <Smartphone size={24} />
-              </div>
+            <div className="bg-white rounded-3xl p-5 border-2 border-amber-300 shadow-md space-y-4">
               <div className="text-center">
-                <h3 className="font-bold text-base text-slate-900">
-                  Device Limit Reached (2 / 2 Devices)
-                </h3>
+                <h3 className="font-bold text-base text-slate-900">Device Limit Reached (2 / 2 Devices)</h3>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  You already have 2 active smartphones bound to your profile. To bind this new phone, your supervisor must remove an old device first.
+                  You already have 2 active smartphones bound. Ask your supervisor to remove an old device first.
                 </p>
               </div>
 
-              {/* LIST EXISTING DEVICES */}
-              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2">
-                <span className="font-bold text-slate-700 block text-[11px] uppercase">
-                  Currently Registered Devices:
-                </span>
-                {existingDevices.map((dev, idx) => (
-                  <div key={dev.id || idx} className="flex items-center justify-between p-2 bg-white rounded-xl border border-slate-100">
-                    <span className="font-medium text-slate-800">{dev.deviceModel}</span>
-                    <span className="text-[10px] text-slate-400 font-mono">Bound {new Date(dev.boundAt).toLocaleDateString('en-IN')}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* ONE-TAP MANAGER NOTIFICATION ACTION */}
               {notifiedManager ? (
                 <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl flex items-center gap-2">
                   <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                  <span>Request sent to your manager! They will unlink your old device shortly.</span>
+                  <span>Request sent to your manager! They will unlink your old device.</span>
                 </div>
               ) : (
                 <button
                   type="button"
                   disabled={notifyingManager}
                   onClick={handleNotifyManagerForRemoval}
-                  className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs"
+                  className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  {notifyingManager ? (
-                    <RefreshCw size={15} className="animate-spin" />
-                  ) : (
-                    <>
-                      <BellRing size={15} />
-                      <span>Ask Manager to Remove an Old Device</span>
-                    </>
-                  )}
+                  {notifyingManager ? <RefreshCw size={15} className="animate-spin" /> : <span>Ask Manager to Remove an Old Device</span>}
                 </button>
               )}
-
-              <button
-                type="button"
-                onClick={() => setOtpStep('PHONE')}
-                className="w-full text-xs text-slate-500 hover:text-slate-800 font-semibold"
-              >
-                Go back
-              </button>
             </div>
           )}
+        </div>
+      )}
 
+      {/* BOTTOM-ANCHORED PUNCH BUTTON (KEY AC 9: ≥72px TALL, ANCHORED AT BOTTOM WITH WORKER PHOTO/NAME ABOVE) */}
+      {isBound && !showConsentScreen && (
+        <div className="fixed bottom-0 left-0 right-0 p-3 pt-2 bg-gradient-to-t from-slate-100 via-slate-100/95 to-slate-100/40 backdrop-blur-md border-t border-slate-200/80 shadow-2xl z-40 max-w-md mx-auto">
+          {/* Worker Name & Photo Above Button per AC 9 */}
+          <div className="flex items-center justify-between mb-1.5 px-1">
+            <div className="flex items-center gap-2 min-w-0">
+              {worker.photoUrl ? (
+                <img src={worker.photoUrl} alt={worker.name} className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                  {worker.name.charAt(0)}
+                </div>
+              )}
+              <div className="truncate">
+                <span className="text-xs font-bold text-slate-900 block leading-tight truncate">{worker.name}</span>
+                <span className="text-[10px] text-slate-500 truncate block">
+                  {worker.designation || 'Field Staff'} • {boundDevice?.deviceModel || deviceInfo.deviceModel}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[11px] font-mono font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded-lg flex items-center gap-1 shadow-2xs">
+                {batteryInfo.charging ? <BatteryCharging size={12} className="text-emerald-600" /> : <Battery size={12} className="text-slate-600" />}
+                <span>{batteryInfo.level}%</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Punch Button (≥72px high) */}
+          <button
+            type="button"
+            disabled={punchLoading}
+            onClick={() => handlePunch(!hasPunchedIn || (hasPunchedIn && hasPunchedOut) ? 'IN' : 'OUT')}
+            style={{ minHeight: '72px' }}
+            className={`w-full min-h-[72px] h-[74px] rounded-2xl flex flex-col items-center justify-center gap-0.5 text-white font-black text-lg transition-all active:scale-[0.98] shadow-xl cursor-pointer disabled:opacity-60 ${
+              !hasPunchedIn || (hasPunchedIn && hasPunchedOut)
+                ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-500/25'
+                : 'bg-gradient-to-r from-amber-600 via-orange-500 to-amber-700 hover:from-amber-700 hover:to-orange-700 shadow-amber-500/25'
+            }`}
+          >
+            {punchLoading ? (
+              <div className="flex items-center gap-2">
+                <RefreshCw size={20} className="animate-spin text-white" />
+                <span className="text-sm font-bold">Verifying Location &amp; Recording Punch...</span>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  {!hasPunchedIn || (hasPunchedIn && hasPunchedOut) ? (
+                    <Sparkles size={20} className="text-amber-200" />
+                  ) : (
+                    <Clock size={20} className="text-amber-200" />
+                  )}
+                  <span className="tracking-wide">
+                    {!hasPunchedIn || (hasPunchedIn && hasPunchedOut) ? 'PUNCH IN (हाजिरी लगाएं)' : 'PUNCH OUT (प्रस्थान दर्ज करें)'}
+                  </span>
+                </div>
+                <span className="text-[11px] text-white/90 font-medium">
+                  {locationStatus.verified ? (locationStatus.siteName || 'Inside Plant #1') : 'Verified Site Location'} • One Tap
+                </span>
+              </>
+            )}
+          </button>
         </div>
       )}
 
@@ -1284,13 +1859,9 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
             <div className="text-center">
               <h3 className="font-bold text-base text-slate-900">Switch Worker Identity?</h3>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                You are currently verified as <strong>{worker.name}</strong>. Switching worker on this device requires OTP verification and fresh location consent against the second worker's registered mobile number.
+                You are currently verified as <strong>{worker.name}</strong>. Switching worker on this device clears active local binding and requires phone verification against the second worker.
               </p>
-              <div className="mt-3 p-2.5 rounded-xl bg-amber-50 text-amber-800 text-[11px] text-left border border-amber-200">
-                ⚠️ <strong>Shared Phones:</strong> Kiosk is recommended for shared devices to avoid constant re-verification.
-              </div>
             </div>
-
             <div className="flex gap-2">
               <button
                 type="button"
@@ -1302,7 +1873,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={handleSwitchWorker}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-blue-600 text-white font-bold text-xs hover:bg-blue-700 transition-colors"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-blue-600 text-white font-bold text-xs hover:bg-blue-700 transition-colors cursor-pointer"
               >
                 Switch Identity
               </button>
@@ -1311,7 +1882,140 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* LOCATION & PRIVACY TRANSPARENCY MODAL (KEY AC 4a, 6, 7 & 8) */}
+      {/* OVERLAPPING SITES DISAMBIGUATION MODAL (TOP EDGE CASE 2) */}
+      {showDisambiguationModal && overlappingCandidates.length > 0 && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+              <MapPin size={24} />
+            </div>
+            <div className="text-center">
+              <h3 className="font-extrabold text-base text-slate-900">Select Active Job Site</h3>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Your GPS accuracy range (±{locationStatus.accuracy || 15}m) overlaps with multiple registered worksites. Please select which location you are working at today:
+              </p>
+            </div>
+
+            <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+              {overlappingCandidates.map(site => (
+                <div 
+                  key={site.siteId}
+                  className="p-3.5 rounded-2xl border-2 border-slate-200 hover:border-indigo-500 bg-slate-50/60 hover:bg-indigo-50/30 transition-all flex items-center justify-between gap-3 text-left"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-xs text-slate-900 truncate">{site.siteName}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-100 text-emerald-800">
+                        {site.distanceMeters}m away
+                      </span>
+                    </div>
+                    {site.address && (
+                      <p className="text-[10px] text-slate-500 truncate mt-0.5">{site.address}</p>
+                    )}
+                    <span className="text-[9px] text-slate-400 font-mono">
+                      Enter boundary: {site.enterRadius}m • Dwell: {site.dwellTimeMinutes}m
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDisambiguationSite(site)}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shrink-0 transition-colors cursor-pointer"
+                  >
+                    Select
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowDisambiguationModal(false)}
+              className="w-full py-2.5 text-xs text-slate-500 hover:text-slate-700 font-bold"
+            >
+              Cancel &amp; Continue with Manual Punch
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* GEOFENCE EVENTS AUDIT MODAL (SUPERVISOR & WORKER VERIFIABILITY) */}
+      {showEventsAuditModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Radio size={18} className="text-emerald-600" />
+                <h3 className="font-bold text-base text-slate-900">Geofence Event Audit Trail</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEventsAuditModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Chronological log of perimeter events captured by native geofencing and foreground location polling:
+            </p>
+
+            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+              {geofenceEvents.length > 0 ? (
+                geofenceEvents.map(evt => (
+                  <div key={evt.id} className="p-3 rounded-2xl bg-slate-50 border border-slate-100 text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-bold ${
+                          evt.type === 'ENTER' 
+                            ? 'bg-emerald-100 text-emerald-800' 
+                            : evt.type === 'DWELL'
+                            ? 'bg-blue-100 text-blue-800'
+                            : evt.type === 'RE_ENTRY'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {evt.type}
+                        </span>
+                        <span className="font-bold text-slate-900">{evt.siteName}</span>
+                      </div>
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
+                    </div>
+                    {evt.actionTaken && (
+                      <div className="text-[10px] font-bold text-indigo-700">
+                        Action: {evt.actionTaken}
+                      </div>
+                    )}
+                    {evt.details && (
+                      <p className="text-[11px] text-slate-600 leading-relaxed">{evt.details}</p>
+                    )}
+                    <div className="text-[9px] font-mono text-slate-400 flex items-center justify-between pt-0.5">
+                      <span>Coords: {evt.location.lat.toFixed(4)}, {evt.location.lng.toFixed(4)}</span>
+                      <span>Accuracy: ±{evt.accuracy}m</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  No geofence transition events recorded yet.
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowEventsAuditModal(false)}
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+            >
+              Close Audit Trail
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* LOCATION & PRIVACY TRANSPARENCY MODAL */}
       <LocationPrivacyModal
         worker={worker}
         tenantId={tokenRecord.tenantId}

@@ -157,6 +157,10 @@ export interface Branch {
   id: string;
   name: string;
   location?: { lat: number; lng: number; radius: number; address?: string };
+  autoPunchEnabled?: boolean;
+  dwellTimeMinutes?: number; // default 2 minutes
+  enterRadius?: number; // meters (e.g. 100m)
+  exitRadius?: number; // meters (e.g. 115m hysteresis buffer)
 }
 
 export interface EwaConfig {
@@ -200,6 +204,12 @@ export interface OrgSettings {
   holidayPayMultiplier?: number; 
   leavePolicy?: LeavePolicy;
   ewaConfig?: EwaConfig;
+  geofencePolicy?: 'WARN' | 'BLOCK'; // 'warn only' vs 'block' config
+  maxGpsAccuracyMeters?: number; // default 50m
+  allowLowAccuracy?: boolean; // allow low accuracy punch with flag
+  autoPunchEnabled?: boolean;
+  breadcrumbsEnabled?: boolean;
+  whatsappConfig?: WhatsAppBridgeConfig;
 }
 
 export interface Punch {
@@ -210,6 +220,28 @@ export interface Punch {
   isOutOfGeofence?: boolean;
   syncStatus?: SyncStatus;
   offlineTimestamp?: string;
+  punchId?: string; // Idempotent client-generated ID
+  accuracy?: number; // GPS accuracy in meters
+  accuracyLow?: boolean;
+  mockLocationFlag?: boolean;
+  rootedJailbrokenFlag?: boolean;
+  batteryLevel?: number;
+  batteryCharging?: boolean;
+  selfieUrl?: string;
+  livenessVerified?: boolean;
+  selfieVerificationStatus?: 'VERIFIED' | 'VERIFICATION_PENDING' | 'FAILED';
+  siteName?: string;
+  deviceTimestamp?: string;
+  serverTimestamp?: string;
+  deviceBindingId?: string;
+  geofenceViolation?: boolean;
+  // Geofence Auto-Punch & WhatsApp Channel Extensions
+  method?: 'MANUAL_SELFIE' | 'AUTO_PUNCH' | 'SUPERVISOR' | 'KIOSK' | 'WHATSAPP';
+  channel?: 'APP' | 'WHATSAPP' | 'KIOSK' | 'AUTO_PUNCH';
+  isAutoPunch?: boolean;
+  isProvisional?: boolean;
+  undoExpiresAt?: string;
+  trustScore?: number;
 }
 
 export interface WageConfig {
@@ -341,6 +373,8 @@ export interface AttendanceRecord {
   calculatedHours?: AttendanceCalculations;
   syncStatus?: SyncStatus;
   offlineTimestamp?: string;
+  channel?: 'APP' | 'WHATSAPP' | 'KIOSK' | 'AUTO_PUNCH';
+  auditTrail?: AttendanceAuditTrailEntry[];
 }
 
 export interface DailyWageRecord {
@@ -841,16 +875,60 @@ export interface DeviceBindingOtpState {
   lastRequestTime: number;
 }
 
+export interface FieldPunchPayload {
+  punchId: string; // Idempotent client-generated ID
+  tenantId: string;
+  workerId: string;
+  deviceFingerprint: string;
+  deviceBindingId?: string;
+  deviceModel: string;
+  punchType: 'IN' | 'OUT';
+  deviceTimestamp: string;
+  gps: {
+    lat: number;
+    lng: number;
+    accuracy: number;
+    address?: string;
+  };
+  selfieUrl?: string;
+  livenessVerified?: boolean;
+  selfieVerificationStatus?: 'VERIFIED' | 'VERIFICATION_PENDING' | 'FAILED';
+  selfieUnavailableRetries?: number;
+  mockLocationFlag: boolean;
+  rootedJailbrokenFlag: boolean;
+  batteryLevel?: number;
+  batteryCharging?: boolean;
+  token?: string;
+  recentDwellTimestamp?: number;
+  bypassAccuracyWarning?: boolean;
+  isOffline?: boolean;
+}
+
 export interface BoundDevicePunchResult {
   success: boolean;
   error?: string;
-  errorCode?: 'WORKER_INACTIVE' | 'DEVICE_UNREGISTERED' | 'DEVICE_LIMIT_REACHED' | 'OTP_REQUIRED' | 'RATE_LIMITED';
+  errorCode?: 
+    | 'WORKER_INACTIVE' 
+    | 'DEVICE_UNREGISTERED' 
+    | 'DEVICE_LIMIT_REACHED' 
+    | 'OTP_REQUIRED' 
+    | 'RATE_LIMITED'
+    | 'MOCK_LOCATION_BLOCKED'
+    | 'GEOFENCE_BLOCKED'
+    | 'ACCURACY_TOO_LOW';
   record?: AttendanceRecord;
   punchType?: 'IN' | 'OUT';
   punchTime?: string;
   boundDevice?: BoundDevice;
   requiresOtp?: boolean;
   canNotifyManager?: boolean;
+  isOfflineQueued?: boolean;
+  geofenceViolation?: boolean;
+  accuracyLow?: boolean;
+  siteName?: string;
+  serverTimestamp?: string;
+  deviceTimestamp?: string;
+  tokenRenewedUntil?: string;
 }
 
 export interface DpdpSubjectAccessReport {
@@ -940,4 +1018,155 @@ export interface LocationDeletionRequest {
   resolvedAt?: string;
   notes?: string;
 }
+
+// ==========================================
+// GEOFENCE AUTO-PUNCH & TRANSITION EVENTS
+// ==========================================
+
+export type GeofenceTransitionType = 'ENTER' | 'DWELL' | 'EXIT' | 'RE_ENTRY';
+
+export interface GeofenceEvent {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName?: string;
+  siteId: string;
+  siteName: string;
+  type: GeofenceTransitionType;
+  timestamp: string;
+  location: { lat: number; lng: number };
+  accuracy: number;
+  shiftId?: string;
+  actionTaken?: 'AUTO_PUNCH_TRIGGERED' | 'DISCARDED_MANUAL_PUNCH_EXISTS' | 'DISCARDED_UNBOUND' | 'DISCARDED_NO_CONSENT' | 'RE_ENTRY_LOGGED';
+  details?: string;
+}
+
+export interface AutoPunchSession {
+  id: string;
+  punchId: string;
+  workerId: string;
+  workerName: string;
+  tenantId: string;
+  siteId: string;
+  siteName: string;
+  punchType: 'IN' | 'OUT';
+  triggeredAt: string;
+  undoExpiresAt: string; // 5 min ISO
+  status: 'PENDING_UNDO' | 'FINALIZED' | 'UNDONE';
+  recordId: string;
+  location: { lat: number; lng: number };
+  accuracy: number;
+  mockFlag: boolean;
+  deviceBindingId: string;
+  isOffline: boolean;
+  trustScore: number;
+}
+
+export interface SiteDistanceInfo {
+  siteId: string;
+  siteName: string;
+  distanceMeters: number;
+  radius: number;
+  enterRadius: number;
+  exitRadius: number;
+  isInsideEnter: boolean;
+  isInsideExit: boolean;
+  address?: string;
+  autoPunchEnabled: boolean;
+  dwellTimeMinutes: number;
+}
+
+export interface DisambiguationChoice {
+  selectedSiteId: string;
+  selectedSiteName: string;
+  workerId: string;
+  timestamp: string;
+}
+
+// ==========================================
+// E11: WHATSAPP ATTENDANCE & BOT BRIDGE
+// ==========================================
+
+export interface AttendanceAuditTrailEntry {
+  id?: string;
+  channel: 'APP' | 'WHATSAPP' | 'KIOSK' | 'AUTO_PUNCH';
+  source: string;
+  timestamp: string;
+  ipOrPhone?: string;
+  action: 'PUNCH_IN' | 'PUNCH_OUT' | 'DUPLICATE_SUPPRESSED' | 'ANOMALY_FLAGGED' | 'OPT_OUT' | 'OPT_IN';
+  notes?: string;
+}
+
+export interface WhatsAppBridgeConfig {
+  enabled: boolean;
+  wabaPhoneNumberId?: string;
+  displayPhoneNumber?: string; // e.g., +91 98200 12345
+  webhookVerifyToken?: string;
+  defaultLanguage: WorkerLanguage;
+  enableProactiveNotifications: boolean;
+  enableShiftReminders: boolean;
+  enableAdvanceApprovals: boolean;
+  enablePayslipReady: boolean;
+  enableMissingPunchOut: boolean;
+  requireSelfieForPunch: boolean;
+  requireLocationForPunch: boolean;
+  rateLimitPerHour?: number; // default 10
+}
+
+export interface WhatsAppMessage {
+  id: string;
+  tenantId: string;
+  workerId?: string;
+  workerName?: string;
+  fromPhone: string;
+  direction: 'INBOUND' | 'OUTBOUND';
+  content: string;
+  timestamp: string;
+  type: 'TEXT' | 'LOCATION' | 'IMAGE' | 'TEMPLATE' | 'INTERACTIVE_MENU';
+  status?: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+  location?: { lat: number; lng: number; address?: string };
+  mediaUrl?: string;
+  commandRecognized?: string;
+  scopedLinkUrl?: string;
+  channel: 'WHATSAPP';
+  isAnomaly?: boolean;
+  anomalyReason?: string;
+}
+
+export interface WhatsAppOptOutRecord {
+  phone: string;
+  optedOutAt: string;
+  channel: 'WHATSAPP';
+  scope: 'NON_ESSENTIAL'; // punch commands remain allowed
+}
+
+export interface WhatsAppRateLimitRecord {
+  workerId: string;
+  phone: string;
+  timestamps: number[];
+}
+
+export interface WhatsAppSharedPhoneBinding {
+  phone: string;
+  boundWorkerId: string;
+  boundWorkerName: string;
+  tenantId: string;
+  boundAt: string;
+  status: 'BOUND' | 'REJECTED_SHARED';
+}
+
+export type WhatsAppCommandKey = 
+  | 'PUNCH_IN' 
+  | 'PUNCH_OUT' 
+  | 'PAYSLIP' 
+  | 'SCHEDULE' 
+  | 'ATTENDANCE' 
+  | 'BALANCE_ADVANCE' 
+  | 'LEAVE' 
+  | 'OPT_OUT_STOP' 
+  | 'OPT_IN_START' 
+  | 'HELP_MENU'
+  | 'UNKNOWN';
+
+
 

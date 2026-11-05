@@ -3,7 +3,7 @@ import {
   Home, Users, CalendarCheck, IndianRupee, Menu, Bell, X, Zap, 
   ChevronRight, Building2, Shield, LogOut, Camera, MoreHorizontal,
   CheckCircle2, AlertTriangle, ArrowRight, Sparkles, ExternalLink, Search, BookOpen,
-  Sun, ShieldCheck
+  Sun, ShieldCheck, MessageSquare
 } from 'lucide-react';
 import { ScreenName, AppNotification } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,6 +12,7 @@ import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { SetupGuideModal } from './SetupGuideModal';
 import { A11yAuditModal } from './A11yAuditModal';
+import { WhatsAppChatSimulator } from './WhatsAppChatSimulator';
 import { dbService } from '../services/db';
 
 const FREE_TRIAL_DAYS = 7; 
@@ -55,6 +56,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isGuideOpen, setGuideOpen] = useState(false);
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
+  const [isWhatsAppSimulatorOpen, setWhatsAppSimulatorOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
@@ -330,6 +332,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   </button>
                 )}
 
+                {/* WhatsApp Bot Channel (E11) Simulator Launcher */}
+                {!isSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setWhatsAppSimulatorOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                    title="WhatsApp Attendance & Notification Bot Simulator (E11)"
+                  >
+                    <MessageSquare size={14} className="text-emerald-600 shrink-0" />
+                    <span className="hidden sm:inline">WhatsApp Bot</span>
+                    <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  </button>
+                )}
+
                 {/* Quick Kiosk Launch button (if tenant enabled) */}
                 {!isSuperAdmin && !isReseller && limits?.kioskEnabled !== false && (
                   <button
@@ -483,6 +499,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
       <A11yAuditModal
         isOpen={isA11yModalOpen}
         onClose={() => setA11yModalOpen(false)}
+      />
+
+      {/* WhatsApp Attendance & Notification Bot Simulator (E11) */}
+      <WhatsAppChatSimulator
+        isOpen={isWhatsAppSimulatorOpen}
+        onClose={() => setWhatsAppSimulatorOpen(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
       />
     </div>
   );

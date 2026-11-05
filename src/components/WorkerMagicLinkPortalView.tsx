@@ -4,7 +4,7 @@ import {
   ShieldCheck, Download, Calendar, Clock, AlertTriangle, 
   CheckCircle2, XCircle, ChevronRight, User, Building, 
   MapPin, Phone, IndianRupee, Printer, Smartphone, X, 
-  Info, AlertCircle, RefreshCw, Lock
+  Info, AlertCircle, RefreshCw, Lock, Send
 } from 'lucide-react';
 import { WorkerAccessToken, Worker, MonthlyPayroll, AttendanceRecord, ShiftConfig, OrgSettings } from '../types/index';
 import { magicLinkService } from '../services/magicLinkService';
@@ -35,6 +35,8 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   const [showPwaPrompt, setShowPwaPrompt] = useState<boolean>(true);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [isRevokedGracefully, setIsRevokedGracefully] = useState<boolean>(false);
+  const [sendingRenewal, setSendingRenewal] = useState<boolean>(false);
+  const [renewalSent, setRenewalSent] = useState<boolean>(false);
 
   const payslipRef = useRef<HTMLDivElement>(null);
 
@@ -249,6 +251,22 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
     );
   }
 
+  // One-tap notification to manager when link expired (Key AC 7)
+  const handleAskManagerForNewLink = async () => {
+    setSendingRenewal(true);
+    try {
+      const tenantId = tokenRecord?.tenantId || 'demo-tenant-id';
+      const workerId = tokenRecord?.workerId || worker?.id || 'unknown-worker';
+      const workerName = tokenRecord?.workerName || worker?.name || 'Field Worker';
+      await magicLinkService.requestNewLinkNotification(workerId, tenantId, workerName);
+      setRenewalSent(true);
+    } catch (e) {
+      console.warn('Renewal request error:', e);
+    } finally {
+      setSendingRenewal(false);
+    }
+  };
+
   // Render Error / Expired View
   if (error || !tokenRecord) {
     return (
@@ -261,15 +279,36 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
           <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
             {error || 'This magic link has expired or reached its maximum validity window.'}
           </p>
-          <div className="mt-6 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs text-slate-500 text-left space-y-1">
+
+          <div className="mt-5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs text-slate-500 text-left space-y-1">
             <p className="font-semibold text-slate-700">🔒 Security Notice:</p>
-            <p>Magic links are time-limited (24h–7d) to protect your personal earnings and attendance data.</p>
-            <p className="font-medium text-blue-700 mt-1">Please ask your factory manager to generate a fresh link.</p>
+            <p>Magic links are time-limited to protect worker earnings and punch data.</p>
           </div>
+
+          {/* ONE-TAP MANAGER RENEWAL NOTIFICATION (KEY AC 7) */}
+          <div className="mt-4">
+            {renewalSent ? (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center justify-center gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600" />
+                <span>Request sent to manager's E3 Inbox!</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={sendingRenewal}
+                onClick={handleAskManagerForNewLink}
+                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                {sendingRenewal ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
+                <span>Ask your manager for a new one</span>
+              </button>
+            )}
+          </div>
+
           {onExitToLogin && (
             <button
               onClick={onExitToLogin}
-              className="mt-6 w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-semibold text-xs transition-colors"
+              className="mt-3 w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-colors"
             >
               Go to Manager Login
             </button>

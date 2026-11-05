@@ -12,7 +12,9 @@ export type FeatureFlagKey =
   | 'REGULATE_PUNCH'
   | 'BULK_IMPORT'
   | 'MULTI_BRANCH'
-  | 'AUDIT_EXPORT';
+  | 'AUDIT_EXPORT'
+  | 'GEOFENCE_AUTO_PUNCH'
+  | 'WHATSAPP_BRIDGE';
 
 export type FeatureCategory = 'CORE' | 'ATTENDANCE' | 'PAYROLL' | 'ENTERPRISE' | 'AI_AND_ANALYTICS';
 
@@ -73,6 +75,15 @@ export const ALL_FEATURE_FLAGS: FeatureFlagDefinition[] = [
     isSensitiveGated: true,
   },
   {
+    key: 'GEOFENCE_AUTO_PUNCH',
+    label: 'Geofence Auto-Punch (Arrival/Exit)',
+    description: 'Background geofencing client clocks in workers upon arrival after configurable dwell and auto-clocks out on exit.',
+    category: 'ATTENDANCE',
+    globalDefault: false,
+    minRecommendedTier: 'PRO',
+    isSensitiveGated: true,
+  },
+  {
     key: 'LIVENESS_DETECTION',
     label: 'Face Anti-Spoofing Liveness',
     description: 'Active 3D blink/smile detection to prevent photographic or screen punch spoofing.',
@@ -126,6 +137,15 @@ export const ALL_FEATURE_FLAGS: FeatureFlagDefinition[] = [
     minRecommendedTier: 'ENTERPRISE',
     isSensitiveGated: true,
   },
+  {
+    key: 'WHATSAPP_BRIDGE',
+    label: 'WhatsApp Attendance & Bot Bridge',
+    description: 'WhatsApp Business API conversational bot for one-tap punches, payslip requests, schedules, and proactive shift notifications.',
+    category: 'ATTENDANCE',
+    globalDefault: true,
+    minRecommendedTier: 'STARTER',
+    isSensitiveGated: true,
+  },
 ];
 
 // Level 2: Default Plan-Level Overrides Matrix
@@ -136,12 +156,14 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     WHITE_LABEL: false,
     KIOSK_MODE: false,
     GEOFENCING: false,
+    GEOFENCE_AUTO_PUNCH: false,
     LIVENESS_DETECTION: false,
     DIGITAL_ID_CARDS: false,
     REGULATE_PUNCH: false,
     BULK_IMPORT: false,
     MULTI_BRANCH: false,
     AUDIT_EXPORT: false,
+    WHATSAPP_BRIDGE: false,
   },
   TRIAL: {
     ADVANCED_PAYROLL: true,
@@ -149,12 +171,14 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     WHITE_LABEL: true,
     KIOSK_MODE: true,
     GEOFENCING: true,
+    GEOFENCE_AUTO_PUNCH: true,
     LIVENESS_DETECTION: true,
     DIGITAL_ID_CARDS: true,
     REGULATE_PUNCH: true,
     BULK_IMPORT: true,
     MULTI_BRANCH: true,
     AUDIT_EXPORT: true,
+    WHATSAPP_BRIDGE: true,
   },
   STARTER: {
     ADVANCED_PAYROLL: false,
@@ -162,12 +186,14 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     WHITE_LABEL: false,
     KIOSK_MODE: true,
     GEOFENCING: true,
+    GEOFENCE_AUTO_PUNCH: false,
     LIVENESS_DETECTION: false,
     DIGITAL_ID_CARDS: true,
     REGULATE_PUNCH: true,
     BULK_IMPORT: false,
     MULTI_BRANCH: false,
     AUDIT_EXPORT: false,
+    WHATSAPP_BRIDGE: true,
   },
   PRO: {
     ADVANCED_PAYROLL: true,
@@ -175,12 +201,14 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     WHITE_LABEL: true,
     KIOSK_MODE: true,
     GEOFENCING: true,
+    GEOFENCE_AUTO_PUNCH: true,
     LIVENESS_DETECTION: true,
     DIGITAL_ID_CARDS: true,
     REGULATE_PUNCH: true,
     BULK_IMPORT: true,
     MULTI_BRANCH: true,
     AUDIT_EXPORT: false,
+    WHATSAPP_BRIDGE: true,
   },
   ENTERPRISE: {
     ADVANCED_PAYROLL: true,
@@ -188,12 +216,14 @@ export const DEFAULT_PLAN_FEATURE_FLAGS: Record<SubscriptionTier, Record<Feature
     WHITE_LABEL: true,
     KIOSK_MODE: true,
     GEOFENCING: true,
+    GEOFENCE_AUTO_PUNCH: true,
     LIVENESS_DETECTION: true,
     DIGITAL_ID_CARDS: true,
     REGULATE_PUNCH: true,
     BULK_IMPORT: true,
     MULTI_BRANCH: true,
     AUDIT_EXPORT: true,
+    WHATSAPP_BRIDGE: true,
   },
 };
 

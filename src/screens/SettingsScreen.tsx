@@ -4,13 +4,15 @@ import {
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
   CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
-  IndianRupee
+  IndianRupee, MessageSquare
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
-import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName } from '../types/index';
+import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig } from '../types/index';
+import { whatsappService } from '../services/whatsappService';
+import { WhatsAppChatSimulator } from '../components/WhatsAppChatSimulator';
 import { SetupGuideModal } from '../components/SetupGuideModal';
 import { A11yAuditModal } from '../components/A11yAuditModal';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
@@ -24,8 +26,12 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
   const { toast } = useToast();
   const { isFieldMode, toggleFieldMode, setFieldMode } = useTheme();
   
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA'>('GENERAL');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA' | 'WHATSAPP'>('GENERAL');
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
+  const [isWhatsAppSimulatorOpen, setWhatsAppSimulatorOpen] = useState(false);
+  const [waConfig, setWaConfig] = useState<WhatsAppBridgeConfig>(() => 
+    whatsappService.getWhatsAppConfig(profile?.tenantId || 'demo-tenant-id')
+  );
   const [showGuide, setShowGuide] = useState(false);
   const [showSetupAssistant, setShowSetupAssistant] = useState(true);
   
@@ -75,6 +81,8 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
            setSettings(data);
            setInitialSettings(data);
         }).finally(() => setLoading(false));
+
+        setWaConfig(whatsappService.getWhatsAppConfig(profile.tenantId));
 
         dbService.getKioskTerminals(profile.tenantId)
           .then(setTerminals)
@@ -234,6 +242,14 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
   const updateBranch = (id: string, name: string) => {
     if (!settings) return;
     setSettings({ ...settings, branches: settings.branches?.map(b => b.id === id ? { ...b, name } : b) });
+  };
+
+  const updateBranchDetails = (id: string, updates: Partial<Branch>) => {
+    if (!settings) return;
+    setSettings({
+      ...settings,
+      branches: settings.branches?.map(b => b.id === id ? { ...b, ...updates } : b)
+    });
   };
 
   const removeBranch = (id: string) => {
@@ -478,6 +494,9 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
         await dbService.saveOrgSettings(profile.tenantId, settings);
         setInitialSettings(settings); 
       }
+      if (profile.tenantId && waConfig) {
+        await whatsappService.saveWhatsAppConfig(profile.tenantId, waConfig);
+      }
       if (JSON.stringify(orgProfile) !== JSON.stringify(initialOrgProfile)) {
         const userId = profile.uid; 
         if (userId && profile.tenantId !== 'demo-tenant-id' && !userId.startsWith('demo-')) {
@@ -642,7 +661,8 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
           { id: 'BRANCHES', label: 'Locations & Geofence', icon: GitBranch },
           { id: 'DEPARTMENTS', label: 'Departments', icon: Layers },
           { id: 'TERMINALS', label: 'Kiosk Terminals', icon: ScanFace },
-          { id: 'EWA', label: 'Earned Wage Access', icon: IndianRupee }
+          { id: 'EWA', label: 'Earned Wage Access', icon: IndianRupee },
+          { id: 'WHATSAPP', label: 'WhatsApp Bridge (E11)', icon: MessageSquare }
         ].map(tab => (
           <button 
             key={tab.id}
@@ -1654,7 +1674,7 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
                           </div>
                           
                           {branch.location ? (
-                              <div className="bg-white p-4 rounded-xl border border-slate-100 flex flex-col space-y-2">
+                              <div className="bg-white p-4 rounded-xl border border-slate-100 flex flex-col space-y-3">
                                   <div className="flex items-start text-sm text-slate-700">
                                      <MapPin size={16} className="text-green-500 mr-2 mt-0.5 shrink-0"/>
                                      <span className="font-medium leading-tight">{branch.location.address || "Address not found"}</span>
@@ -1662,8 +1682,81 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
                                   <div className="text-[10px] text-slate-500 font-mono ml-6">
                                       Lat: {branch.location.lat.toFixed(6)}, Lng: {branch.location.lng.toFixed(6)}
                                   </div>
-                                  <div className="text-xs font-bold text-indigo-600 ml-6 mt-1 bg-indigo-50 inline-block px-2 py-1 rounded w-max">
-                                      Enforcement Radius: {branch.location.radius} meters
+                                  <div className="flex flex-wrap items-center gap-2 ml-6">
+                                    <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                                        Base Radius: {branch.location.radius} meters
+                                    </span>
+                                    <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${branch.autoPunchEnabled ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-600'}`}>
+                                        Auto-Punch: {branch.autoPunchEnabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                  </div>
+
+                                  {/* Geofence Auto-Punch Configuration (E16-S3 & Key AC 1) */}
+                                  <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/70 p-3 rounded-xl space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <div>
+                                        <h5 className="text-xs font-bold text-slate-800">Geofence Auto-Punch (Arrival &amp; Exit)</h5>
+                                        <p className="text-[10px] text-slate-500">Automatically clocks workers in upon arrival after continuous dwell time.</p>
+                                      </div>
+                                      <label className="relative inline-flex items-center cursor-pointer">
+                                        <input 
+                                          type="checkbox" 
+                                          className="sr-only peer"
+                                          checked={branch.autoPunchEnabled || false}
+                                          onChange={(e) => updateBranchDetails(branch.id, { autoPunchEnabled: e.target.checked })}
+                                        />
+                                        <div className="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                                      </label>
+                                    </div>
+
+                                    {branch.autoPunchEnabled && (
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+                                        <div>
+                                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                                            Dwell Time (Minutes)
+                                          </label>
+                                          <input 
+                                            type="number" 
+                                            min={1} 
+                                            max={15} 
+                                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            value={branch.dwellTimeMinutes ?? 2}
+                                            onChange={(e) => updateBranchDetails(branch.id, { dwellTimeMinutes: Math.max(1, parseInt(e.target.value) || 2) })}
+                                          />
+                                          <span className="text-[9px] text-slate-400 mt-0.5 block">Default: 2 min inside site</span>
+                                        </div>
+
+                                        <div>
+                                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                                            Enter Radius (Meters)
+                                          </label>
+                                          <input 
+                                            type="number" 
+                                            min={20} 
+                                            max={1000} 
+                                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            value={branch.enterRadius ?? (branch.location.radius || 100)}
+                                            onChange={(e) => updateBranchDetails(branch.id, { enterRadius: Math.max(20, parseInt(e.target.value) || 100) })}
+                                          />
+                                          <span className="text-[9px] text-slate-400 mt-0.5 block">Boundary to clock IN</span>
+                                        </div>
+
+                                        <div>
+                                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                                            Exit Radius (Hysteresis)
+                                          </label>
+                                          <input 
+                                            type="number" 
+                                            min={30} 
+                                            max={1200} 
+                                            className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                            value={branch.exitRadius ?? Math.round((branch.enterRadius || branch.location.radius || 100) * 1.15)}
+                                            onChange={(e) => updateBranchDetails(branch.id, { exitRadius: Math.max(30, parseInt(e.target.value) || 115) })}
+                                          />
+                                          <span className="text-[9px] text-emerald-600 font-semibold mt-0.5 block">Enter ≠ Exit prevents jitter</span>
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                               </div>
                           ) : (
@@ -2287,6 +2380,215 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
           </div>
         </div>
       )}
+
+      {/* ======================= WHATSAPP BRIDGE TAB (E11) ======================= */}
+      {activeTab === 'WHATSAPP' && (
+        <div className="animate-in fade-in duration-300 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Conversational Attendance</span>
+                <span className="px-2 py-0.5 text-[10px] font-black bg-emerald-100 text-emerald-800 rounded-full border border-emerald-300 uppercase">
+                  Story E11-S1 Live
+                </span>
+              </div>
+              <h2 className="text-lg font-black text-slate-800 mt-0.5">WhatsApp Business API & Bot Bridge</h2>
+              <p className="text-xs text-slate-500">
+                Clock in/out, view payslips (72h short links), shifts, and send proactive notifications directly via WhatsApp.
+              </p>
+            </div>
+            
+            <button
+              type="button"
+              onClick={() => setWhatsAppSimulatorOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all active:scale-95 cursor-pointer shrink-0"
+            >
+              <MessageSquare size={16} />
+              <span>Launch WhatsApp Chat Simulator</span>
+            </button>
+          </div>
+
+          {/* Master Channel Toggle Card */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">WhatsApp Business API Bridge Status</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  When enabled, registered workers can send "IN", "OUT", "payslip", "schedule", "attendance", "balance" in English, Hindi, or Gujarati.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={waConfig.enabled}
+                  onChange={e => setWaConfig({ ...waConfig, enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            {waConfig.enabled && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 pt-6 border-t border-slate-100">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">Display Phone Number (WABA)</label>
+                  <input
+                    type="text"
+                    value={waConfig.displayPhoneNumber || '+91 98200 12345'}
+                    onChange={e => setWaConfig({ ...waConfig, displayPhoneNumber: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs font-mono"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Number shared with frontline workers</span>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">WABA Phone Number ID</label>
+                  <input
+                    type="text"
+                    value={waConfig.wabaPhoneNumberId || 'waba_prod_919820012345'}
+                    onChange={e => setWaConfig({ ...waConfig, wabaPhoneNumberId: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs font-mono"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Meta Business Manager ID</span>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">Webhook Verify Token</label>
+                  <input
+                    type="text"
+                    value={waConfig.webhookVerifyToken || 'wfpro_waba_verify_sec_99'}
+                    onChange={e => setWaConfig({ ...waConfig, webhookVerifyToken: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs font-mono"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Secret token for inbound webhook verification</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Languages & Rate Limiting Card */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs">
+            <h3 className="text-sm font-bold text-slate-800 mb-1">Language & Anti-Abuse Rate Limiting</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Local language support for WhatsApp templates and worker-initiated queries.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">Default Outbound Bot Language</label>
+                <select
+                  value={waConfig.defaultLanguage || 'hi'}
+                  onChange={e => setWaConfig({ ...waConfig, defaultLanguage: e.target.value as any })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                >
+                  <option value="hi">हिंदी (Hindi) — Standard Factory Default</option>
+                  <option value="en">English (Bilingual)</option>
+                  <option value="gu">ગુજરાતી (Gujarati) — Western Industrial Corridor</option>
+                </select>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Workers can always text in English, Hindi, or Gujarati; the bot recognises all three automatically.
+                </span>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">Worker Command Rate Limit (per hour)</label>
+                <input
+                  type="number"
+                  min={3}
+                  max={60}
+                  value={waConfig.rateLimitPerHour || 10}
+                  onChange={e => setWaConfig({ ...waConfig, rateLimitPerHour: parseInt(e.target.value) || 10 })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs font-mono"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Standard rule: 10 commands/worker/hour. Prevents spam and bot looping.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Proactive Notification Templates (HSM) Card */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Proactive Automated Notifications (HSM Templates)</h3>
+                <p className="text-xs text-slate-500">
+                  Workers can opt-out by texting STOP without losing the ability to punch.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/70 flex items-start justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 block">Shift Reminders</span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Sends shift start reminder 30 mins before shift with prompt to reply "IN".
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={waConfig.enableShiftReminders}
+                  onChange={e => setWaConfig({ ...waConfig, enableShiftReminders: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 shrink-0 mt-1"
+                />
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/70 flex items-start justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 block">Approval Outcomes</span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Notifies workers when advance (kharchi) or leave requests are approved/rejected.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={waConfig.enableAdvanceApprovals}
+                  onChange={e => setWaConfig({ ...waConfig, enableAdvanceApprovals: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 shrink-0 mt-1"
+                />
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/70 flex items-start justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 block">Payroll-Ready Payslips</span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Sends 72-hour scoped short token link once monthly payroll is finalized.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={waConfig.enablePayslipReady}
+                  onChange={e => setWaConfig({ ...waConfig, enablePayslipReady: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 shrink-0 mt-1"
+                />
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/70 flex items-start justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 block">Missing Punch-Out Warning</span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Prompts worker to clock out if shift concluded without an exit punch.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={waConfig.enableMissingPunchOut}
+                  onChange={e => setWaConfig({ ...waConfig, enableMissingPunchOut: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 shrink-0 mt-1"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp Attendance & Notification Bot Simulator (E11) */}
+      <WhatsAppChatSimulator
+        isOpen={isWhatsAppSimulatorOpen}
+        onClose={() => setWhatsAppSimulatorOpen(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+      />
 
       {/* Interactive Factory Setup & Flow Guide Modal */}
       <SetupGuideModal
