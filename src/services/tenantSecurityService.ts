@@ -15,7 +15,14 @@ export class TenantSecurityError extends Error {
 
 export interface SecurityAlert {
   id: string;
-  type: 'UNAUTHORIZED_RESELLER_PROBE' | 'CROSS_TENANT_ACCESS_ATTEMPT' | 'SOFT_DELETE_TAMPER' | 'PARAM_SPOOF_BLOCKED';
+  type: 
+    | 'UNAUTHORIZED_RESELLER_PROBE' 
+    | 'CROSS_TENANT_ACCESS_ATTEMPT' 
+    | 'SOFT_DELETE_TAMPER' 
+    | 'PARAM_SPOOF_BLOCKED'
+    | 'DEVICE_INTEGRITY_VIOLATION'
+    | 'EMULATOR_BLOCKED'
+    | 'ATTESTATION_OUTAGE_EVENT';
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM';
   message: string;
   actorId: string;

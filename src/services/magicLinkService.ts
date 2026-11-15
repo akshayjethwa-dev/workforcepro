@@ -10,7 +10,9 @@ import {
   DeviceBindingOtpState,
   BoundDevicePunchResult,
   AttendanceRecord,
-  FieldPunchPayload
+  FieldPunchPayload,
+  DeviceAttestationPlatform,
+  DeviceIntegrityVerdict
 } from '../types/index';
 import { tenantSecurityService } from './tenantSecurityService';
 import { dbService } from './db';
@@ -18,6 +20,7 @@ import { entitlementService } from './entitlementService';
 import { inboxService } from './inboxService';
 import { geoUtils } from '../utils/geo';
 import { syncService } from './syncService';
+import { deviceAttestationService } from './deviceAttestationService';
 
 const STORAGE_KEY = 'workforce_magic_tokens';
 const BOUND_DEVICES_KEY = 'workforce_bound_devices';
@@ -365,6 +368,7 @@ export const magicLinkService = {
     isFlagged?: boolean;
     isProvisional?: boolean;
     distinctDeviceCount?: number;
+    isAttestationOutageBypass?: boolean;
   }> => {
     if (!token || typeof token !== 'string') {
       return { isValid: false, error: 'Invalid or missing magic link token.' };
@@ -498,6 +502,10 @@ export const magicLinkService = {
       }
     }
 
+    // Attestation Outage Fail-Open Evaluation for Low-Risk Actions (Key AC 4)
+    const isAttestationOutageBypass = (record.scope === 'PAYSLIP' || record.scope === 'SCHEDULE') && 
+      deviceAttestationService.isOutageSimulated();
+
     tokens[index] = record;
     saveStoredTokens(tokens);
 
@@ -505,7 +513,8 @@ export const magicLinkService = {
       isValid: true,
       tokenRecord: record,
       isFlagged,
-      distinctDeviceCount: distinctDevices.size
+      distinctDeviceCount: distinctDevices.size,
+      isAttestationOutageBypass
     };
   },
 
@@ -1134,6 +1143,18 @@ export const magicLinkService = {
     recentDwellTimestamp?: number;
     bypassAccuracyWarning?: boolean;
     isOffline?: boolean;
+    // Device Integrity Attestation Fields
+    integrityToken?: string;
+    attestationPlatform?: DeviceAttestationPlatform;
+    integrityVerdict?: DeviceIntegrityVerdict;
+    supervisorOverride?: {
+      approvedBy: string;
+      supervisorName: string;
+      reason: string;
+      approvedAt: string;
+      overrideCode: string;
+    };
+    attestationRetryCount?: number;
   }): Promise<BoundDevicePunchResult> => {
     const serverNow = new Date();
     const serverTimestamp = serverNow.toISOString();
@@ -1210,6 +1231,33 @@ export const magicLinkService = {
         success: false,
         errorCode: 'DEVICE_UNREGISTERED',
         error: 'Your device was unregistered by your manager'
+      };
+    }
+
+    // 2.5 Cryptographic Device Integrity Attestation (Google Play Integrity / Apple App Attest)
+    const attestationResult = await deviceAttestationService.verifyIntegrityToken({
+      tenantId: params.tenantId,
+      workerId: params.workerId,
+      workerName,
+      deviceModel: params.deviceModel,
+      deviceFingerprint: params.deviceFingerprint,
+      punchId: clientPunchId,
+      token: params.integrityToken,
+      integrityVerdict: params.integrityVerdict,
+      supervisorOverride: params.supervisorOverride,
+      actionType: 'PUNCH',
+      retryCount: params.attestationRetryCount,
+      orgSettings: await dbService.getOrgSettings(params.tenantId).catch(() => null)
+    });
+
+    if (!attestationResult.allowed) {
+      return {
+        success: false,
+        errorCode: attestationResult.errorCode || 'DEVICE_INTEGRITY_FAILED',
+        error: attestationResult.errorMessage || 'Device integrity attestation failed. Attendance rejected.',
+        integrityVerdict: attestationResult.verdict,
+        canRequestSupervisorOverride: attestationResult.canRequestSupervisorOverride,
+        requiresSupervisorOverride: attestationResult.requiresSupervisorOverride
       };
     }
 
@@ -1411,7 +1459,14 @@ export const magicLinkService = {
       selfieVerificationStatus: selfieStatus,
       siteName,
       deviceBindingId: match.id,
-      syncStatus: params.isOffline ? ('PENDING_LOCAL' as const) : ('SYNCED' as const)
+      syncStatus: params.isOffline ? ('PENDING_LOCAL' as const) : ('SYNCED' as const),
+      // Device Integrity Attestation Info
+      integrityLevel: attestationResult.verdict.integrityLevel,
+      integrityVerdict: attestationResult.verdict,
+      isSupervisorOverridden: attestationResult.isSupervisorOverridden,
+      isEmulatorBlocked: attestationResult.verdict.isEmulator,
+      isAttestationOutageBypass: attestationResult.isAttestationOutageBypass,
+      isOlderDeviceFallback: attestationResult.isOlderDeviceFallback
     };
 
     // 10. Record in Database or Offline Queue
@@ -1439,7 +1494,7 @@ export const magicLinkService = {
         }
       }
       todayRecord.punches = todayRecord.punches || [];
-      todayRecord.punches.push(punchEntry);
+      todayRecord.punches.push(punchEntry as any);
       todayRecord.timeline = todayRecord.timeline || [];
       todayRecord.timeline.push(punchEntry as any);
       finalRecord = todayRecord;
@@ -1461,7 +1516,7 @@ export const magicLinkService = {
         checkIn: params.punchType === 'IN' ? serverTimestamp : undefined,
         checkOut: params.punchType === 'OUT' ? serverTimestamp : undefined,
         hours: { gross: 0, net: 0, regular: 0, overtime: 0, breakTime: 0 },
-        punches: [punchEntry],
+        punches: [punchEntry as any],
         syncStatus: params.isOffline ? 'PENDING_LOCAL' : 'SYNCED',
         confidence: 0.99
       };
@@ -1490,7 +1545,8 @@ export const magicLinkService = {
         siteName,
         serverTimestamp,
         deviceTimestamp: params.deviceTimestamp,
-        tokenRenewedUntil
+        tokenRenewedUntil,
+        integrityVerdict: attestationResult.verdict
       };
 
       idempotencyCache[clientPunchId] = offlineResult;
@@ -1535,7 +1591,9 @@ export const magicLinkService = {
           geofenceViolation: isGeofenceViolation,
           accuracy: coords?.accuracy,
           selfieStatus,
-          renewedUntil: tokenRenewedUntil || match.expiresAt
+          renewedUntil: tokenRenewedUntil || match.expiresAt,
+          integrityLevel: attestationResult.verdict.integrityLevel,
+          isSupervisorOverridden: attestationResult.isSupervisorOverridden
         }
       });
     } catch {}
@@ -1552,7 +1610,8 @@ export const magicLinkService = {
       siteName,
       serverTimestamp,
       deviceTimestamp: params.deviceTimestamp,
-      tokenRenewedUntil
+      tokenRenewedUntil,
+      integrityVerdict: attestationResult.verdict
     };
 
     // Cache idempotent response

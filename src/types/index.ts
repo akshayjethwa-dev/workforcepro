@@ -214,6 +214,62 @@ export interface OrgSettings {
   breadcrumbsConfig?: BreadcrumbsConfig;
   safetyCheckInConfig?: SafetyCheckInConfig;
   whatsappConfig?: WhatsAppBridgeConfig;
+  deviceIntegrityConfig?: DeviceIntegrityConfig;
+}
+
+export type DeviceAttestationPlatform = 'PLAY_INTEGRITY' | 'APP_ATTEST' | 'WEB_ATTESTATION' | 'LEGACY_FINGERPRINT';
+
+export type DeviceIntegrityLevel = 
+  | 'STRONG_INTEGRITY' 
+  | 'DEVICE_INTEGRITY' 
+  | 'BASIC_INTEGRITY' 
+  | 'LOW_INTEGRITY' 
+  | 'FAILED' 
+  | 'EMULATOR_BLOCKED';
+
+export interface DeviceIntegrityConfig {
+  enabled: boolean;
+  enforceStrongIntegrity: boolean; // block emulators
+  enforceDeviceIntegrity: boolean; // block rooted / tampered devices
+  allowCustomRomSupervisorOverride: boolean; // allow supervisor override for LineageOS / custom ROMs
+  allowOlderDeviceFingerprintDegradation: boolean; // degrade gracefully for Android < API 23
+  outageFailClosedForPunch: boolean; // fail closed on Google/Apple Play Integrity outage
+  outageFailOpenForPayslip: boolean; // fail open for payslips
+  simulateOutage?: boolean;
+}
+
+export interface DeviceIntegrityVerdict {
+  platform: DeviceAttestationPlatform;
+  token: string;
+  evaluatedAt: string;
+  meetsStrongIntegrity: boolean;
+  meetsDeviceIntegrity: boolean;
+  meetsBasicIntegrity: boolean;
+  isEmulator: boolean;
+  isRootedOrJailbroken: boolean;
+  isCustomRom?: boolean;
+  deviceRecognitionVerdict?: 'LICENSED' | 'UNLICENSED' | 'UNKNOWN';
+  appLicensingVerdict?: 'LICENSED' | 'UNLICENSED' | 'UNEVALUATED';
+  integrityLevel: DeviceIntegrityLevel;
+  passed: boolean;
+  rejectionReason?: string;
+  errorCode?: 
+    | 'DEVICE_INTEGRITY_FAILED' 
+    | 'EMULATOR_DETECTED' 
+    | 'ATTESTATION_OUTAGE_BLOCKED' 
+    | 'UNVERIFIED_DEVICE_REQUIRES_OVERRIDE';
+  isSupervisorOverridden?: boolean;
+  supervisorOverride?: {
+    approvedBy: string;
+    supervisorName: string;
+    reason: string;
+    approvedAt: string;
+    overrideCode: string;
+  };
+  isAttestationOutageBypass?: boolean;
+  isOlderDeviceFallback?: boolean;
+  attestationLatencyMs?: number;
+  retryCount?: number;
 }
 
 export interface Punch {
@@ -246,6 +302,13 @@ export interface Punch {
   isProvisional?: boolean;
   undoExpiresAt?: string;
   trustScore?: number;
+  // Device Integrity Attestation Fields
+  integrityLevel?: DeviceIntegrityLevel;
+  integrityVerdict?: DeviceIntegrityVerdict;
+  isSupervisorOverridden?: boolean;
+  isEmulatorBlocked?: boolean;
+  isAttestationOutageBypass?: boolean;
+  isOlderDeviceFallback?: boolean;
 }
 
 export interface WageConfig {
@@ -908,6 +971,18 @@ export interface FieldPunchPayload {
   recentDwellTimestamp?: number;
   bypassAccuracyWarning?: boolean;
   isOffline?: boolean;
+  // Device Integrity Attestation Fields
+  integrityToken?: string;
+  attestationPlatform?: DeviceAttestationPlatform;
+  integrityVerdict?: DeviceIntegrityVerdict;
+  supervisorOverride?: {
+    approvedBy: string;
+    supervisorName: string;
+    reason: string;
+    approvedAt: string;
+    overrideCode: string;
+  };
+  attestationRetryCount?: number;
 }
 
 export interface BoundDevicePunchResult {
@@ -921,7 +996,11 @@ export interface BoundDevicePunchResult {
     | 'RATE_LIMITED'
     | 'MOCK_LOCATION_BLOCKED'
     | 'GEOFENCE_BLOCKED'
-    | 'ACCURACY_TOO_LOW';
+    | 'ACCURACY_TOO_LOW'
+    | 'DEVICE_INTEGRITY_FAILED'
+    | 'EMULATOR_DETECTED'
+    | 'ATTESTATION_OUTAGE_BLOCKED'
+    | 'UNVERIFIED_DEVICE_REQUIRES_OVERRIDE';
   record?: AttendanceRecord;
   punchType?: 'IN' | 'OUT';
   punchTime?: string;
@@ -935,6 +1014,9 @@ export interface BoundDevicePunchResult {
   serverTimestamp?: string;
   deviceTimestamp?: string;
   tokenRenewedUntil?: string;
+  integrityVerdict?: DeviceIntegrityVerdict;
+  canRequestSupervisorOverride?: boolean;
+  requiresSupervisorOverride?: boolean;
 }
 
 export interface DpdpSubjectAccessReport {

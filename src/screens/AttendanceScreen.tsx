@@ -1054,6 +1054,21 @@ export const AttendanceScreen: React.FC = () => {
                                                               <MapPin size={10} /> Out of Zone
                                                           </span>
                                                       )}
+                                                      {punch.isSupervisorOverridden && (
+                                                          <span className="text-[10px] text-indigo-600 font-sans flex items-center gap-0.5 bg-indigo-50 px-1 py-0.5 rounded font-bold" title="Supervisor In-Person Override (LineageOS / Custom ROM)">
+                                                              <ShieldCheck size={10} /> Override
+                                                          </span>
+                                                      )}
+                                                      {punch.integrityLevel === 'STRONG_INTEGRITY' && (
+                                                          <span className="text-[10px] text-emerald-600 font-sans flex items-center gap-0.5 bg-emerald-50 px-1 py-0.5 rounded" title="Play Integrity MEETS_STRONG_INTEGRITY Verified">
+                                                              <ShieldCheck size={10} /> Play Protect
+                                                          </span>
+                                                      )}
+                                                      {punch.integrityLevel === 'LOW_INTEGRITY' && (
+                                                          <span className="text-[10px] text-slate-500 font-sans flex items-center gap-0.5 bg-slate-100 px-1 py-0.5 rounded" title="Legacy Device Fingerprint Fallback">
+                                                              <ShieldCheck size={10} /> Basic API
+                                                          </span>
+                                                      )}
                                                   </div>
                                                   <span className="font-bold text-slate-800">
                                                       {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}

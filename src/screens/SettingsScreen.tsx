@@ -10,9 +10,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
-import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig, SafetyCheckInConfig } from '../types/index';
+import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig, SafetyCheckInConfig, DeviceIntegrityConfig } from '../types/index';
 import { whatsappService } from '../services/whatsappService';
 import { safetyCheckInService, DEFAULT_SAFETY_CONFIG } from '../services/safetyCheckInService';
+import { deviceAttestationService, DEFAULT_DEVICE_INTEGRITY_CONFIG } from '../services/deviceAttestationService';
 import { WhatsAppChatSimulator } from '../components/WhatsAppChatSimulator';
 import { SetupGuideModal } from '../components/SetupGuideModal';
 import { A11yAuditModal } from '../components/A11yAuditModal';
@@ -1925,6 +1926,240 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
                     <strong className="block font-bold">Worker Non-Insubordination Safeguard (Key AC 6):</strong>
                     <span>
                       Workers can decline safety check-ins at shift start without losing their punch ability. Declines are recorded for supervisor roster awareness and must <u>never</u> be treated as insubordination by the system or management.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* DEVICE INTEGRITY ATTESTATION (GOOGLE PLAY INTEGRITY & APPLE APP ATTEST) */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <h4 className="font-black text-slate-800 text-sm">Device Integrity Attestation (Play Integrity / App Attest)</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Cryptographic hardware verification to block emulators, rooted devices, and GPS mock spoofing before accepting punches.
+                  </p>
+                </div>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer"
+                  checked={settings?.deviceIntegrityConfig?.enabled ?? true}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setSettings(prev => {
+                      if (!prev) return prev;
+                      const currentCfg = prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG;
+                      const updated: DeviceIntegrityConfig = {
+                        ...currentCfg,
+                        enabled
+                      };
+                      if (profile?.tenantId) {
+                        deviceAttestationService.updateSettings(profile.tenantId, updated);
+                      }
+                      return {
+                        ...prev,
+                        deviceIntegrityConfig: updated
+                      };
+                    });
+                  }}
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
+            </div>
+
+            {(settings?.deviceIntegrityConfig?.enabled ?? true) && (
+              <div className="pt-3 border-t border-slate-100 space-y-4 text-xs">
+                {/* Rule Flags Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Emulator Blocking */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <ShieldAlert size={15} className="text-rose-600 shrink-0" />
+                        <span>Block Emulators at API Layer</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Requires <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">MEETS_STRONG_INTEGRITY</code>. Rejects QEMU, Android Studio, and virtual instances with HTTP 403.
+                      </p>
+                    </div>
+                    <input 
+                      type="checkbox"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 mt-0.5"
+                      checked={settings?.deviceIntegrityConfig?.enforceStrongIntegrity ?? true}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          const updated = {
+                            ...(prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG),
+                            enforceStrongIntegrity: val
+                          };
+                          if (profile?.tenantId) deviceAttestationService.updateSettings(profile.tenantId, updated);
+                          return { ...prev, deviceIntegrityConfig: updated };
+                        });
+                      }}
+                    />
+                  </div>
+
+                  {/* Device Integrity / Root Block */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <Lock size={15} className="text-amber-600 shrink-0" />
+                        <span>Block Rooted &amp; Tampered OS</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Requires <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">MEETS_DEVICE_INTEGRITY</code>. Blocks devices with unlocked bootloaders, Magisk, or tampered system binaries.
+                      </p>
+                    </div>
+                    <input 
+                      type="checkbox"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 mt-0.5"
+                      checked={settings?.deviceIntegrityConfig?.enforceDeviceIntegrity ?? true}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          const updated = {
+                            ...(prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG),
+                            enforceDeviceIntegrity: val
+                          };
+                          if (profile?.tenantId) deviceAttestationService.updateSettings(profile.tenantId, updated);
+                          return { ...prev, deviceIntegrityConfig: updated };
+                        });
+                      }}
+                    />
+                  </div>
+
+                  {/* Custom ROM Supervisor Override */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <User size={15} className="text-indigo-600 shrink-0" />
+                        <span>Custom ROM Supervisor Override</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Allows legitimate workers on LineageOS or vendor ROMs to punch after in-person field supervisor verification or E3 Inbox approval.
+                      </p>
+                    </div>
+                    <input 
+                      type="checkbox"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 mt-0.5"
+                      checked={settings?.deviceIntegrityConfig?.allowCustomRomSupervisorOverride ?? true}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          const updated = {
+                            ...(prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG),
+                            allowCustomRomSupervisorOverride: val
+                          };
+                          if (profile?.tenantId) deviceAttestationService.updateSettings(profile.tenantId, updated);
+                          return { ...prev, deviceIntegrityConfig: updated };
+                        });
+                      }}
+                    />
+                  </div>
+
+                  {/* Legacy Android Degradation */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <Clock size={15} className="text-slate-600 shrink-0" />
+                        <span>Legacy Android Graceful Degradation</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Gracefully degrades to hardware fingerprinting (<code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">LOW_INTEGRITY</code>) for devices older than Android 6.0 (API &lt; 23).
+                      </p>
+                    </div>
+                    <input 
+                      type="checkbox"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 mt-0.5"
+                      checked={settings?.deviceIntegrityConfig?.allowOlderDeviceFingerprintDegradation ?? true}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          const updated = {
+                            ...(prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG),
+                            allowOlderDeviceFingerprintDegradation: val
+                          };
+                          if (profile?.tenantId) deviceAttestationService.updateSettings(profile.tenantId, updated);
+                          return { ...prev, deviceIntegrityConfig: updated };
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Service Outage Fail-Closed / Fail-Open Policies */}
+                <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-indigo-950 flex items-center gap-1.5">
+                      <Shield size={16} className="text-indigo-600" />
+                      Attestation Service Outage Fail-Safe Rules (Key AC 4)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = deviceAttestationService.isOutageSimulated();
+                        deviceAttestationService.setOutageSimulated(!current);
+                        setSettings(prev => {
+                          if (!prev) return prev;
+                          return {
+                            ...prev,
+                            deviceIntegrityConfig: {
+                              ...(prev.deviceIntegrityConfig || DEFAULT_DEVICE_INTEGRITY_CONFIG),
+                              simulateOutage: !current
+                            }
+                          };
+                        });
+                        toast.info(!current ? 'Simulating Play Integrity 503 outage' : 'Restored normal attestation connectivity');
+                      }}
+                      className="px-2.5 py-1 text-[10px] font-bold rounded-lg border border-indigo-300 bg-white text-indigo-700 hover:bg-indigo-100 transition"
+                    >
+                      {deviceAttestationService.isOutageSimulated() ? '⚡ Stop Outage Simulation' : '⚡ Test Outage (HTTP 503)'}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-2.5 bg-white rounded-xl border border-indigo-100 flex items-start gap-2">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 mt-1.5"></span>
+                      <div>
+                        <strong className="text-slate-800 block text-[11px]">High-Risk: Attendance Punches</strong>
+                        <p className="text-[10px] text-slate-500">
+                          <strong>Fail Closed:</strong> Punches are rejected or queued in local E2 buffer with <code className="text-slate-700">UNVERIFIED_DEVICE</code> flag until Play Integrity recovers.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-xl border border-indigo-100 flex items-start gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 mt-1.5"></span>
+                      <div>
+                        <strong className="text-slate-800 block text-[11px]">Low-Risk: Viewing Payslips &amp; Profiles</strong>
+                        <p className="text-[10px] text-slate-500">
+                          <strong>Fail Open:</strong> Allowed with audit flag <code className="text-slate-700">ATTESTATION_OUTAGE_BYPASS</code> so workers can access pay information uninterrupted.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Statutory Security Alert Audit Notice */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-[11px] text-slate-600 flex items-start gap-2.5 leading-relaxed">
+                  <Info size={16} className="text-slate-500 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold text-slate-800">Security Audit Trail (Key AC 5):</strong>
+                    <span>
+                      All failed attestation attempts generate a high-severity <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">SecurityEvent</code>, logged into Super Admin audit logs and routed to managers via the E3 Action Inbox.
                     </span>
                   </div>
                 </div>

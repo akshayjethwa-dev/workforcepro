@@ -41,7 +41,9 @@ import { safetyCheckInService } from '../services/safetyCheckInService';
 import { OemBatteryOptimizationModal } from './OemBatteryOptimizationModal';
 import { LoneWorkerCheckInModal } from './LoneWorkerCheckInModal';
 import { PanicSosModal } from './PanicSosModal';
-import { SafetyCheckInRecord, PanicAlertRecord } from '../types/index';
+import { SafetyCheckInRecord, PanicAlertRecord, DeviceIntegrityVerdict } from '../types/index';
+import { deviceAttestationService, AttestationSimulationMode } from '../services/deviceAttestationService';
+import { DeviceIntegrityOverrideModal } from './DeviceIntegrityOverrideModal';
 
 interface Props {
   tokenRecord: WorkerAccessToken;
@@ -199,6 +201,19 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
     safetyCheckInService.getActivePanicForWorker(initialWorker.id)
   );
   const [safetyMinutesRemaining, setSafetyMinutesRemaining] = useState<number>(60);
+  
+  // Device Integrity Attestation State (Play Integrity / App Attest)
+  const [showIntegrityOverrideModal, setShowIntegrityOverrideModal] = useState<boolean>(false);
+  const [lastIntegrityVerdict, setLastIntegrityVerdict] = useState<DeviceIntegrityVerdict | null>(null);
+  const [attestationSimMode, setAttestationSimMode] = useState<AttestationSimulationMode>(() => deviceAttestationService.getSimulationMode());
+  const [activeSupervisorOverride, setActiveSupervisorOverride] = useState<{
+    approvedBy: string;
+    supervisorName: string;
+    reason: string;
+    approvedAt: string;
+    overrideCode: string;
+  } | null>(null);
+  const [lastAttemptedPunchType, setLastAttemptedPunchType] = useState<'IN' | 'OUT'>('IN');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1047,6 +1062,7 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
   // Master Verified Field Punch Action (Key AC 2, 3, 4, 5, 6, 9 & Top Edge Cases)
   const handlePunch = async (punchType: 'IN' | 'OUT') => {
     if (punchLoading) return; // Prevent double-tap race conditions
+    setLastAttemptedPunchType(punchType);
     setPunchLoading(true);
     setPunchFeedback(null);
 
@@ -1066,6 +1082,16 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
       accuracy: locationStatus.accuracy || 15,
       address: locationStatus.address
     } : undefined;
+
+    // Cryptographic Play Integrity / App Attest token handshake (with 3-attempt backoff)
+    const attestation = await deviceAttestationService.generateIntegrityToken({
+      punchId: idempotentPunchId,
+      tenantId: tokenRecord.tenantId,
+      workerId: worker.id,
+      deviceFingerprint: deviceInfo.deviceFingerprint,
+      actionType: 'PUNCH',
+      overrideMode: attestationSimMode
+    });
 
     const punchPayload: FieldPunchPayload = {
       punchId: idempotentPunchId,
@@ -1088,13 +1114,47 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
       token: tokenRecord.token,
       recentDwellTimestamp,
       bypassAccuracyWarning,
-      isOffline: isOffline || !navigator.onLine
+      isOffline: isOffline || !navigator.onLine,
+      // Play Integrity / App Attest token & override
+      integrityToken: attestation.token,
+      attestationPlatform: attestation.platform,
+      integrityVerdict: attestation.verdict as any,
+      supervisorOverride: activeSupervisorOverride || undefined,
+      attestationRetryCount: attestation.retryCount
     };
 
     try {
       const result = await magicLinkService.recordBoundDevicePunch(punchPayload);
 
       if (!result.success) {
+        if (result.errorCode === 'EMULATOR_DETECTED') {
+          setPunchFeedback({
+            type: 'ERROR',
+            message: result.error || 'Attendance from emulators or virtual machines is strictly blocked at the API layer.'
+          });
+          return;
+        }
+
+        if (result.errorCode === 'ATTESTATION_OUTAGE_BLOCKED') {
+          setPunchFeedback({
+            type: 'ERROR',
+            message: result.error || 'Google Play Integrity service is temporarily unreachable. Attendance blocked by fail-closed policy.'
+          });
+          return;
+        }
+
+        if (result.errorCode === 'DEVICE_INTEGRITY_FAILED') {
+          setLastIntegrityVerdict(result.integrityVerdict || null);
+          if (result.canRequestSupervisorOverride || result.requiresSupervisorOverride) {
+            setShowIntegrityOverrideModal(true);
+          }
+          setPunchFeedback({
+            type: 'ERROR',
+            message: result.error || 'Device integrity check failed (Custom ROM / Rooted OS). Supervisor verification required.'
+          });
+          return;
+        }
+
         if (result.errorCode === 'MOCK_LOCATION_BLOCKED') {
           setPunchFeedback({
             type: 'MOCK_BLOCKED',
@@ -1135,6 +1195,9 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         });
         return;
       }
+
+      // Clear supervisor override after successful use
+      setActiveSupervisorOverride(null);
 
       setTodayRecord(result.record || null);
       if (result.boundDevice) {
@@ -2103,6 +2166,82 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
                     📡 Toggle Offline Mode (AC 5)
                   </button>
                 </div>
+
+                {/* Device Integrity Attestation Simulation Section */}
+                <div className="pt-2 border-t border-slate-200">
+                  <p className="text-[10px] font-bold text-slate-700 flex items-center justify-between">
+                    <span>🛡️ Play Integrity / Attestation Test State:</span>
+                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">{attestationSimMode}</span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttestationSimMode('PASS_STRONG');
+                        deviceAttestationService.setSimulationMode('PASS_STRONG');
+                        deviceAttestationService.setOutageSimulated(false);
+                      }}
+                      className={`p-1.5 rounded-lg text-[9px] font-bold text-left transition ${
+                        attestationSimMode === 'PASS_STRONG' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-800 hover:bg-emerald-100'
+                      }`}
+                    >
+                      ✅ Play Integrity (Genuine Device)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttestationSimMode('CUSTOM_ROM_LINEAGE');
+                        deviceAttestationService.setSimulationMode('CUSTOM_ROM_LINEAGE');
+                        deviceAttestationService.setOutageSimulated(false);
+                      }}
+                      className={`p-1.5 rounded-lg text-[9px] font-bold text-left transition ${
+                        attestationSimMode === 'CUSTOM_ROM_LINEAGE' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-800 hover:bg-amber-100'
+                      }`}
+                    >
+                      ⚠️ Custom ROM LineageOS (Override Flow)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttestationSimMode('EMULATOR_QEMU');
+                        deviceAttestationService.setSimulationMode('EMULATOR_QEMU');
+                        deviceAttestationService.setOutageSimulated(false);
+                      }}
+                      className={`p-1.5 rounded-lg text-[9px] font-bold text-left transition ${
+                        attestationSimMode === 'EMULATOR_QEMU' ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-800 hover:bg-rose-100'
+                      }`}
+                    >
+                      🚫 Emulator QEMU (Block &amp; Security Alert)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttestationSimMode('OLDER_ANDROID_API21');
+                        deviceAttestationService.setSimulationMode('OLDER_ANDROID_API21');
+                        deviceAttestationService.setOutageSimulated(false);
+                      }}
+                      className={`p-1.5 rounded-lg text-[9px] font-bold text-left transition ${
+                        attestationSimMode === 'OLDER_ANDROID_API21' ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-800 hover:bg-purple-100'
+                      }`}
+                    >
+                      📱 Older Android API &lt; 23 (LOW_INTEGRITY)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = attestationSimMode === 'OUTAGE_503' ? 'REAL' : 'OUTAGE_503';
+                        setAttestationSimMode(next);
+                        deviceAttestationService.setSimulationMode(next);
+                        deviceAttestationService.setOutageSimulated(next === 'OUTAGE_503');
+                      }}
+                      className={`p-1.5 rounded-lg text-[9px] font-bold text-left transition col-span-2 ${
+                        attestationSimMode === 'OUTAGE_503' ? 'bg-red-700 text-white' : 'bg-slate-200 text-slate-800 hover:bg-red-100'
+                      }`}
+                    >
+                      ⚡ Toggle Play Integrity Service Outage (HTTP 503 Fail-Closed)
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -2618,6 +2757,25 @@ export const DeviceBoundPunchView: React.FC<Props> = ({
         workerPhone={worker.phone}
         siteId={activeShiftSession?.siteId}
         siteName={activeShiftSession?.siteName}
+      />
+
+      {/* DEVICE INTEGRITY SUPERVISOR OVERRIDE MODAL (CUSTOM ROM / LINEAGEOS) */}
+      <DeviceIntegrityOverrideModal
+        isOpen={showIntegrityOverrideModal}
+        onClose={() => setShowIntegrityOverrideModal(false)}
+        tenantId={tokenRecord.tenantId}
+        workerId={worker.id}
+        workerName={worker.name}
+        deviceModel={deviceInfo.deviceModel}
+        verdict={lastIntegrityVerdict}
+        onApplyOverride={async (overrideData) => {
+          setActiveSupervisorOverride(overrideData);
+          setShowIntegrityOverrideModal(false);
+          // Automatically retry punch with supervisor override attached
+          setTimeout(() => {
+            handlePunch(lastAttemptedPunchType);
+          }, 150);
+        }}
       />
 
       {/* PERSISTENT FLOATING EMERGENCY SOS QUICK BUTTON (LOCK SCREEN / WORKER ACCESS) */}
