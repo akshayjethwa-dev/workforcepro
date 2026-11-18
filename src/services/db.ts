@@ -679,6 +679,8 @@ export const dbService = {
         let plan = 'FREE';
         let overrides = {};
         let branding = {};
+        let cashfreeSubscription = null;
+        let billingCycleEndsAt: string | undefined;
         let deletedAt = data.deletedAt || null;
         if (data.tenantId) {
             const tenantDoc = await getDoc(doc(db, 'tenants', data.tenantId));
@@ -687,6 +689,8 @@ export const dbService = {
                 plan = tData.plan || 'FREE';
                 overrides = tData.overrides || {};
                 branding = tData.branding || {};
+                cashfreeSubscription = tData.cashfreeSubscription || null;
+                billingCycleEndsAt = tData.billingCycleEndsAt;
                 if (tData.deletedAt) deletedAt = tData.deletedAt;
             }
         }
@@ -701,7 +705,9 @@ export const dbService = {
           joinedAt: data.createdAt || new Date().toISOString(),
           plan: plan, 
           overrides: overrides,
-          branding: branding
+          branding: branding,
+          cashfreeSubscription,
+          billingCycleEndsAt
         };
       }));
       

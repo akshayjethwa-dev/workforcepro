@@ -44,7 +44,12 @@ import { WorkerMagicLinkPortalView } from './components/WorkerMagicLinkPortalVie
 export const RootNavigator: React.FC = () => {
   const { user, profile, loading, logout } = useAuth();
   const { isEntitled } = useEntitlements();
-  const [currentScreen, setCurrentScreen] = useState<ScreenName>('DASHBOARD');
+  const [currentScreen, setCurrentScreen] = useState<ScreenName>(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('order_id')) {
+      return 'BILLING';
+    }
+    return 'DASHBOARD';
+  });
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');

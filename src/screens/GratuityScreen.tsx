@@ -6,9 +6,12 @@ import {
   Building2,
   Calculator,
   CheckCircle2,
+  Clock,
   FileText,
   History,
   IndianRupee,
+  PauseCircle,
+  PlayCircle,
   Printer,
   RefreshCw,
   Search,
@@ -23,16 +26,26 @@ import { wageService } from '../services/wageService';
 import { magicLinkService } from '../services/magicLinkService';
 import {
   GRATUITY_STATUTORY_CEILING,
-  buildFnfSettlementPreview,
   calculateWorkerGratuity,
   getFnfSettlements,
   projectOrganizationGratuityLiability,
-  saveFnfSettlement,
-  updateFnfSettlementStatus,
 } from '../services/gratuityService';
+import {
+  approveFnfSettlement,
+  buildOffCycleFnfPayslip,
+  computeFnfSettlementStatement,
+  evaluateFnfDeadline,
+  getOffCycleFnfPayrolls,
+  placeLegalHold,
+  processOffCycleFnfPayout,
+  releaseLegalHold,
+  syncFnfBreachAlerts,
+  triggerAutomatedDraftFnf,
+} from '../services/fnfService';
 import {
   Advance,
   AttendanceRecord,
+  FnfLegalHoldCategory,
   FnfSettlementRecord,
   GratuityExitReason,
   MonthlyPayroll,
@@ -41,6 +54,8 @@ import {
   Worker,
 } from '../types/index';
 import { Payslip } from '../components/Payslip';
+import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
+import { FnfLegalHoldModal } from '../components/FnfLegalHoldModal';
 
 interface Props {
   onNavigate?: (screen: ScreenName) => void;
@@ -100,25 +115,37 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
   const [fnfNomineeName, setFnfNomineeName] = useState<string>('');
   const [fnfNomineeRelation, setFnfNomineeRelation] = useState<string>('Spouse');
   const [fnfLeaveDays, setFnfLeaveDays] = useState<string>('4');
+  const [fnfNoticeRequiredDays, setFnfNoticeRequiredDays] = useState<string>('30');
+  const [fnfNoticeServedDays, setFnfNoticeServedDays] = useState<string>('0');
+  const [fnfNoticeWaived, setFnfNoticeWaived] = useState<boolean>(false);
   const [fnfNotes, setFnfNotes] = useState<string>('');
   const [isSavingFnf, setIsSavingFnf] = useState<boolean>(false);
   const [fnfPayslipPreview, setFnfPayslipPreview] = useState<MonthlyPayroll | null>(null);
+  const [legalHoldTarget, setLegalHoldTarget] = useState<FnfSettlementRecord | null>(null);
+  const [offCyclePayrolls, setOffCyclePayrolls] = useState<MonthlyPayroll[]>([]);
+  const [includePenaltyOnPay, setIncludePenaltyOnPay] = useState<boolean>(true);
+  const [simulatedEvalDate, setSimulatedEvalDate] = useState<string>(todayIso());
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [wList, settings, att, adv, savedFnf] = await Promise.all([
+      const [wList, settings, att, adv, savedFnf, offCycleList] = await Promise.all([
         dbService.getWorkers(tenantId),
         dbService.getOrgSettings(tenantId),
         dbService.getAttendanceHistory(tenantId),
         dbService.getAdvances(tenantId),
         getFnfSettlements(tenantId),
+        getOffCycleFnfPayrolls(tenantId),
       ]);
+      const syncedFnf = await syncFnfBreachAlerts(tenantId, actorEmail, settings);
+      const effectiveFnf = syncedFnf.length > 0 ? syncedFnf : savedFnf;
+
       setWorkers(wList);
       setOrgSettings(settings);
       setAttendanceRecords(att);
       setAdvances(adv);
-      setFnfHistory(savedFnf);
+      setFnfHistory(effectiveFnf);
+      setOffCyclePayrolls(offCycleList);
 
       const preselectedId =
         typeof sessionStorage !== 'undefined'
@@ -129,15 +156,16 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
         sessionStorage.removeItem('gratuity_fnf_worker_id');
         const target = wList.find((w) => w.id === preselectedId);
         if (target) {
-          selectWorkerForFnf(target);
+          selectWorkerForFnf(target, effectiveFnf, settings);
           setActiveTab('FNF');
         }
       } else if (!fnfWorkerId && wList.length > 0) {
         const preferred =
+          wList.find((w) => effectiveFnf.some((r) => r.workerId === w.id && r.status !== 'SETTLED')) ||
           wList.find((w) => w.id === 'worker-6') ||
           wList.find((w) => w.status === 'ACTIVE') ||
           wList[0];
-        selectWorkerForFnf(preferred);
+        selectWorkerForFnf(preferred, effectiveFnf, settings);
       }
     } catch (err) {
       console.error('Failed to load gratuity workspace data:', err);
@@ -151,13 +179,30 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
     loadData();
   }, [tenantId]);
 
-  const selectWorkerForFnf = (w: Worker) => {
+  const selectWorkerForFnf = (
+    w: Worker,
+    fnfList: FnfSettlementRecord[] = fnfHistory,
+    settingsObj: OrgSettings | null = orgSettings
+  ) => {
     setFnfWorkerId(w.id);
-    setFnfExitDate(w.dateOfExit || todayIso());
-    setFnfExitReason(w.exitReason || 'RESIGNATION');
-    setFnfDeathOverride(Boolean(w.deathInService || w.exitReason === 'DEATH_IN_SERVICE'));
-    setFnfNomineeName(w.nomineeName || '');
-    setFnfNomineeRelation(w.nomineeRelation || 'Spouse');
+    const saved = fnfList.find((r) => r.workerId === w.id);
+    const reason = saved?.exitReason || w.exitReason || 'RESIGNATION';
+    setFnfExitDate(saved?.exitDate || w.dateOfExit || todayIso());
+    setFnfExitReason(reason);
+    setFnfDeathOverride(Boolean(saved?.deathInService || w.deathInService || reason === 'DEATH_IN_SERVICE'));
+    setFnfNomineeName(saved?.nomineeName || w.nomineeName || '');
+    setFnfNomineeRelation(saved?.nomineeRelation || w.nomineeRelation || 'Spouse');
+    setFnfLeaveDays(String(saved?.leaveEncashmentDays ?? w.leaveBalances?.pl ?? settingsObj?.leavePolicy?.pl ?? 0));
+    setFnfNoticeRequiredDays(
+      String(
+        saved?.noticePeriodRequiredDays ??
+          w.noticePeriodDays ??
+          (reason === 'RESIGNATION' ? (w.category === 'Permanent' ? 30 : 15) : 0)
+      )
+    );
+    setFnfNoticeServedDays(String(saved?.noticePeriodServedDays ?? 0));
+    setFnfNoticeWaived(Boolean(saved?.noticePayWaived));
+    setFnfNotes(saved?.notes || '');
   };
 
   const selectWorkerForCalculator = (workerId: string) => {
@@ -344,6 +389,16 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
     advances,
   ]);
 
+  const matchedSavedFnf = useMemo(
+    () =>
+      fnfHistory.find(
+        (r) => r.workerId === fnfWorkerId && r.exitDate === fnfExitDate
+      ) ||
+      fnfHistory.find((r) => r.workerId === fnfWorkerId) ||
+      null,
+    [fnfHistory, fnfWorkerId, fnfExitDate]
+  );
+
   const fnfPreview = useMemo(() => {
     if (!fnfSelectedWorker || !fnfExitDate) return null;
     const workerForFnf: Worker = {
@@ -354,7 +409,7 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
       nomineeName: fnfNomineeName || fnfSelectedWorker.nomineeName,
       nomineeRelation: fnfNomineeRelation || fnfSelectedWorker.nomineeRelation,
     };
-    return buildFnfSettlementPreview({
+    return computeFnfSettlementStatement({
       tenantId,
       worker: workerForFnf,
       exitDate: fnfExitDate,
@@ -363,11 +418,15 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
       nomineeName: fnfNomineeName || fnfSelectedWorker.nomineeName,
       nomineeRelation: fnfNomineeRelation || fnfSelectedWorker.nomineeRelation,
       leaveEncashmentDays: Number(fnfLeaveDays || 0),
+      noticePeriodRequiredDays: Number(fnfNoticeRequiredDays || 0),
+      noticePeriodServedDays: Number(fnfNoticeServedDays || 0),
+      noticePayWaived: fnfNoticeWaived,
       monthlyPayrollForExitMonth: fnfExitPayroll,
       attendanceRecords,
       advances,
-      orgSettings: orgSettings || undefined,
+      orgSettings,
       notes: fnfNotes,
+      existingRecord: matchedSavedFnf,
     });
   }, [
     fnfSelectedWorker,
@@ -378,31 +437,58 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
     fnfNomineeName,
     fnfNomineeRelation,
     fnfLeaveDays,
+    fnfNoticeRequiredDays,
+    fnfNoticeServedDays,
+    fnfNoticeWaived,
     fnfExitPayroll,
     attendanceRecords,
     advances,
     orgSettings,
     fnfNotes,
+    matchedSavedFnf,
   ]);
 
-  const handleSaveOrFinalizeFnf = async (finalizeExit: boolean) => {
+  const evalDateMs = useMemo(() => {
+    if (!simulatedEvalDate || simulatedEvalDate === todayIso()) return Date.now();
+    const [y, m, d] = simulatedEvalDate.split('-').map(Number);
+    return new Date(y, m - 1, d, 16, 0, 0).getTime();
+  }, [simulatedEvalDate]);
+
+  const fnfPreviewEval = useMemo(() => {
+    if (!fnfPreview) return null;
+    return evaluateFnfDeadline(fnfPreview, evalDateMs, orgSettings);
+  }, [fnfPreview, evalDateMs, orgSettings]);
+
+  const refreshFnfWorkspace = async () => {
+    const [refreshed, offList] = await Promise.all([
+      syncFnfBreachAlerts(tenantId, actorEmail, orgSettings),
+      getOffCycleFnfPayrolls(tenantId),
+    ]);
+    setFnfHistory(refreshed);
+    setOffCyclePayrolls(offList);
+  };
+
+  const handleSaveOrFinalizeFnf = async (approveImmediately: boolean) => {
     if (!fnfPreview || !fnfSelectedWorker) return;
     setIsSavingFnf(true);
     try {
-      const recordToSave: FnfSettlementRecord = {
-        ...fnfPreview,
-        status: finalizeExit ? 'APPROVED' : 'DRAFT',
-      };
-      await saveFnfSettlement(recordToSave, actorEmail);
+      const nextStatus: Worker['status'] =
+        fnfPreview.exitReason === 'RESIGNATION'
+          ? 'RESIGNED'
+          : fnfPreview.exitReason === 'TERMINATION'
+          ? 'TERMINATED'
+          : 'INACTIVE';
 
-      if (finalizeExit) {
+      // Always mark separated & revoke tokens if still active
+      if (fnfSelectedWorker.status === 'ACTIVE') {
         const exitUpdates: Partial<Worker> = {
           dateOfExit: fnfPreview.exitDate,
           exitReason: fnfPreview.exitReason,
           deathInService: fnfPreview.deathInService,
           nomineeName: fnfPreview.nomineeName,
           nomineeRelation: fnfPreview.nomineeRelation,
-          status: 'INACTIVE',
+          noticePeriodDays: fnfPreview.noticePeriodRequiredDays,
+          status: nextStatus,
           isActive: false,
         };
         await dbService.updateWorker(fnfSelectedWorker.id, exitUpdates);
@@ -417,60 +503,138 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
         );
       }
 
-      const refreshed = await getFnfSettlements(tenantId);
-      setFnfHistory(refreshed);
+      const savedDraft = await triggerAutomatedDraftFnf({
+        tenantId,
+        worker: { ...fnfSelectedWorker, status: nextStatus, isActive: false },
+        exitDate: fnfPreview.exitDate,
+        exitReason: fnfPreview.exitReason,
+        actorEmail,
+        deathInService: fnfPreview.deathInService,
+        nomineeName: fnfPreview.nomineeName,
+        nomineeRelation: fnfPreview.nomineeRelation,
+        leaveEncashmentDays: fnfPreview.leaveEncashmentDays,
+        noticePeriodRequiredDays: fnfPreview.noticePeriodRequiredDays,
+        noticePeriodServedDays: fnfPreview.noticePeriodServedDays,
+        noticePayWaived: fnfPreview.noticePayWaived,
+        attendanceRecords,
+        advances,
+        orgSettings,
+        notes: fnfPreview.notes,
+      });
+
+      if (approveImmediately && savedDraft.status === 'DRAFT') {
+        await approveFnfSettlement(tenantId, savedDraft.id, actorEmail);
+      }
+
+      await refreshFnfWorkspace();
       toast.success(
-        finalizeExit
-          ? `FnF Settlement approved for ${fnfSelectedWorker.name} (Gratuity ${formatInr(fnfPreview.gratuityPayable)}). Worker exited & access revoked.`
-          : `FnF Settlement draft saved for ${fnfSelectedWorker.name}.`
+        approveImmediately
+          ? `FnF Approved for ${fnfSelectedWorker.name}. Ready for Off-Cycle Payroll disbursement.`
+          : `Draft FnF generated for ${fnfSelectedWorker.name} (Sec 17(2) 2-working-day deadline active).`
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save FnF settlement:', err);
-      toast.error('Failed to save Full & Final settlement.');
+      toast.error(err?.message || 'Failed to save Full & Final settlement.');
     } finally {
       setIsSavingFnf(false);
     }
   };
 
-  const handleOpenFnfPayslip = () => {
-    if (!fnfPreview || !fnfSelectedWorker || !orgSettings) return;
-    const basePayroll =
-      fnfExitPayroll ||
-      wageService.generateMonthlyPayroll(
-        {
-          ...fnfSelectedWorker,
-          dateOfExit: fnfPreview.exitDate,
-          exitReason: fnfPreview.exitReason,
-          deathInService: fnfPreview.deathInService,
-          nomineeName: fnfPreview.nomineeName,
-          nomineeRelation: fnfPreview.nomineeRelation,
-        },
-        fnfPreview.exitDate.slice(0, 7),
+  const handlePlaceLegalHold = async (category: FnfLegalHoldCategory, reason: string) => {
+    if (!legalHoldTarget) return;
+    await placeLegalHold(tenantId, legalHoldTarget.id, category, reason, actorEmail, orgSettings);
+    await refreshFnfWorkspace();
+    toast.warning(`LEGAL_HOLD placed on ${legalHoldTarget.workerName}'s FnF. 2-day timer paused.`);
+  };
+
+  const handleReleaseLegalHold = async (rec: FnfSettlementRecord) => {
+    await releaseLegalHold(tenantId, rec.id, actorEmail, 'Property / exit clearance verified');
+    await refreshFnfWorkspace();
+    toast.success(`LEGAL_HOLD released for ${rec.workerName}. Deadline shifted forward by paused duration.`);
+  };
+
+  const handleProcessOffCyclePayout = async (
+    rec: FnfSettlementRecord,
+    scheduleTarget: 'WAGE_FNF' | 'GRATUITY' | 'BOTH'
+  ) => {
+    setIsSavingFnf(true);
+    try {
+      const processedIso =
+        simulatedEvalDate && simulatedEvalDate !== todayIso()
+          ? new Date(`${simulatedEvalDate}T16:00:00`).toISOString()
+          : new Date().toISOString();
+      const res = await processOffCycleFnfPayout({
+        tenantId,
+        fnfId: rec.id,
+        scheduleTarget,
+        actorEmail,
+        workers,
         attendanceRecords,
         advances,
-        orgSettings
+        orgSettings,
+        processedAtIso: processedIso,
+        includeInterestPenalty: includePenaltyOnPay,
+      });
+      await refreshFnfWorkspace();
+      setFnfPayslipPreview(res.offCyclePayroll);
+      toast.success(
+        `Off-Cycle FnF Paid for ${rec.workerName} (₹${res.offCyclePayroll.netPayable.toLocaleString('en-IN')}). Separate FnF Payslip generated.`
       );
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to process off-cycle FnF payout.');
+    } finally {
+      setIsSavingFnf(false);
+    }
+  };
 
-    const regularNet = Math.max(0, basePayroll.netPayable - (basePayroll.gratuitySettlement || 0));
-    const enrichedPayroll: MonthlyPayroll = {
-      ...basePayroll,
-      gratuitySettlement: fnfPreview.gratuityPayable,
-      netPayable: regularNet + fnfPreview.gratuityPayable + fnfPreview.leaveEncashmentAmount,
-      fnfSummary: {
-        isFnF: true,
-        exitDate: fnfPreview.exitDate,
-        exitReason: fnfPreview.exitReason,
-        deathInService: fnfPreview.deathInService,
-        gratuityPayable: fnfPreview.gratuityPayable,
-        roundedYears: fnfPreview.gratuityCalculation.effectiveYearsForFormula,
-        lastDrawnBasicPlusDa: fnfPreview.gratuityCalculation.lastDrawnBasicPlusDa,
-        nomineeName: fnfPreview.nomineeName,
-        nomineeRelation: fnfPreview.nomineeRelation,
-        ceilingApplied: fnfPreview.gratuityCalculation.ceilingApplied,
-        fnfRecordId: fnfPreview.id,
-      },
-    };
-    setFnfPayslipPreview(enrichedPayroll);
+  const handleOpenFnfPayslip = (
+    targetRec?: FnfSettlementRecord,
+    scheduleTarget: 'WAGE_FNF' | 'GRATUITY' | 'BOTH' = 'BOTH'
+  ) => {
+    const rec = targetRec || fnfPreview;
+    if (!rec) return;
+    const existingOffCycle = offCyclePayrolls.find(
+      (p) =>
+        p.fnfSummary?.fnfRecordId === rec.id &&
+        (scheduleTarget === 'BOTH' ||
+          (scheduleTarget === 'WAGE_FNF' && p.offCycleType === 'WAGE_FNF') ||
+          (scheduleTarget === 'GRATUITY' && p.offCycleType === 'GRATUITY_SETTLEMENT'))
+    );
+    if (existingOffCycle) {
+      setFnfPayslipPreview(existingOffCycle);
+      return;
+    }
+    const targetWorker = workers.find((w) => w.id === rec.workerId) || fnfSelectedWorker;
+    const basePayroll =
+      targetWorker && orgSettings
+        ? wageService.generateMonthlyPayroll(
+            {
+              ...targetWorker,
+              dateOfExit: rec.exitDate,
+              exitReason: rec.exitReason,
+              deathInService: rec.deathInService,
+              nomineeName: rec.nomineeName,
+              nomineeRelation: rec.nomineeRelation,
+            },
+            rec.exitDate.slice(0, 7),
+            attendanceRecords,
+            advances,
+            orgSettings
+          )
+        : fnfExitPayroll;
+
+    const previewSlip = buildOffCycleFnfPayslip({
+      record: rec,
+      scheduleTarget,
+      worker: targetWorker,
+      monthlyPayrollForExitMonth: basePayroll,
+      evaluationTimeMs: evalDateMs,
+      orgSettings,
+      includeInterestPenalty: includePenaltyOnPay,
+      isPaid: rec.status === 'SETTLED',
+      paidAtIso: rec.settledAt,
+    });
+    setFnfPayslipPreview(previewSlip);
   };
 
   return (
@@ -1135,22 +1299,22 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* TAB 3: FNF SETTLEMENT TRIGGER & HISTORY */}
+      {/* TAB 3: AUTOMATED FNF TRIGGER, DEADLINE TRACKER & OFF-CYCLE PAYROLL */}
       {activeTab === 'FNF' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* LEFT: FNF INPUT FORM */}
+            {/* LEFT: FNF INPUT & NOTICE RECOVERY FORM */}
             <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-4">
               <div className="border-b border-slate-100 pb-3">
-                <h2 className="text-sm font-bold text-slate-900">Full &amp; Final (FnF) Exit Trigger</h2>
+                <h2 className="text-sm font-bold text-slate-900">Automated FnF Trigger &amp; Recovery Parameters</h2>
                 <p className="text-[11px] text-slate-500">
-                  Calculates final month wages, leave encashment, gratuity settlement, and EWA/advance recoveries.
+                  Sec 17(2) Code on Wages (2 Working Days) · Gratuity Sec 7(3) (30 Days) · 12% p.a. Delay Interest
                 </p>
               </div>
 
               <div>
                 <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                  Exiting Employee
+                  Exiting / Separated Employee
                 </label>
                 <select
                   value={fnfWorkerId}
@@ -1182,7 +1346,7 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                    Exit Reason
+                    Separation Reason
                   </label>
                   <select
                     value={fnfExitReason}
@@ -1190,29 +1354,90 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
                       const val = e.target.value as GratuityExitReason;
                       setFnfExitReason(val);
                       if (val === 'DEATH_IN_SERVICE') setFnfDeathOverride(true);
+                      if (val === 'RESIGNATION') {
+                        setFnfNoticeRequiredDays(String(fnfSelectedWorker?.noticePeriodDays ?? 30));
+                      } else {
+                        setFnfNoticeRequiredDays('0');
+                        setFnfNoticeServedDays('0');
+                      }
                     }}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 outline-none focus:border-blue-600"
                   >
-                    <option value="RESIGNATION">Resignation</option>
+                    <option value="RESIGNATION">RESIGNED (Resignation)</option>
+                    <option value="TERMINATION">TERMINATED (Termination)</option>
                     <option value="RETIREMENT">Retirement</option>
                     <option value="END_OF_CONTRACT">End of Fixed-Term Contract</option>
-                    <option value="TERMINATION">Termination</option>
                     <option value="DEATH_IN_SERVICE">Death in Service (Nominee Override)</option>
                     <option value="PERMANENT_DISABLEMENT">Permanent Disablement</option>
                   </select>
                 </div>
               </div>
 
+              {/* Notice Period & Leave Encashment */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                  Leave Encashment &amp; Notice Pay Recovery
+                </div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                      Leave Days (PL)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={fnfLeaveDays}
+                      onChange={(e) => setFnfLeaveDays(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                      Notice Req. (Days)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={fnfNoticeRequiredDays}
+                      onChange={(e) => setFnfNoticeRequiredDays(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                      Notice Served
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={fnfNoticeServedDays}
+                      onChange={(e) => setFnfNoticeServedDays(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-900"
+                    />
+                  </div>
+                </div>
+                {Number(fnfNoticeRequiredDays || 0) > Number(fnfNoticeServedDays || 0) && (
+                  <label className="flex items-center justify-between text-xs font-semibold text-slate-800 cursor-pointer pt-1">
+                    <span>Waive Notice Pay Recovery ({fnfPreview?.noticeShortfallDays || 0}d shortfall)</span>
+                    <input
+                      type="checkbox"
+                      checked={fnfNoticeWaived}
+                      onChange={(e) => setFnfNoticeWaived(e.target.checked)}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                    Leave Encashment (Days)
+                    Payment / Eval Date (Test Timeline)
                   </label>
                   <input
-                    type="number"
-                    min={0}
-                    value={fnfLeaveDays}
-                    onChange={(e) => setFnfLeaveDays(e.target.value)}
+                    type="date"
+                    value={simulatedEvalDate}
+                    onChange={(e) => setSimulatedEvalDate(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono text-slate-900 outline-none focus:border-blue-600"
                   />
                 </div>
@@ -1275,71 +1500,135 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
               </div>
             </div>
 
-            {/* RIGHT: LIVE FNF SETTLEMENT STATEMENT */}
-            {fnfPreview && (
+            {/* RIGHT: LIVE FNF STATEMENT + SECTION 17(2) DEADLINE + SPLIT SCHEDULES */}
+            {fnfPreview && fnfPreviewEval && (
               <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between space-y-4">
                 <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">
-                        Full &amp; Final Statement — {fnfPreview.workerName}
-                      </h3>
-                      <p className="text-[11px] text-slate-500 font-mono">
-                        Exit: {fnfPreview.exitDate} · {fnfPreview.exitReason} · Service:{' '}
-                        {fnfPreview.gratuityCalculation.tenure.formattedTenure} (
-                        {fnfPreview.gratuityCalculation.effectiveYearsForFormula} yrs)
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Full &amp; Final Statement — {fnfPreview.workerName}
+                        </h3>
+                        <span
+                          className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${
+                            fnfPreview.status === 'SETTLED'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : fnfPreview.status === 'LEGAL_HOLD'
+                              ? 'bg-amber-100 text-amber-900'
+                              : fnfPreview.status === 'APPROVED'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {fnfPreview.status}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                        Exit: {fnfPreview.exitDate} · {fnfPreview.separationStatus || fnfPreview.exitReason} · Service:{' '}
+                        {fnfPreview.gratuityCalculation.tenure.formattedTenure}
                       </p>
+                      <div className="mt-2">
+                        <FnfDeadlineBadge record={fnfPreview} orgSettings={orgSettings} />
+                      </div>
                     </div>
                     <button
                       type="button"
-                      onClick={handleOpenFnfPayslip}
+                      onClick={() => handleOpenFnfPayslip(fnfPreview, 'BOTH')}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer"
                     >
                       <Printer size={14} />
-                      <span>Preview FnF Payslip</span>
+                      <span>Preview Separate FnF Payslip</span>
                     </button>
                   </div>
 
+                  {/* LEGAL HOLD ACTIVE CALLOUT */}
+                  {fnfPreview.legalHold?.active && (
+                    <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      <div className="text-amber-950">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <PauseCircle size={15} className="text-amber-700" />
+                          <span>LEGAL_HOLD Active ({fnfPreview.legalHold.category}) — Timer Paused</span>
+                        </div>
+                        <p className="text-[11px] text-amber-900 mt-0.5">{fnfPreview.legalHold.reason}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleReleaseLegalHold(fnfPreview)}
+                        className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-bold text-[11px] inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <PlayCircle size={13} />
+                        <span>Release Hold</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* BREACHED DEADLINE & 12% P.A. INTEREST PENALTY CALLOUT */}
+                  {fnfPreviewEval.isBreached && (
+                    <div className="mt-3 p-3.5 rounded-xl bg-rose-50 border-2 border-rose-300 text-xs text-rose-950 space-y-1.5">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="font-extrabold text-rose-800 flex items-center gap-1.5">
+                          <AlertTriangle size={16} className="text-rose-600" />
+                          <span>SECTION 17(2) DEADLINE BREACHED (+{fnfPreviewEval.overdueWholeDays} Day(s) Overdue)</span>
+                        </div>
+                        <span className="font-mono font-black text-rose-700">
+                          Cost of Delay (12% p.a.): ₹{fnfPreviewEval.accruedInterestPenalty.toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-rose-900 flex flex-wrap items-center justify-between gap-2 font-mono">
+                        <span>Daily Interest Burn: ₹{fnfPreviewEval.dailyInterestCost.toLocaleString('en-IN')}/day on ₹{fnfPreviewEval.principalForPenalty.toLocaleString('en-IN')}</span>
+                        <label className="inline-flex items-center gap-1.5 font-sans font-semibold cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={includePenaltyOnPay}
+                            onChange={(e) => setIncludePenaltyOnPay(e.target.checked)}
+                            className="w-3.5 h-3.5 accent-rose-600"
+                          />
+                          <span>Include 12% interest in Off-Cycle Payout</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ITEMIZED STATEMENT */}
                   <div className="mt-4 space-y-2 text-xs">
                     <div className="flex justify-between py-2 border-b border-slate-100">
-                      <span className="text-slate-600">
-                        Pending Prorated Salary ({fnfPreview.pendingSalaryDays} payable days)
-                      </span>
+                      <div>
+                        <span className="text-slate-700 font-medium block">
+                          Pending Prorated Salary ({fnfPreview.pendingSalaryDays} days)
+                        </span>
+                        {fnfPreview.pendingSalaryNote && (
+                          <span className="text-[10px] text-slate-400">{fnfPreview.pendingSalaryNote}</span>
+                        )}
+                      </div>
                       <span className="font-mono font-bold tabular-nums text-slate-900">
-                        {formatInr(fnfPreview.pendingWagesEarned)}
+                        +{formatInr(fnfPreview.pendingWagesEarned)}
                       </span>
                     </div>
 
                     <div className="flex justify-between py-2 border-b border-slate-100">
-                      <span className="text-slate-600">
+                      <span className="text-slate-700">
                         Earned Leave Encashment ({fnfPreview.leaveEncashmentDays} days @ Basic+DA/26)
                       </span>
                       <span className="font-mono font-bold tabular-nums text-slate-900">
-                        {formatInr(fnfPreview.leaveEncashmentAmount)}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between py-2.5 px-3 rounded-lg bg-emerald-50 border border-emerald-200">
-                      <div>
-                        <span className="font-bold text-emerald-950 block">
-                          Gratuity Settlement Payout
-                        </span>
-                        <span className="text-[11px] text-emerald-800 font-mono">
-                          {fnfPreview.gratuityCalculation.formulaText}
-                        </span>
-                        {!fnfPreview.gratuityCalculation.isEligible && (
-                          <span className="block text-[11px] text-amber-800 font-sans mt-0.5">
-                            {fnfPreview.gratuityCalculation.eligibilityNote}
-                          </span>
-                        )}
-                      </div>
-                      <span className="font-mono font-extrabold tabular-nums text-sm text-emerald-900 shrink-0 ml-3">
-                        +{formatInr(fnfPreview.gratuityPayable)}
+                        +{formatInr(fnfPreview.leaveEncashmentAmount)}
                       </span>
                     </div>
 
                     <div className="flex justify-between py-2 border-b border-slate-100 text-rose-700">
-                      <span>Advance &amp; EWA Recoveries</span>
+                      <div>
+                        <span className="font-semibold block">Notice Pay Recovery</span>
+                        <span className="text-[10px] text-rose-600 font-mono">
+                          {fnfPreview.noticeRecoveryFormula}
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold tabular-nums">
+                        -{formatInr(fnfPreview.noticePayRecovery || 0)}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between py-2 border-b border-slate-100 text-rose-700">
+                      <span>Advance / Loan / Kharchi &amp; EWA Recovery</span>
                       <span className="font-mono font-bold tabular-nums">
                         -{formatInr(fnfPreview.advanceAndEwaRecovery)}
                       </span>
@@ -1352,54 +1641,124 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
                       </span>
                     </div>
 
-                    <div className="flex justify-between items-center p-4 bg-slate-900 text-white rounded-xl mt-3">
-                      <div>
-                        <span className="text-[11px] uppercase tracking-wider text-slate-400 block">
-                          Net Full &amp; Final Payable
-                        </span>
-                        {fnfPreview.deathInService && fnfPreview.nomineeName && (
-                          <span className="text-[11px] text-rose-300">
-                            Beneficiary Nominee: {fnfPreview.nomineeName} ({fnfPreview.nomineeRelation || 'Nominee'})
-                          </span>
+                    {/* TWO SEPARATE STATUTORY PAYMENT SCHEDULES */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      <div className="p-3.5 rounded-xl bg-slate-900 text-white space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-mono text-blue-300">
+                          <span>SCHEDULE A · 2 WORKING DAYS</span>
+                          <span>Due {fnfPreviewEval.effectiveDeadlineLabel}</span>
+                        </div>
+                        <div className="text-xs font-bold text-slate-200">
+                          Wage &amp; Leave FnF (Sec 17(2))
+                        </div>
+                        <div className="text-xl font-black font-mono tabular-nums text-white">
+                          {formatInr(
+                            (fnfPreview.fnfWageNetPayable ?? 0) +
+                              (includePenaltyOnPay ? fnfPreviewEval.accruedInterestPenalty : 0)
+                          )}
+                        </div>
+                        {(fnfPreview.excessRecoveryCarryover || 0) > 0 && (
+                          <div className="text-[10px] text-amber-300 font-mono">
+                            Notice/Advance excess recoverable: ₹{(fnfPreview.excessRecoveryCarryover || 0).toLocaleString('en-IN')}
+                          </div>
                         )}
                       </div>
-                      <span className="text-2xl font-extrabold font-mono tabular-nums">
-                        {formatInr(fnfPreview.netFnfPayable)}
-                      </span>
+
+                      <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-mono text-emerald-700">
+                          <span>SCHEDULE B · 30 CALENDAR DAYS</span>
+                          <span>
+                            {fnfPreview.gratuityPayable > 0
+                              ? `Due ${fnfPreviewEval.gratuityDeadlineLabel}`
+                              : 'Not Applicable'}
+                          </span>
+                        </div>
+                        <div className="text-xs font-bold">
+                          Statutory Gratuity (Sec 7(3))
+                        </div>
+                        <div className="text-xl font-black font-mono tabular-nums text-emerald-800">
+                          {formatInr(fnfPreview.gratuityPayable)}
+                        </div>
+                        <div className="text-[10px] text-emerald-800 font-mono truncate" title={fnfPreview.gratuityCalculation.formulaText}>
+                          {fnfPreview.gratuityCalculation.isEligible
+                            ? fnfPreview.gratuityCalculation.formulaText
+                            : fnfPreview.gratuityCalculation.eligibilityNote}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2.5 pt-3 border-t border-slate-100">
+                {/* WORKFLOW ACTION BUTTONS */}
+                <div className="flex flex-wrap gap-2 pt-3 border-t border-slate-100">
                   <button
                     type="button"
                     disabled={isSavingFnf}
                     onClick={() => handleSaveOrFinalizeFnf(false)}
-                    className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                    className="py-2.5 px-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
                   >
-                    Save FnF Draft
+                    Save DRAFT FnF
                   </button>
-                  <button
-                    type="button"
-                    disabled={isSavingFnf}
-                    onClick={() => handleSaveOrFinalizeFnf(true)}
-                    className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <UserX size={15} />
-                    <span>{isSavingFnf ? 'Finalizing...' : 'Finalize Exit & Approve FnF'}</span>
-                  </button>
+
+                  {fnfPreview.status !== 'APPROVED' && fnfPreview.status !== 'SETTLED' && fnfPreview.status !== 'LEGAL_HOLD' && (
+                    <button
+                      type="button"
+                      disabled={isSavingFnf}
+                      onClick={() => handleSaveOrFinalizeFnf(true)}
+                      className="py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                    >
+                      Approve FnF
+                    </button>
+                  )}
+
+                  {fnfPreview.status !== 'SETTLED' && fnfPreview.status !== 'LEGAL_HOLD' && (
+                    <button
+                      type="button"
+                      onClick={() => setLegalHoldTarget(fnfPreview)}
+                      className="py-2.5 px-3.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <PauseCircle size={14} />
+                      <span>Place LEGAL_HOLD</span>
+                    </button>
+                  )}
+
+                  {matchedSavedFnf && matchedSavedFnf.status === 'APPROVED' && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isSavingFnf}
+                        onClick={() => handleProcessOffCyclePayout(matchedSavedFnf, 'WAGE_FNF')}
+                        className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <IndianRupee size={14} />
+                        <span>Pay Schedule A (Off-Cycle)</span>
+                      </button>
+                      {matchedSavedFnf.gratuityPayable > 0 &&
+                        matchedSavedFnf.paymentSchedules?.gratuity?.status !== 'PAID' && (
+                          <button
+                            type="button"
+                            disabled={isSavingFnf}
+                            onClick={() => handleProcessOffCyclePayout(matchedSavedFnf, 'GRATUITY')}
+                            className="py-2.5 px-4 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Award size={14} />
+                            <span>Pay Gratuity (30d Sched B)</span>
+                          </button>
+                        )}
+                    </>
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* SAVED FNF SETTLEMENTS LEDGER */}
+          {/* SAVED FNF SETTLEMENTS & SECTION 17(2) DEADLINE TRACKER LEDGER */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div className="flex items-center gap-2">
                 <History size={15} className="text-slate-600" />
                 <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                  FnF Settlement Records
+                  Active FnF Settlements &amp; Section 17(2) Deadline Ledger ({fnfHistory.length})
                 </h3>
               </div>
               {onNavigate && (
@@ -1408,69 +1767,156 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
                   onClick={() => onNavigate('PAYROLL')}
                   className="text-xs font-semibold text-blue-700 hover:text-blue-900 cursor-pointer"
                 >
-                  View in Monthly Payroll →
+                  Open Off-Cycle Payrolls →
                 </button>
               )}
             </div>
 
             {fnfHistory.length === 0 ? (
               <div className="p-8 text-center text-xs text-slate-500">
-                No Full &amp; Final settlements saved yet. Trigger an employee exit above to generate an FnF settlement record.
+                No Full &amp; Final settlements triggered yet. Mark an employee as RESIGNED / TERMINATED or generate a draft above.
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {fnfHistory.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">
-                        <span>{item.workerName}</span>
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-[10px]">
-                          {item.exitReason}
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${
-                            item.status === 'SETTLED'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : item.status === 'APPROVED'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          {item.status}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                        Exit: {item.exitDate} · Gratuity: {formatInr(item.gratuityPayable)} · Net FnF:{' '}
-                        <strong className="text-slate-900">{formatInr(item.netFnfPayable)}</strong>
-                        {item.nomineeName ? ` · Nominee: ${item.nomineeName}` : ''}
-                      </div>
-                    </div>
+                {fnfHistory.map((item) => {
+                  const ev = evaluateFnfDeadline(item, evalDateMs, orgSettings);
+                  const wagePaid = item.paymentSchedules?.wageFnf?.status === 'PAID' || item.status === 'SETTLED';
+                  const gratDue = item.gratuityPayable > 0;
+                  const gratPaid = item.paymentSchedules?.gratuity?.status === 'PAID' || item.status === 'SETTLED';
+                  return (
+                    <div
+                      key={item.id}
+                      className={`p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs ${
+                        ev.isBreached ? 'bg-rose-50/60' : item.status === 'LEGAL_HOLD' ? 'bg-amber-50/40' : ''
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">
+                          <span>{item.workerName}</span>
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-[10px]">
+                            {item.separationStatus || item.exitReason}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${
+                              item.status === 'SETTLED'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : item.status === 'LEGAL_HOLD'
+                                ? 'bg-amber-100 text-amber-900'
+                                : item.status === 'APPROVED'
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {item.status}
+                          </span>
+                          <FnfDeadlineBadge record={item} orgSettings={orgSettings} />
+                        </div>
 
-                    <div className="flex items-center gap-2">
-                      {item.status !== 'SETTLED' && (
+                        <div className="text-[11px] text-slate-600 font-mono flex flex-wrap gap-x-3 gap-y-0.5">
+                          <span>Exit: {item.exitDate}</span>
+                          <span>Sched A (2d): <strong>{formatInr(item.fnfWageNetPayable ?? item.netFnfPayable)}</strong> {wagePaid ? '✓ Paid' : ''}</span>
+                          {(item.noticePayRecovery || 0) > 0 && (
+                            <span className="text-rose-700">Notice Recovery: -{formatInr(item.noticePayRecovery || 0)}</span>
+                          )}
+                          {gratDue && (
+                            <span className="text-emerald-800">
+                              Sched B Gratuity (30d · {ev.gratuityDeadlineLabel}): <strong>{formatInr(item.gratuityPayable)}</strong> {gratPaid ? '✓ Paid' : ''}
+                            </span>
+                          )}
+                          {ev.isBreached && (
+                            <span className="text-rose-700 font-bold">
+                              12% Interest Cost: {formatInr(ev.accruedInterestPenalty)} ({formatInr(ev.dailyInterestCost)}/d)
+                            </span>
+                          )}
+                        </div>
+                        {item.legalHold?.active && (
+                          <div className="text-[11px] text-amber-900">
+                            <strong>LEGAL_HOLD ({item.legalHold.category}):</strong> {item.legalHold.reason}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={async () => {
-                            await updateFnfSettlementStatus(tenantId, item.id, 'SETTLED', actorEmail);
-                            setFnfHistory(await getFnfSettlements(tenantId));
-                            toast.success(`Marked FnF for ${item.workerName} as SETTLED.`);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                          onClick={() => handleOpenFnfPayslip(item, 'BOTH')}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
                         >
-                          <CheckCircle2 size={13} />
-                          <span>Mark Settled</span>
+                          <Printer size={12} />
+                          <span>FnF Payslip</span>
                         </button>
-                      )}
+
+                        {item.status === 'DRAFT' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await approveFnfSettlement(tenantId, item.id, actorEmail);
+                              await refreshFnfWorkspace();
+                              toast.success(`Approved Draft FnF for ${item.workerName}.`);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] cursor-pointer"
+                          >
+                            Approve FnF
+                          </button>
+                        )}
+
+                        {item.status === 'LEGAL_HOLD' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReleaseLegalHold(item)}
+                            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <PlayCircle size={12} />
+                            <span>Release Hold</span>
+                          </button>
+                        ) : item.status !== 'SETTLED' ? (
+                          <button
+                            type="button"
+                            onClick={() => setLegalHoldTarget(item)}
+                            className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <PauseCircle size={12} />
+                            <span>Hold</span>
+                          </button>
+                        ) : null}
+
+                        {item.status === 'APPROVED' && !wagePaid && (
+                          <button
+                            type="button"
+                            onClick={() => handleProcessOffCyclePayout(item, 'WAGE_FNF')}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <CheckCircle2 size={12} />
+                            <span>Pay Off-Cycle Wage FnF</span>
+                          </button>
+                        )}
+
+                        {item.status === 'APPROVED' && gratDue && !gratPaid && (
+                          <button
+                            type="button"
+                            onClick={() => handleProcessOffCyclePayout(item, 'GRATUITY')}
+                            className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                          >
+                            <Award size={12} />
+                            <span>Pay Gratuity (30d)</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
+      )}
+
+      {legalHoldTarget && (
+        <FnfLegalHoldModal
+          record={legalHoldTarget}
+          onClose={() => setLegalHoldTarget(null)}
+          onConfirm={handlePlaceLegalHold}
+        />
       )}
 
       {fnfPayslipPreview && (

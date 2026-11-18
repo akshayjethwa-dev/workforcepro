@@ -726,12 +726,16 @@ self.onmessage = (e) => {
         // Reason code for zero working days:
         // 1=Left Service, 2=Retired, 3=Out of coverage, 4=Expired, 5=Non-implemented area,
         // 6=Other Act, 7=Temporary disablement, 8=Leave without pay, 9=Others
+        const isExitedStatus =
+          worker.status === 'INACTIVE' ||
+          worker.status === 'RESIGNED' ||
+          worker.status === 'TERMINATED';
         let reasonCode = '';
         if (payableDays === 0) {
-          reasonCode = (worker.status === 'INACTIVE' || worker.dateOfExit) ? '1' : '8';
+          reasonCode = (isExitedStatus || worker.dateOfExit) ? '1' : '8';
         }
 
-        let lastWorkingDay = (worker.status === 'INACTIVE' && worker.dateOfExit) ? worker.dateOfExit : '';
+        let lastWorkingDay = (isExitedStatus && worker.dateOfExit) ? worker.dateOfExit : '';
 
         // 1. OFFICIAL ESIC PORTAL EXCEL UPLOAD FORMAT (esic.gov.in)
         // Exactly 6 columns as required by ESIC online filing

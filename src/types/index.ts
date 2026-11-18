@@ -567,7 +567,8 @@ export interface Worker {
   wageConfig: WageConfig;
   photoUrl?: string;
   faceDescriptor?: number[];
-  status: 'ACTIVE' | 'INACTIVE';
+  status: 'ACTIVE' | 'INACTIVE' | 'RESIGNED' | 'TERMINATED';
+  noticePeriodDays?: number;
   uan?: string; 
   esicIp?: string; 
   pan?: string; 
@@ -974,10 +975,14 @@ export interface MonthlyPayroll {
   wageStructureAudit?: WageStructureAuditResult;
   wageComplianceAudit?: WageComplianceAudit;
   gratuitySettlement?: number;
+  isOffCycleFnf?: boolean;
+  offCycleType?: 'WAGE_FNF' | 'GRATUITY_SETTLEMENT' | 'COMBINED_FNF';
+  paidAt?: string;
   fnfSummary?: {
     isFnF: boolean;
     exitDate: string;
     exitReason?: GratuityExitReason;
+    separationStatus?: 'RESIGNED' | 'TERMINATED' | 'RETIRED' | 'END_OF_CONTRACT' | 'DEATH_IN_SERVICE' | 'PERMANENT_DISABLEMENT';
     deathInService?: boolean;
     gratuityPayable: number;
     roundedYears: number;
@@ -986,6 +991,28 @@ export interface MonthlyPayroll {
     nomineeRelation?: string;
     ceilingApplied: boolean;
     fnfRecordId?: string;
+    pendingSalaryDays?: number;
+    pendingWagesEarned?: number;
+    leaveEncashmentDays?: number;
+    leaveEncashmentAmount?: number;
+    noticePeriodRequiredDays?: number;
+    noticePeriodServedDays?: number;
+    noticeShortfallDays?: number;
+    noticePayDailyRate?: number;
+    noticePayRecovery?: number;
+    noticePayWaived?: boolean;
+    advanceAndEwaRecovery?: number;
+    statutoryDeductions?: number;
+    interestPenaltyAmount?: number;
+    interestRateAnnualPct?: number;
+    overdueDays?: number;
+    wageDeadlineAt?: string;
+    gratuityDeadlineAt?: string;
+    deadlineMet?: boolean;
+    legalHoldActive?: boolean;
+    legalHoldReason?: string;
+    scheduleLabel?: string;
+    wageFnfNetPayable?: number;
   };
   netPayable: number;
   carriedForwardAdvance?: number;
@@ -1172,7 +1199,8 @@ export type InboxActionType =
   | 'ATTENDANCE_EXCEPTION' 
   | 'PAYROLL_SIGNOFF' 
   | 'LEAVE_REQUEST' 
-  | 'CONFLICT_RESOLUTION';
+  | 'CONFLICT_RESOLUTION'
+  | 'FNF_DEADLINE_BREACH';
 
 export type InboxUrgency = 'URGENT' | 'HIGH' | 'NORMAL' | 'LOW';
 
@@ -1204,6 +1232,9 @@ export interface InboxItem {
     attendanceRecord?: AttendanceRecord;
     advance?: Advance;
     conflict?: PunchConflict;
+    fnfSettlement?: FnfSettlementRecord;
+    overdueDays?: number;
+    interestPenalty?: number;
     payrollMonth?: string;
     geofenceViolation?: boolean;
     distanceMeters?: number;
@@ -2141,6 +2172,13 @@ export interface GratuityOrgProjection {
   breakdowns: GratuityCalculationResult[];
 }
 
+export type FnfLegalHoldCategory =
+  | 'ABSCONDING'
+  | 'ASSET_NOT_RETURNED'
+  | 'NOTICE_DISPUTE'
+  | 'DISCIPLINARY_INQUIRY'
+  | 'OTHER';
+
 export interface FnfSettlementRecord {
   id: string;
   tenantId: string;
@@ -2150,25 +2188,103 @@ export interface FnfSettlementRecord {
   department: string;
   exitDate: string; // YYYY-MM-DD
   exitReason: GratuityExitReason;
+  separationStatus?:
+    | 'RESIGNED'
+    | 'TERMINATED'
+    | 'RETIRED'
+    | 'END_OF_CONTRACT'
+    | 'DEATH_IN_SERVICE'
+    | 'PERMANENT_DISABLEMENT';
+  triggeredAt?: string; // ISO timestamp when exit was marked
   deathInService: boolean;
   nomineeName?: string;
   nomineeRelation?: string;
   nomineePhone?: string;
   pendingSalaryDays: number;
   pendingWagesEarned: number;
+  pendingSalaryNote?: string;
   leaveEncashmentDays: number;
   leaveEncashmentAmount: number;
+  // Notice Period & Recovery (Sec 17(2) & contract terms)
+  noticePeriodRequiredDays?: number;
+  noticePeriodServedDays?: number;
+  noticeShortfallDays?: number;
+  noticePayDailyRate?: number;
+  noticePayRecovery?: number;
+  noticePayWaived?: boolean;
+  noticeRecoveryFormula?: string;
+  // Gratuity (30-day statutory schedule under Payment of Gratuity Act Sec 7(3))
   gratuityCalculation: GratuityCalculationResult;
   gratuityPayable: number;
+  // Recoveries & Statutory Deductions
   advanceAndEwaRecovery: number;
   statutoryDeductions: number;
+  // Totals
   grossFnfPayable: number;
-  netFnfPayable: number;
-  status: 'DRAFT' | 'APPROVED' | 'SETTLED';
+  fnfWageNetPayable?: number; // Schedule A: Pending Salary + Leave Encashment - Notice Recovery - Advances - Statutory
+  excessRecoveryCarryover?: number; // Excess recovery if deductions exceed Schedule A earnings
+  netFnfPayable: number; // Combined (Schedule A Wage FnF + Schedule B Gratuity)
+  status: 'DRAFT' | 'APPROVED' | 'LEGAL_HOLD' | 'SETTLED';
+  previousStatusBeforeHold?: 'DRAFT' | 'APPROVED';
+  approvedAt?: string;
+  approvedBy?: string;
   notes?: string;
   createdAt: string;
   settledAt?: string;
   settledBy?: string;
+  // Section 17(2) Code on Wages (2 working days) + Gratuity Sec 7(3) (30 days) Deadline Tracking
+  deadlineTracking?: {
+    workingDaysLimit: number; // 2 working days
+    baseDeadlineAt: string; // ISO
+    effectiveDeadlineAt: string; // ISO shifted forward when LEGAL_HOLD is released
+    totalPausedMs: number;
+    holdStartedAt?: string; // ISO when current pause started
+    isPaused: boolean;
+    gratuityDeadlineAt: string; // ISO (30 calendar days from exitDate)
+    interestRateAnnualPct: number; // 12% p.a.
+    breachNotifiedAt?: string; // ISO once admin alert created
+  };
+  legalHold?: {
+    active: boolean;
+    category: FnfLegalHoldCategory;
+    reason: string;
+    placedAt: string;
+    placedBy: string;
+    releasedAt?: string;
+    releasedBy?: string;
+    history: {
+      action: 'PLACED' | 'RELEASED';
+      category?: FnfLegalHoldCategory;
+      reason: string;
+      actor: string;
+      at: string;
+    }[];
+  };
+  paymentSchedules?: {
+    wageFnf: {
+      id: string;
+      label: string;
+      legalBasis: string;
+      amount: number;
+      dueAt: string;
+      status: 'PENDING' | 'PAUSED_HOLD' | 'PAID';
+      paidAt?: string;
+      paidBy?: string;
+      interestPenaltyPaid?: number;
+      offCyclePayrollId?: string;
+    };
+    gratuity: {
+      id: string;
+      label: string;
+      legalBasis: string;
+      amount: number;
+      dueAt: string;
+      status: 'NOT_APPLICABLE' | 'PENDING' | 'PAID';
+      paidAt?: string;
+      paidBy?: string;
+      offCyclePayrollId?: string;
+    };
+  };
 }
 
 // ==========================================
@@ -2673,11 +2789,3 @@ export interface AnnualPoshDistrictReport {
   natureOfActionsSummary: { action: string; count: number }[];
   reportText: string;
 }
-
-
-
-
-
-
-
-

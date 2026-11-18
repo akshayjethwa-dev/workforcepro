@@ -13,6 +13,7 @@ dependencies {
     implementation project(':capacitor-filesystem')
     implementation project(':capacitor-geolocation')
     implementation project(':capacitor-share')
+    implementation project(':capacitor-plugin-cashfree-pg')
     implementation project(':capgo-capacitor-updater')
 
 }

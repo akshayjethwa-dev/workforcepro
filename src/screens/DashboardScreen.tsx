@@ -2,13 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot,
-  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox, Navigation, ShieldAlert
+  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox, Navigation, ShieldAlert, AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { AttendanceRecord, OrgSettings, ScreenName } from '../types/index';
+import { AttendanceRecord, FnfSettlementRecord, OrgSettings, ScreenName } from '../types/index';
 import { AIChat } from '../components/AIChat';
 import { SetupGuideModal } from '../components/SetupGuideModal';
 import { inboxService } from '../services/inboxService';
@@ -18,6 +18,8 @@ import { ShiftRouteMapModal } from '../components/ShiftRouteMapModal';
 import { SupervisorSafetyMonitorModal } from '../components/SupervisorSafetyMonitorModal';
 import { breadcrumbService } from '../services/breadcrumbService';
 import { safetyCheckInService } from '../services/safetyCheckInService';
+import { evaluateFnfDeadline, syncFnfBreachAlerts } from '../services/fnfService';
+import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
@@ -56,17 +58,31 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [showSafetyMonitorModal, setShowSafetyMonitorModal] = useState(false);
   const [activePanicCount, setActivePanicCount] = useState(0);
+  const [fnfAlerts, setFnfAlerts] = useState<FnfSettlementRecord[]>([]);
 
   const refreshData = async () => {
     if (!profile?.tenantId) return;
     setLoading(true);
     try {
-      const [workers, attendance, settings, pendingActions] = await Promise.all([
+      const [workers, attendance, settings] = await Promise.all([
         dbService.getWorkers(profile.tenantId),
         dbService.getTodayAttendance(profile.tenantId),
         dbService.getOrgSettings(profile.tenantId),
-        inboxService.getPendingCount(profile.tenantId, profile).catch(() => 0)
       ]);
+
+      const syncedFnf = await syncFnfBreachAlerts(
+        profile.tenantId,
+        profile.email || 'admin@workforcepro.in',
+        settings
+      ).catch(() => [] as FnfSettlementRecord[]);
+      const activeFnf = syncedFnf.filter((r) => {
+        if (r.status === 'SETTLED') return false;
+        const wagePaid = r.paymentSchedules?.wageFnf?.status === 'PAID';
+        return !wagePaid;
+      });
+      setFnfAlerts(activeFnf);
+
+      const pendingActions = await inboxService.getPendingCount(profile.tenantId, profile).catch(() => 0);
 
       setInboxPendingCount(pendingActions);
       setOrgSettings(settings);
@@ -323,6 +339,83 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                 </button>
             </div>
         </div>
+
+        {/* SECTION 17(2) FNF DEADLINE & BREACH ALERT BANNER */}
+        {fnfAlerts.length > 0 && (() => {
+          const breached = fnfAlerts.filter((r) => evaluateFnfDeadline(r, Date.now(), orgSettings).isBreached);
+          const totalInterest = breached.reduce(
+            (sum, r) => sum + evaluateFnfDeadline(r, Date.now(), orgSettings).accruedInterestPenalty,
+            0
+          );
+          const isBreachPresent = breached.length > 0;
+          return (
+            <div
+              className={`rounded-2xl p-4 sm:p-5 border-2 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
+                isBreachPresent
+                  ? 'bg-rose-50 border-rose-400 text-rose-950'
+                  : 'bg-amber-50 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="flex items-start gap-3.5">
+                <div
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                    isBreachPresent ? 'bg-rose-600 text-white animate-pulse' : 'bg-amber-600 text-white'
+                  }`}
+                >
+                  <AlertTriangle size={22} />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-sm sm:text-base">
+                      {isBreachPresent
+                        ? `Section 17(2) FnF Deadline Breached (${breached.length} Employee${breached.length > 1 ? 's' : ''})`
+                        : `Active FnF Settlements Tracked (${fnfAlerts.length} Pending Off-Cycle Payout${fnfAlerts.length > 1 ? 's' : ''})`}
+                    </h3>
+                    {isBreachPresent && (
+                      <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
+                        12% P.A. INTEREST ACCRUING: ₹{Math.round(totalInterest).toLocaleString('en-IN')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {fnfAlerts.slice(0, 3).map((rec) => (
+                      <div key={rec.id} className="inline-flex items-center gap-2 bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-xs">
+                        <span className="font-bold text-slate-900">{rec.workerName}</span>
+                        <FnfDeadlineBadge record={rec} orgSettings={orgSettings} compact />
+                      </div>
+                    ))}
+                    {fnfAlerts.length > 3 && (
+                      <span className="text-xs font-mono font-bold self-center">
+                        +{fnfAlerts.length - 3} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {onNavigate && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('GRATUITY')}
+                    className={`px-3.5 py-2.5 rounded-xl font-bold text-xs text-white cursor-pointer flex items-center gap-1.5 ${
+                      isBreachPresent ? 'bg-rose-700 hover:bg-rose-800' : 'bg-amber-700 hover:bg-amber-800'
+                    }`}
+                  >
+                    <span>Review &amp; Settle FnF</span>
+                    <ArrowRight size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('PAYROLL')}
+                    className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Off-Cycle Payroll
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* UNIFIED ACTION INBOX BANNER */}
         {inboxPendingCount > 0 && (

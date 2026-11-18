@@ -6,11 +6,12 @@ import {
   MapPin, Phone, IndianRupee, Printer, Smartphone, X, 
   Info, AlertCircle, RefreshCw, Lock, Send
 } from 'lucide-react';
-import { WorkerAccessToken, Worker, MonthlyPayroll, AttendanceRecord, ShiftConfig, OrgSettings } from '../types/index';
+import { WorkerAccessToken, Worker, MonthlyPayroll, AttendanceRecord, ShiftConfig, OrgSettings, FnfSettlementRecord } from '../types/index';
 import { magicLinkService } from '../services/magicLinkService';
 import { dbService } from '../services/db';
 import { scheduleValidationService } from '../services/scheduleValidationService';
 import { ctcSimulatorService } from '../services/ctcSimulatorService';
+import { evaluateFnfDeadline, getSyncFnfSettlementForWorker, getSyncOffCycleFnfPayrolls } from '../services/fnfService';
 import { DeviceBoundPunchView } from './DeviceBoundPunchView';
 import { PoshComplaintForm } from './PoshComplaintForm';
 
@@ -26,6 +27,8 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   const [worker, setWorker] = useState<Worker | null>(null);
   const [tenantWorkers, setTenantWorkers] = useState<Worker[]>([]);
   const [payroll, setPayroll] = useState<MonthlyPayroll | null>(null);
+  const [fnfRecord, setFnfRecord] = useState<FnfSettlementRecord | null>(null);
+  const [offCycleFnfPayrolls, setOffCycleFnfPayrolls] = useState<MonthlyPayroll[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
   const [tenantBranding, setTenantBranding] = useState<{ appName: string; primaryColor: string; logoUrl?: string }>({
@@ -154,11 +157,21 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
         const workerAtt = attHistory.filter(a => a.workerId === tRecord.workerId && a.date.startsWith(month));
         setAttendance(workerAtt);
 
+        // Load FnF settlement & off-cycle FnF payslips if worker has exited
+        const workerFnf = getSyncFnfSettlementForWorker(tRecord.tenantId, tRecord.workerId);
+        setFnfRecord(workerFnf);
+        const workerOffCyclePayrolls = getSyncOffCycleFnfPayrolls(tRecord.tenantId).filter(
+          (p) => p.workerId === tRecord.workerId
+        );
+        setOffCycleFnfPayrolls(workerOffCyclePayrolls);
+
         // Load payroll record
         const payrolls = await dbService.getPayrollsByMonth(tRecord.tenantId, month).catch(() => []);
         const workerPayroll = payrolls.find(p => p.workerId === tRecord.workerId);
         
-        if (workerPayroll) {
+        if (workerOffCyclePayrolls.length > 0 && !workerPayroll) {
+          setPayroll(workerOffCyclePayrolls[0]);
+        } else if (workerPayroll) {
           setPayroll(workerPayroll);
         } else if (matchedWorker) {
           // Generate a provisional payroll preview if not formally run yet
@@ -939,6 +952,147 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
                 </div>
               </div>
             </div>
+
+            {/* FULL & FINAL SETTLEMENT & NOTICE PAY RECOVERY BREAKDOWN (EMPLOYEE VISIBILITY) */}
+            {fnfRecord && (() => {
+              const fnfEval = evaluateFnfDeadline(fnfRecord, Date.now(), orgSettings);
+              return (
+                <div className="mt-5 rounded-2xl border-2 border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                        Full &amp; Final Settlement Breakdown (Sec 17(2) Code on Wages)
+                      </span>
+                      <h4 className="text-sm font-black text-slate-900">
+                        Exit Status: {fnfRecord.separationStatus || fnfRecord.exitReason} · Exit Date: {fnfRecord.exitDate}
+                      </h4>
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold ${
+                        fnfRecord.status === 'SETTLED'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : fnfRecord.status === 'LEGAL_HOLD'
+                          ? 'bg-amber-100 text-amber-950 border border-amber-300'
+                          : fnfEval.isBreached
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'bg-blue-100 text-blue-800 border border-blue-200'
+                      }`}
+                    >
+                      {fnfRecord.status === 'LEGAL_HOLD'
+                        ? 'LEGAL_HOLD (Paused)'
+                        : fnfRecord.status === 'SETTLED'
+                        ? 'SETTLED'
+                        : `Wage FnF Due: ${fnfEval.effectiveDeadlineLabel}`}
+                    </span>
+                  </div>
+
+                  {fnfRecord.legalHold?.active && (
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950">
+                      <strong>Settlement Hold Notice ({fnfRecord.legalHold.category}):</strong>{' '}
+                      {fnfRecord.legalHold.reason}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-1.5">
+                      <div className="font-bold text-slate-800 uppercase text-[10px] tracking-wider">
+                        FnF Credits &amp; Recoveries (Schedule A · 2 Working Days)
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Pending Salary ({fnfRecord.pendingSalaryDays}d)</span>
+                        <span className="font-mono font-semibold text-emerald-700">+₹{fnfRecord.pendingWagesEarned.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Leave Encashment ({fnfRecord.leaveEncashmentDays}d)</span>
+                        <span className="font-mono font-semibold text-emerald-700">+₹{fnfRecord.leaveEncashmentAmount.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Advance / Loan Recovery</span>
+                        <span className="font-mono font-semibold text-rose-700">-₹{fnfRecord.advanceAndEwaRecovery.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Statutory Deductions</span>
+                        <span className="font-mono font-semibold text-rose-700">-₹{fnfRecord.statutoryDeductions.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-amber-200 p-3 space-y-1.5">
+                      <div className="font-bold text-amber-900 uppercase text-[10px] tracking-wider">
+                        Notice Period Deduction Breakdown
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Required Notice Period</span>
+                        <span className="font-mono font-semibold text-slate-900">{fnfRecord.noticePeriodRequiredDays || 0} days</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Notice Served</span>
+                        <span className="font-mono font-semibold text-slate-900">{fnfRecord.noticePeriodServedDays || 0} days</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Unserved Shortfall × Daily Rate</span>
+                        <span className="font-mono font-semibold text-slate-900">
+                          {fnfRecord.noticeShortfallDays || 0}d × ₹{(fnfRecord.noticePayDailyRate || 0).toLocaleString('en-IN')}/d
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-1 border-t border-amber-100 font-bold">
+                        <span className="text-amber-950">Notice Pay Recovery Deducted</span>
+                        <span className="font-mono text-rose-700">
+                          {fnfRecord.noticePayWaived
+                            ? 'Waived (₹0)'
+                            : `-₹${(fnfRecord.noticePayRecovery || 0).toLocaleString('en-IN')}`}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                    <div className="p-3 rounded-xl bg-white border border-slate-200 flex items-center justify-between">
+                      <div>
+                        <span className="block font-sans text-[10px] font-bold uppercase text-slate-500">Schedule A · Net Wage FnF</span>
+                        <span className="text-[11px] font-sans text-slate-600">2 Working Days ({fnfRecord.paymentSchedules?.wageFnf.status || 'PENDING'})</span>
+                      </div>
+                      <span className="text-base font-black text-slate-900">
+                        ₹{(fnfRecord.fnfWageNetPayable ?? fnfRecord.netFnfPayable).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 flex items-center justify-between">
+                      <div>
+                        <span className="block font-sans text-[10px] font-bold uppercase text-emerald-800">Schedule B · Gratuity (30d)</span>
+                        <span className="text-[11px] font-sans text-emerald-700">
+                          {fnfRecord.gratuityPayable > 0
+                            ? `Due ${fnfEval.gratuityDeadlineLabel} (${fnfRecord.paymentSchedules?.gratuity.status || 'PENDING'})`
+                            : 'Not Eligible (<5 yrs)'}
+                        </span>
+                      </div>
+                      <span className="text-base font-black text-emerald-800">
+                        ₹{fnfRecord.gratuityPayable.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {offCycleFnfPayrolls.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1 print:hidden">
+                      <span className="text-[11px] font-bold text-slate-600">Off-Cycle FnF Payslips:</span>
+                      {offCycleFnfPayrolls.map((op) => (
+                        <button
+                          key={op.id}
+                          type="button"
+                          onClick={() => setPayroll(op)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                            payroll?.id === op.id
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-100'
+                          }`}
+                        >
+                          {op.offCycleType === 'GRATUITY_SETTLEMENT' ? 'Gratuity Slip' : 'Wage FnF Slip'} · ₹{op.netPayable.toLocaleString('en-IN')}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Bottom Total Bar */}
             <div className="mt-5 p-4 rounded-2xl bg-slate-900 text-white flex items-center justify-between">

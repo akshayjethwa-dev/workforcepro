@@ -208,6 +208,8 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         return { label: 'Payroll Sign-off', icon: FileCheck, color: 'text-blue-700 bg-blue-50 border-blue-200' };
       case 'LEAVE_REQUEST':
         return { label: 'Leave Request', icon: Calendar, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' };
+      case 'FNF_DEADLINE_BREACH':
+        return { label: 'FnF Sec 17(2) Breach', icon: AlertTriangle, color: 'text-rose-800 bg-rose-50 border-rose-300' };
     }
   };
 
@@ -361,6 +363,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 </span>
                 {[
                   { id: 'ALL', label: 'All' },
+                  { id: 'FNF_DEADLINE_BREACH', label: 'FnF Breach' },
                   { id: 'ADVANCE_APPROVAL', label: 'Advances' },
                   { id: 'ATTENDANCE_EXCEPTION', label: 'Exceptions' },
                   { id: 'CONFLICT_RESOLUTION', label: 'Conflicts' },
@@ -524,6 +527,54 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                                   <span>Partner Fee: ₹{item.details.ewaDetails.feeAmount}</span>
                                 )}
                               </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* FnF Section 17(2) Deadline Breach Callout */}
+                        {item.actionType === 'FNF_DEADLINE_BREACH' && item.details?.fnfSettlement && (
+                          <div className="mb-3 p-3 bg-rose-50 border border-rose-300 rounded-xl space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="font-extrabold text-rose-900 uppercase tracking-wider flex items-center gap-1">
+                                <AlertTriangle size={13} className="text-rose-700" />
+                                <span>Section 17(2) 2-Working-Day Legal Breach</span>
+                              </span>
+                              <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
+                                +{item.details.overdueDays || 1}d Overdue
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs font-mono">
+                              <div className="p-2 bg-white rounded-lg border border-rose-200">
+                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">Wage FnF (2d)</span>
+                                <span className="font-black text-slate-900">
+                                  ₹{(item.details.fnfSettlement.fnfWageNetPayable ?? item.details.fnfSettlement.netFnfPayable).toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                              <div className="p-2 bg-white rounded-lg border border-rose-200">
+                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">12% p.a. Interest Cost</span>
+                                <span className="font-black text-rose-700">
+                                  ₹{(item.details.interestPenalty || 0).toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                              <div className="p-2 bg-white rounded-lg border border-rose-200 col-span-2 sm:col-span-1">
+                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">Exit Date</span>
+                                <span className="font-bold text-slate-800">{item.details.fnfSettlement.exitDate}</span>
+                              </div>
+                            </div>
+                            {onNavigate && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (typeof sessionStorage !== 'undefined') {
+                                    sessionStorage.setItem('gratuity_fnf_worker_id', item.workerId);
+                                  }
+                                  onNavigate('GRATUITY');
+                                }}
+                                className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-800 hover:text-rose-950 underline cursor-pointer"
+                              >
+                                <span>Open FnF Statement &amp; Off-Cycle Payout Center</span>
+                                <ArrowUpRight size={13} />
+                              </button>
                             )}
                           </div>
                         )}
@@ -888,6 +939,63 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                       })}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* FnF Deadline Breach Audit Details */}
+              {reviewingItem.actionType === 'FNF_DEADLINE_BREACH' && reviewingItem.details?.fnfSettlement && (
+                <div className="p-4 bg-rose-50 border border-rose-300 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-black text-rose-950 flex items-center gap-1.5">
+                      <AlertTriangle size={16} className="text-rose-700" />
+                      <span>Section 17(2) FnF Breach Audit</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
+                      {reviewingItem.details.overdueDays || 1}d OVERDUE
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="p-2.5 bg-white rounded-lg border border-rose-200">
+                      <span className="text-[10px] font-sans text-slate-500 uppercase font-semibold block">Schedule A Wage FnF</span>
+                      <span className="text-sm font-black text-slate-900">
+                        ₹{(reviewingItem.details.fnfSettlement.fnfWageNetPayable ?? reviewingItem.details.fnfSettlement.netFnfPayable).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-rose-200">
+                      <span className="text-[10px] font-sans text-slate-500 uppercase font-semibold block">12% p.a. Delay Interest</span>
+                      <span className="text-sm font-black text-rose-700">
+                        ₹{(reviewingItem.details.interestPenalty || 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-rose-200">
+                      <span className="text-[10px] font-sans text-slate-500 uppercase font-semibold block">Notice Recovery</span>
+                      <span className="text-sm font-bold text-amber-800">
+                        -₹{(reviewingItem.details.fnfSettlement.noticePayRecovery || 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-rose-200">
+                      <span className="text-[10px] font-sans text-slate-500 uppercase font-semibold block">Schedule B Gratuity (30d)</span>
+                      <span className="text-sm font-bold text-emerald-800">
+                        ₹{(reviewingItem.details.fnfSettlement.gratuityPayable || 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                  {onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof sessionStorage !== 'undefined') {
+                          sessionStorage.setItem('gratuity_fnf_worker_id', reviewingItem.workerId);
+                        }
+                        setReviewingItem(null);
+                        onNavigate('GRATUITY');
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>Open FnF Statement &amp; Legal Hold Controls</span>
+                      <ArrowUpRight size={14} />
+                    </button>
+                  )}
                 </div>
               )}
 

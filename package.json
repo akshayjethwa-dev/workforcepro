@@ -23,6 +23,8 @@
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "^8.2.0",
     "@capacitor/share": "^8.0.1",
+    "capacitor-plugin-cashfree-pg": "^0.1.0",
+    "cashfree-pg-api-contract": "^2.2.0",
     "@capgo/capacitor-updater": "^8.45.1",
     "@vladmandic/human": "^3.3.6",
     "firebase": "^12.9.0",

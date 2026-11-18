@@ -21,6 +21,7 @@ interface AuthContextType {
   stopImpersonating: () => Promise<void>;
   loginDemo: (role?: Role) => void;
   logout: () => Promise<void>;
+  refreshTenantData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({ 
@@ -34,7 +35,8 @@ const AuthContext = createContext<AuthContextType>({
     impersonateTenant: async () => {}, 
     stopImpersonating: async () => {},
     loginDemo: () => {},
-    logout: async () => {}
+    logout: async () => {},
+    refreshTenantData: async () => {}
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -109,6 +111,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     } catch (error) {
         console.warn("Notice: Unable to fetch remote tenant data, running offline:", error);
+    }
+  };
+
+  const refreshTenantData = async () => {
+    if (profile?.tenantId) {
+      await loadTenantData(profile.tenantId);
     }
   };
 
@@ -250,7 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider value={{ 
       user, profile, tenantPlan, limits, trialDaysLeft, loading, 
       isImpersonating, impersonateTenant, stopImpersonating,
-      loginDemo, logout
+      loginDemo, logout, refreshTenantData
     }}>
       {!loading && children}
     </AuthContext.Provider>

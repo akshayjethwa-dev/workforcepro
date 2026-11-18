@@ -19,12 +19,17 @@ import { WorkerAccessModal } from '../components/WorkerAccessModal';
 import { magicLinkService } from '../services/magicLinkService';
 import { validateWorkerWageStructure } from '../services/wageStructureValidationService';
 import { WageStructureEditorModal } from '../components/WageStructureEditorModal';
+import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
 import {
-  buildFnfSettlementPreview,
   calculateWorkerGratuity,
-  saveFnfSettlement,
+  getFnfSettlements,
 } from '../services/gratuityService';
-import { GratuityExitReason } from '../types/index';
+import {
+  computeFnfSettlementStatement,
+  evaluateFnfDeadline,
+  triggerAutomatedDraftFnf,
+} from '../services/fnfService';
+import { FnfSettlementRecord, GratuityExitReason } from '../types/index';
 
 interface Props {
   onAddWorker: () => void;
@@ -62,6 +67,11 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
   const [exitReasonInput, setExitReasonInput] = useState<GratuityExitReason>('RESIGNATION');
   const [exitDeathOverride, setExitDeathOverride] = useState<boolean>(false);
   const [exitNomineeName, setExitNomineeName] = useState<string>('');
+  const [exitNoticeRequiredDays, setExitNoticeRequiredDays] = useState<string>('30');
+  const [exitNoticeServedDays, setExitNoticeServedDays] = useState<string>('0');
+  const [exitNoticeWaived, setExitNoticeWaived] = useState<boolean>(false);
+  const [exitLeaveDays, setExitLeaveDays] = useState<string>('0');
+  const [fnfRecords, setFnfRecords] = useState<FnfSettlementRecord[]>([]);
 
   // State for Manager-Initiated Magic Links (One-Tap Scoped Links)
   const [magicLinkWorker, setMagicLinkWorker] = useState<{ worker: Worker; scope: MagicLinkScope } | null>(null);
@@ -88,16 +98,18 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     const tenantId = profile?.tenantId;
     if (tenantId) {
       try {
-        const [workersData, settingsData, attendanceData, advancesData] = await Promise.all([
+        const [workersData, settingsData, attendanceData, advancesData, fnfData] = await Promise.all([
             dbService.getWorkers(tenantId),
             dbService.getOrgSettings(tenantId),
             dbService.getAttendanceHistory(tenantId),
-            dbService.getAdvances(tenantId)
+            dbService.getAdvances(tenantId),
+            getFnfSettlements(tenantId)
         ]);
         setWorkers(workersData);
         setSettings(settingsData);
         setAttendanceRecords(attendanceData);
         setAdvances(advancesData);
+        setFnfRecords(fnfData);
       } catch (error) {
         console.error("Failed to load workers data", error);
         toast.error("Failed to load workers directory");
@@ -128,8 +140,8 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     }
   };
 
-  // Worker-Exit Auto-Revocation + FnF Gratuity Settlement:
-  // Marking worker inactive auto-revokes all tokens, unbinds devices within 60s, and records FnF Gratuity
+  // Worker-Exit Auto-Revocation + Automated DRAFT FnF Trigger (Section 17(2) Code on Wages):
+  // Marking RESIGNED / TERMINATED immediately generates a DRAFT FnF statement with 2-working-day deadline
   const handleConfirmWorkerExit = async () => {
     if (!workerToExit) return;
     const tenantId = profile?.tenantId || 'demo-tenant-id';
@@ -139,40 +151,47 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     try {
       const effectiveDeath = exitDeathOverride || exitReasonInput === 'DEATH_IN_SERVICE';
       const nomineeToSave = exitNomineeName.trim() || workerToExit.nomineeName;
+      const nextStatus: Worker['status'] =
+        exitReasonInput === 'RESIGNATION'
+          ? 'RESIGNED'
+          : exitReasonInput === 'TERMINATION'
+          ? 'TERMINATED'
+          : 'INACTIVE';
+
       const exitUpdates: Partial<Worker> = {
-        status: 'INACTIVE',
+        status: nextStatus,
         isActive: false,
         dateOfExit: exitDateInput,
         exitReason: exitReasonInput,
         deathInService: effectiveDeath,
+        noticePeriodDays: Math.max(0, Number(exitNoticeRequiredDays || 0)),
         ...(nomineeToSave ? { nomineeName: nomineeToSave } : {}),
       };
 
-      // 1. Update worker record in DB / storage to INACTIVE with exit & nominee fields
+      // 1. Update worker record in DB / storage with RESIGNED / TERMINATED / INACTIVE + exit fields
       await dbService.updateWorker(workerToExit.id, exitUpdates);
 
-      // 2. Generate & save FnF Gratuity Settlement record for the exit month
+      // 2. Immediately generate & persist DRAFT FnF Statement with 2-working-day Section 17(2) deadline
       const updatedWorker: Worker = { ...workerToExit, ...exitUpdates };
-      const exitMonth = exitDateInput.slice(0, 7);
-      const payroll = settings
-        ? wageService.generateMonthlyPayroll(updatedWorker, exitMonth, attendanceRecords, advances, settings)
-        : undefined;
-      const fnfRecord = buildFnfSettlementPreview({
+      const fnfRecord = await triggerAutomatedDraftFnf({
         tenantId,
         worker: updatedWorker,
         exitDate: exitDateInput,
         exitReason: exitReasonInput,
+        actorEmail: managerEmail,
         deathInService: effectiveDeath,
         nomineeName: nomineeToSave,
         nomineeRelation: updatedWorker.nomineeRelation || 'Nominee',
-        leaveEncashmentDays: 0,
-        monthlyPayrollForExitMonth: payroll,
+        leaveEncashmentDays: Math.max(0, Number(exitLeaveDays || 0)),
+        noticePeriodRequiredDays: Math.max(0, Number(exitNoticeRequiredDays || 0)),
+        noticePeriodServedDays: Math.max(0, Number(exitNoticeServedDays || 0)),
+        noticePayWaived: exitNoticeWaived,
         attendanceRecords,
         advances,
         orgSettings: settings || undefined,
       });
-      fnfRecord.status = 'APPROVED';
-      await saveFnfSettlement(fnfRecord, managerEmail);
+
+      const deadlineEval = evaluateFnfDeadline(fnfRecord, Date.now(), settings);
 
       // 3. Auto-revoke all active magic tokens and unbind devices within 60 seconds
       const { revokedTokensCount, unboundDevicesCount } = await magicLinkService.revokeAllForWorker(
@@ -184,16 +203,17 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
 
       // 4. Update local state
       setWorkers(prev => prev.map(w => w.id === workerToExit.id ? { ...w, ...exitUpdates } : w));
+      setFnfRecords(await getFnfSettlements(tenantId));
 
       toast.success(
-        `${workerToExit.name} exited (${exitDateInput}). FnF Gratuity: ₹${fnfRecord.gratuityPayable.toLocaleString('en-IN')}. Auto-revoked ${revokedTokensCount} link(s) & unbound ${unboundDevicesCount} device(s).`
+        `${workerToExit.name} marked ${nextStatus} (${exitDateInput}). DRAFT FnF created — Sec 17(2) Deadline: ${deadlineEval.effectiveDeadlineLabel}. Revoked ${revokedTokensCount} link(s) & unbound ${unboundDevicesCount} device(s).`
       );
       setWorkerToExit(null);
       setExitDeathOverride(false);
       setExitNomineeName('');
     } catch (err: any) {
       console.error('Failed to complete worker exit:', err);
-      toast.error('Failed to mark worker inactive.');
+      toast.error('Failed to mark worker exited.');
     } finally {
       setIsProcessingExit(false);
     }
@@ -287,12 +307,15 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     }
   };
 
+  const isWorkerExited = (w: Worker) =>
+    w.status === 'INACTIVE' || w.status === 'RESIGNED' || w.status === 'TERMINATED' || w.isActive === false;
+
   const filteredWorkers = workers.filter(w => {
     const matchesSearch = w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           w.phone.includes(searchTerm) ||
                           (w.designation && w.designation.toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesBranch = selectedBranch === 'ALL' || (w.branchId || 'default') === selectedBranch;
-    const isInactive = w.status === 'INACTIVE' || w.isActive === false;
+    const isInactive = isWorkerExited(w);
     const matchesStatus = statusFilter === 'ALL' 
       ? true 
       : statusFilter === 'ACTIVE' 
@@ -377,14 +400,14 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
             onClick={() => setStatusFilter('ACTIVE')}
             className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'ACTIVE' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
           >
-            Active ({workers.filter(w => w.status !== 'INACTIVE' && w.isActive !== false).length})
+            Active ({workers.filter(w => !isWorkerExited(w)).length})
           </button>
           <button
             type="button"
             onClick={() => setStatusFilter('INACTIVE')}
             className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'INACTIVE' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
           >
-            Exited ({workers.filter(w => w.status === 'INACTIVE' || w.isActive === false).length})
+            Exited ({workers.filter(w => isWorkerExited(w)).length})
           </button>
         </div>
 
@@ -431,19 +454,22 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
               ? `₹${monthly.toLocaleString()} / mo` 
               : 'Rate unassigned';
 
-            const isInactive = worker.status === 'INACTIVE' || worker.isActive === false;
+            const isInactive = isWorkerExited(worker);
             const workerTokens = magicLinkService.getTokensForWorker(worker.id);
             const activeTokensCount = workerTokens.active.length;
             const wageAudit = !isInactive
               ? validateWorkerWageStructure(worker, { orgSettings: settings || undefined })
               : null;
+            const latestFnf = fnfRecords
+              .filter((r) => r.workerId === worker.id)
+              .sort((a, b) => b.exitDate.localeCompare(a.exitDate))[0];
 
             return (
               <div 
                 key={worker.id} 
                 className={`bg-white p-5 rounded-2xl border transition-all flex flex-col justify-between group ${
                   isInactive 
-                    ? 'border-rose-200/80 bg-rose-50/10 opacity-90' 
+                    ? 'border-rose-200/80 bg-rose-50/10 opacity-95' 
                     : 'border-slate-200/80 hover:border-slate-300 shadow-xs'
                 }`}
               >
@@ -475,7 +501,11 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                           </h3>
                           {isInactive ? (
                             <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200">
-                              Exited
+                              {worker.status === 'RESIGNED'
+                                ? 'Resigned'
+                                : worker.status === 'TERMINATED'
+                                ? 'Terminated'
+                                : 'Exited'}
                             </span>
                           ) : (
                             <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
@@ -511,13 +541,18 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                       ) : (
                         <button
                           onClick={() => {
+                            const initReason = worker.exitReason || 'RESIGNATION';
                             setExitDateInput(worker.dateOfExit || new Date().toISOString().split('T')[0]);
-                            setExitReasonInput(worker.exitReason || 'RESIGNATION');
-                            setExitDeathOverride(Boolean(worker.deathInService || worker.exitReason === 'DEATH_IN_SERVICE'));
+                            setExitReasonInput(initReason);
+                            setExitDeathOverride(Boolean(worker.deathInService || initReason === 'DEATH_IN_SERVICE'));
                             setExitNomineeName(worker.nomineeName || '');
+                            setExitNoticeRequiredDays(String(worker.noticePeriodDays ?? (initReason === 'RESIGNATION' ? (worker.category === 'Permanent' ? 30 : 15) : 0)));
+                            setExitNoticeServedDays('0');
+                            setExitNoticeWaived(false);
+                            setExitLeaveDays(String(worker.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0));
                             setWorkerToExit(worker);
                           }}
-                          title="Exit Worker & Calculate FnF Gratuity (Auto-revokes links & unbinds devices)"
+                          title="Mark Resigned / Terminated & Trigger Automated FnF"
                           className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
                         >
                           <UserX size={15} />
@@ -568,6 +603,23 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                         )}
                       </span>
                     </div>
+
+                    {latestFnf && (
+                      <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <FnfDeadlineBadge record={latestFnf} orgSettings={settings} compact />
+                          {onOpenFnfGratuity && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenFnfGratuity(worker.id)}
+                              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 cursor-pointer"
+                            >
+                              Open FnF ({latestFnf.status}) →
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {wageAudit && wageAudit.hasAnyViolation && (
                       <div className="pt-1.5 flex items-center justify-between gap-2 flex-wrap">
@@ -902,34 +954,42 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
         />
       )}
 
-      {/* WORKER-EXIT AUTO-REVOCATION & FNF GRATUITY CONFIRMATION MODAL */}
+      {/* WORKER-EXIT AUTO-REVOCATION & AUTOMATED DRAFT FNF TRIGGER MODAL */}
       {workerToExit && (() => {
-        const previewGratuity = calculateWorkerGratuity(workerToExit, {
-          asOfDate: exitDateInput,
-          exitDateOverride: exitDateInput,
-          exitReasonOverride: exitReasonInput,
-          deathInServiceOverride: exitDeathOverride || exitReasonInput === 'DEATH_IN_SERVICE',
-          nomineeNameOverride: exitNomineeName || workerToExit.nomineeName,
-          orgSettings: settings || undefined,
+        const previewFnf = computeFnfSettlementStatement({
+          tenantId: profile?.tenantId || 'demo-tenant-id',
+          worker: workerToExit,
+          exitDate: exitDateInput,
+          exitReason: exitReasonInput,
+          deathInService: exitDeathOverride || exitReasonInput === 'DEATH_IN_SERVICE',
+          nomineeName: exitNomineeName || workerToExit.nomineeName,
+          leaveEncashmentDays: Math.max(0, Number(exitLeaveDays || 0)),
+          noticePeriodRequiredDays: Math.max(0, Number(exitNoticeRequiredDays || 0)),
+          noticePeriodServedDays: Math.max(0, Number(exitNoticeServedDays || 0)),
+          noticePayWaived: exitNoticeWaived,
+          attendanceRecords,
+          advances,
+          orgSettings: settings,
         });
+        const previewDeadline = evaluateFnfDeadline(previewFnf, Date.now(), settings);
         return (
           <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-slate-100 max-h-[90dvh] overflow-y-auto">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl border border-slate-100 max-h-[90dvh] overflow-y-auto">
               <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-amber-200">
                 <UserX size={24} />
               </div>
 
               <h2 className="text-base font-bold text-center text-slate-900 mb-1">
-                Confirm Worker Exit &amp; FnF Gratuity
+                Mark Separation &amp; Trigger Automated FnF Draft
               </h2>
               <p className="text-xs text-slate-600 text-center mb-4">
-                Marking <strong>{workerToExit.name}</strong> as exited triggers Full &amp; Final gratuity calculation and revokes all access.
+                Marking <strong>{workerToExit.name}</strong> as RESIGNED / TERMINATED auto-generates a <strong>DRAFT FnF</strong> with a 2-working-day Section 17(2) deadline and revokes access.
               </p>
 
               <div className="space-y-3 mb-4 text-xs">
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Exit Date</label>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Exit / Last Working Date</label>
                     <input
                       type="date"
                       value={exitDateInput}
@@ -938,25 +998,79 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Exit Reason</label>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Separation Type</label>
                     <select
                       value={exitReasonInput}
                       onChange={(e) => {
                         const r = e.target.value as GratuityExitReason;
                         setExitReasonInput(r);
                         if (r === 'DEATH_IN_SERVICE') setExitDeathOverride(true);
+                        if (r === 'RESIGNATION') {
+                          setExitNoticeRequiredDays(String(workerToExit.noticePeriodDays ?? (workerToExit.category === 'Permanent' ? 30 : 15)));
+                        } else {
+                          setExitNoticeRequiredDays('0');
+                          setExitNoticeServedDays('0');
+                        }
                       }}
                       className="w-full px-2.5 py-2 border border-slate-200 rounded-lg font-semibold text-xs text-slate-900"
                     >
-                      <option value="RESIGNATION">Resignation</option>
+                      <option value="RESIGNATION">RESIGNED (Resignation)</option>
+                      <option value="TERMINATION">TERMINATED (Termination)</option>
                       <option value="RETIREMENT">Retirement</option>
                       <option value="END_OF_CONTRACT">End of Contract</option>
-                      <option value="TERMINATION">Termination</option>
                       <option value="DEATH_IN_SERVICE">Death in Service</option>
                       <option value="PERMANENT_DISABLEMENT">Permanent Disablement</option>
                     </select>
                   </div>
                 </div>
+
+                {/* Notice Period & Leave Encashment Controls */}
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Notice Req. (Days)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={exitNoticeRequiredDays}
+                      onChange={(e) => setExitNoticeRequiredDays(e.target.value)}
+                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg font-mono text-xs text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Notice Served</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={exitNoticeServedDays}
+                      onChange={(e) => setExitNoticeServedDays(e.target.value)}
+                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg font-mono text-xs text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Leave Encash (Days)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={exitLeaveDays}
+                      onChange={(e) => setExitLeaveDays(e.target.value)}
+                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg font-mono text-xs text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                {Number(exitNoticeRequiredDays || 0) > Number(exitNoticeServedDays || 0) && (
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer">
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      Waive Notice Pay Recovery ({previewFnf.noticeShortfallDays}d shortfall)
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={exitNoticeWaived}
+                      onChange={(e) => setExitNoticeWaived(e.target.checked)}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                )}
 
                 <label className="flex items-center justify-between p-2.5 rounded-xl border border-rose-200 bg-rose-50/70 cursor-pointer">
                   <div>
@@ -987,27 +1101,56 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                   </div>
                 )}
 
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-1">
+                {/* Live Draft FnF Breakdown Preview */}
+                <div className="p-3 bg-slate-900 text-white rounded-xl space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-950">FnF Gratuity Payout</span>
-                    <span className="font-mono font-extrabold text-sm text-emerald-800 tabular-nums">
-                      ₹{previewGratuity.payableGratuityAmount.toLocaleString('en-IN')}
+                    <span className="font-bold text-slate-200 text-[11px] uppercase tracking-wider">
+                      Draft FnF Preview (Sec 17(2))
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-blue-600/30 text-blue-200 border border-blue-400/30 font-mono text-[10px]">
+                      Due {previewDeadline.effectiveDeadlineLabel} (2 Working Days)
                     </span>
                   </div>
-                  <div className="text-[10px] text-emerald-800 font-mono">
-                    {previewGratuity.tenure.formattedTenure} ({previewGratuity.effectiveYearsForFormula} yrs) · Last Basic+DA ₹{previewGratuity.lastDrawnBasicPlusDa.toLocaleString('en-IN')}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-mono pt-1 border-t border-slate-800">
+                    <span className="text-slate-400">Pending Salary ({previewFnf.pendingSalaryDays}d):</span>
+                    <span className="text-right text-emerald-300">+₹{previewFnf.pendingWagesEarned.toLocaleString('en-IN')}</span>
+                    <span className="text-slate-400">Leave Encash ({previewFnf.leaveEncashmentDays}d):</span>
+                    <span className="text-right text-emerald-300">+₹{previewFnf.leaveEncashmentAmount.toLocaleString('en-IN')}</span>
+                    {(previewFnf.noticePayRecovery || 0) > 0 && (
+                      <>
+                        <span className="text-rose-300">Notice Recovery ({previewFnf.noticeShortfallDays}d):</span>
+                        <span className="text-right text-rose-300">-₹{(previewFnf.noticePayRecovery || 0).toLocaleString('en-IN')}</span>
+                      </>
+                    )}
+                    {previewFnf.advanceAndEwaRecovery > 0 && (
+                      <>
+                        <span className="text-rose-300">Advance / Loan Recovery:</span>
+                        <span className="text-right text-rose-300">-₹{previewFnf.advanceAndEwaRecovery.toLocaleString('en-IN')}</span>
+                      </>
+                    )}
+                    <span className="text-white font-bold pt-1 border-t border-slate-800">Schedule A · Wage FnF (2d):</span>
+                    <span className="text-right text-white font-bold pt-1 border-t border-slate-800">
+                      ₹{(previewFnf.fnfWageNetPayable ?? 0).toLocaleString('en-IN')}
+                    </span>
+                    {previewFnf.gratuityPayable > 0 && (
+                      <>
+                        <span className="text-emerald-300">Schedule B · Gratuity (30d):</span>
+                        <span className="text-right text-emerald-300 font-bold">
+                          ₹{previewFnf.gratuityPayable.toLocaleString('en-IN')}
+                        </span>
+                      </>
+                    )}
                   </div>
-                  <div className="text-[10px] text-emerald-900">{previewGratuity.eligibilityNote}</div>
                 </div>
               </div>
 
               <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 space-y-1 mb-4 text-[11px] text-amber-900">
                 <div className="font-bold flex items-center gap-1.5 text-amber-950">
                   <AlertTriangle size={13} className="text-amber-600 shrink-0" />
-                  <span>60-Second Security Invariants:</span>
+                  <span>60-Second Security &amp; Deadline Invariants:</span>
                 </div>
                 <p className="text-amber-800">
-                  All active magic links will be auto-revoked and bound devices unbound immediately upon confirmation.
+                  All active magic links will be auto-revoked and devices unbound. A DRAFT FnF record will be saved immediately so Admin can Approve &amp; Process Off-Cycle Payment before the 2-working-day deadline.
                 </p>
               </div>
 
@@ -1027,7 +1170,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                     disabled={isProcessingExit}
                     className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer"
                   >
-                    {isProcessingExit ? 'Processing...' : 'Confirm Exit & FnF'}
+                    {isProcessingExit ? 'Generating Draft FnF...' : 'Confirm Exit & Trigger FnF'}
                   </button>
                 </div>
                 {onOpenFnfGratuity && (
@@ -1040,7 +1183,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                     }}
                     className="w-full py-2 text-xs font-semibold text-blue-700 hover:text-blue-900 hover:bg-blue-50 rounded-xl transition-colors cursor-pointer"
                   >
-                    Open Full FnF &amp; Leave Encashment Sheet →
+                    Open Full FnF Deadline &amp; Settlement Workspace →
                   </button>
                 )}
               </div>

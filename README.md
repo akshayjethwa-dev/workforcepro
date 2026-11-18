@@ -18,3 +18,8 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Ku3_mTkLHXpfaXnJfiJjtj
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Cashfree Payments
+
+See [CASHFREE_SETUP.md](./CASHFREE_SETUP.md) for Firebase secrets, webhook
+registration, sandbox testing, and native platform setup.

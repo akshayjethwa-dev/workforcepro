@@ -26,3 +26,4 @@ functions/.env
 functions/.env.*
 .env
 .env.production
+.github/skills/cashfree-skills/

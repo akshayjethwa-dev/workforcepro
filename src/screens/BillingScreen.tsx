@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Check, X, ShieldCheck, ExternalLink, MessageCircle, Info, CreditCard, 
-  Building2, ArrowRight, Sparkles, AlertCircle, RefreshCw, Layers, Calendar, 
+import {
+  Check, X, ShieldCheck, Info, CreditCard,
+  Building2, ArrowRight, AlertCircle, RefreshCw, Layers, Calendar,
   Tag, HelpCircle, CheckCircle2 
 } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -11,10 +12,15 @@ import { planCatalogService } from '../services/planCatalogService';
 import { Plan, PlanVersion, Subscription, CATALOG_FEATURE_FLAGS } from '../types/planCatalog';
 import { employeeCapGuard, EmployeeCapStatus } from '../services/employeeCapGuard';
 import { dbService } from '../services/db';
-import { entitlementService } from '../services/entitlementService';
+import { db } from '../lib/firebase';
+import {
+  CashfreeOrder,
+  CashfreePaymentVerification,
+  cashfreePaymentService
+} from '../services/cashfreePaymentService';
 
 export const BillingScreen: React.FC = () => {
-  const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
+  const { user, profile, tenantPlan, trialDaysLeft, limits, refreshTenantData } = useAuth();
   const { toast } = useToast();
   const { branding } = useTheme();
 
@@ -30,6 +36,7 @@ export const BillingScreen: React.FC = () => {
     planCode: string;
     version: number;
     price: string;
+    baseAmount: number;
     interval: 'MONTHLY' | 'ANNUAL';
     gstRate: number;
   }>({
@@ -38,12 +45,19 @@ export const BillingScreen: React.FC = () => {
     planCode: '',
     version: 1,
     price: '',
+    baseAmount: 0,
     interval: 'ANNUAL',
     gstRate: 18
   });
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [isPaying, setIsPaying] = useState(false);
+  const [pendingCashfreeOrder, setPendingCashfreeOrder] = useState<CashfreeOrder | null>(null);
+  const [requiresPriceConfirmation, setRequiresPriceConfirmation] = useState(false);
+  const [returnOrderId, setReturnOrderId] = useState<string | null>(() =>
+    typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('order_id')
+  );
 
   const adminPhone = "918460852903"; 
-  const RAZORPAY_PAYMENT_LINK = "https://razorpay.me/@aapacapitalprivatelimited"; 
 
   const isResellerManaged = !!profile?.resellerId;
   const tenantId = profile?.tenantId || 'demo-tenant-1';
@@ -55,11 +69,19 @@ export const BillingScreen: React.FC = () => {
   const loadPricingData = async () => {
     try {
       setLoading(true);
-      const [plans, sub, cap] = await Promise.all([
+      const [plans, localSubscription, cap] = await Promise.all([
         planCatalogService.getPublicPlans(),
         planCatalogService.getTenantSubscription(tenantId),
         employeeCapGuard.getTenantCapStatus(tenantId)
       ]);
+      let sub = localSubscription;
+      if (!tenantId.startsWith('demo-')) {
+        const tenantSnapshot = await getDoc(doc(db, 'tenants', tenantId));
+        const remoteSubscription = tenantSnapshot.data()?.cashfreeSubscription;
+        if (remoteSubscription?.provider === 'CASHFREE' && remoteSubscription.status === 'ACTIVE') {
+          sub = remoteSubscription as Subscription;
+        }
+      }
       setPublicPlans(plans);
       setTenantSub(sub);
       setCapStatus(cap);
@@ -90,19 +112,24 @@ Current Plan: ${currentDisplayPlan}`;
   const enterpriseMsg = `Hi, I am interested in upgrading to the *Enterprise Custom Scale* plan for WorkForcePro. Could we discuss custom pricing, employee cap, and SLA terms?${orgDetails}`;
   const whatsappEnterpriseUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(enterpriseMsg)}`;
 
-  const paymentMsg = `Hi, I just processed payment of ₹${showPaymentModal.price} for the *${showPaymentModal.planName} Plan* (${showPaymentModal.interval}) via Razorpay. Here is my transaction receipt.${orgDetails}`;
-  const whatsappPaymentUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(paymentMsg)}`;
-
   const handleUpgradeClick = (plan: Plan, version: PlanVersion) => {
     const isQuote = version.monthlyPrice === null;
     if (isQuote) {
       window.open(whatsappEnterpriseUrl, '_blank');
       return;
     }
+    if ((plan.code !== 'GROWTH' && plan.code !== 'PRO') || version.version !== 1) {
+      const message = `Hi, I am interested in the ${plan.name} Plan (${plan.code}, v${version.version}) for WorkForcePro. Please help me with checkout.${orgDetails}`;
+      window.open(`https://wa.me/${adminPhone}?text=${encodeURIComponent(message)}`, '_blank');
+      return;
+    }
 
     const price = billingInterval === 'ANNUAL'
       ? (version.annualPrice !== null ? version.annualPrice.toLocaleString('en-IN') : (version.monthlyPrice! * 10).toLocaleString('en-IN'))
       : version.monthlyPrice!.toLocaleString('en-IN');
+    const baseAmount = billingInterval === 'ANNUAL'
+      ? (version.annualPrice !== null ? version.annualPrice : version.monthlyPrice! * 10)
+      : version.monthlyPrice!;
 
     setShowPaymentModal({
       show: true,
@@ -110,19 +137,26 @@ Current Plan: ${currentDisplayPlan}`;
       planCode: plan.code,
       version: version.version,
       price,
+      baseAmount,
       interval: billingInterval,
       gstRate: version.gstRate || 18
     });
+    setPendingCashfreeOrder(null);
+    setRequiresPriceConfirmation(false);
   };
 
-  const handleImmediateActivation = async (planCode: string, planVersion: number) => {
+  const handleFreePlanSelection = async () => {
+    if (profile?.role !== 'FACTORY_OWNER') {
+      toast.error('Only a factory owner can change the organization plan.');
+      return;
+    }
+
     try {
       setLoading(true);
-      await dbService.updateTenantPlan(tenantId, planCode as any);
-      await entitlementService.handlePlanUpgrade(tenantId, planCode as any);
+      await dbService.updateTenantPlan(tenantId, 'FREE');
       await planCatalogService.subscribeTenant(
         tenantId,
-        planCode,
+        'FREE',
         billingInterval,
         {
           uid: profile?.uid || 'user-admin',
@@ -130,8 +164,9 @@ Current Plan: ${currentDisplayPlan}`;
           role: profile?.role || 'FACTORY_OWNER'
         }
       );
-      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', interval: 'ANNUAL', gstRate: 18 });
-      toast.success(`Plan upgraded to ${planCode}! All features unlocked immediately.`);
+      await refreshTenantData();
+      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
+      toast.success('Switched to the Free Starter plan.');
       await loadPricingData();
     } catch (err: any) {
       toast.error(err.message || 'Failed to update plan');
@@ -139,6 +174,95 @@ Current Plan: ${currentDisplayPlan}`;
       setLoading(false);
     }
   };
+
+  const handleVerifiedPayment = async (verification: CashfreePaymentVerification) => {
+    if (verification.status === 'PAID' && verification.activated) {
+      await refreshTenantData();
+      await loadPricingData();
+      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
+      setPendingCashfreeOrder(null);
+      setRequiresPriceConfirmation(false);
+      toast.success(`Cashfree confirmed your ${verification.planCode || 'plan'} payment.`);
+      return;
+    }
+
+    if (verification.status === 'PAID_REVIEW_REQUIRED') {
+      toast.error('Payment was received, but plan activation needs support review. Please contact Aapa Capital.');
+      return;
+    }
+
+    toast.info('Payment is not confirmed yet. No plan changes were made; you can retry checkout.');
+  };
+
+  const handleCashfreeCheckout = async () => {
+    if (!user || user.uid.startsWith('demo-') || profile?.role !== 'FACTORY_OWNER') {
+      toast.error('Sign in as a factory owner to make a plan payment.');
+      return;
+    }
+
+    const normalizedPhone = customerPhone.replace(/\D/g, '');
+    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+      toast.error('Enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
+    setIsPaying(true);
+    try {
+      let order = pendingCashfreeOrder;
+      if (!order) {
+        order = await cashfreePaymentService.createOrder({
+          planCode: showPaymentModal.planCode,
+          planVersion: showPaymentModal.version,
+          billingInterval: showPaymentModal.interval,
+          customerPhone: normalizedPhone
+        });
+        setPendingCashfreeOrder(order);
+
+        const expectedGst = Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100;
+        const expectedTotal = Math.round((showPaymentModal.baseAmount + expectedGst) * 100) / 100;
+        if (Math.abs(order.totalAmount - expectedTotal) > 0.01) {
+          setRequiresPriceConfirmation(true);
+          return;
+        }
+      } else if (requiresPriceConfirmation) {
+        setRequiresPriceConfirmation(false);
+      }
+
+      const outcome = await cashfreePaymentService.openCheckout(order);
+      if (!outcome.redirected) {
+        await handleVerifiedPayment(outcome);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Could not start Cashfree checkout.');
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!returnOrderId || !user || user.uid.startsWith('demo-')) return;
+    let cancelled = false;
+
+    cashfreePaymentService.verifyOrder(returnOrderId)
+      .then(async (verification) => {
+        if (!cancelled) await handleVerifiedPayment(verification);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) toast.error(err.message || 'Could not verify the Cashfree payment.');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        const url = new URL(window.location.href);
+        url.searchParams.delete('order_id');
+        url.searchParams.delete('screen');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+        setReturnOrderId(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [returnOrderId, user?.uid]);
 
   // Check if tenant has a grandfathered price
   const isTenantGrandfathered = tenantSub && publicPlans.some(p => {
@@ -460,6 +584,8 @@ Current Plan: ${currentDisplayPlan}`;
 
                 const isQuote = currentVersion.monthlyPrice === null;
                 const isFree = currentVersion.monthlyPrice === 0;
+                const hasCashfreeCheckout =
+                  (plan.code === 'GROWTH' || plan.code === 'PRO') && currentVersion.version === 1;
 
                 const displayPrice = isQuote 
                   ? 'Custom' 
@@ -600,9 +726,10 @@ Current Plan: ${currentDisplayPlan}`;
                         </div>
                       ) : (
                         <button
+                                  disabled={profile?.role !== 'FACTORY_OWNER'}
                           onClick={() => {
                             if (isFree) {
-                              handleImmediateActivation('FREE', currentVersion.version);
+                                      handleFreePlanSelection();
                             } else {
                               handleUpgradeClick(plan, currentVersion);
                             }
@@ -611,9 +738,9 @@ Current Plan: ${currentDisplayPlan}`;
                             isPopular
                               ? 'bg-blue-600 text-white hover:bg-blue-700'
                               : 'bg-slate-900 text-white hover:bg-slate-800'
-                          }`}
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
-                          <span>{isQuote ? 'Contact for Quote' : isFree ? 'Select Free Starter' : `Upgrade to ${plan.name}`}</span>
+                          <span>{isQuote ? 'Contact for Quote' : isFree ? 'Select Free Starter' : hasCashfreeCheckout ? `Upgrade to ${plan.name}` : 'Contact to Purchase'}</span>
                           <ArrowRight size={14} />
                         </button>
                       )}
@@ -626,12 +753,16 @@ Current Plan: ${currentDisplayPlan}`;
         </div>
       )}
 
-      {/* RAZORPAY PAYMENT LINK MODAL */}
+      {/* CASHFREE CHECKOUT MODAL */}
       {showPaymentModal.show && !isResellerManaged && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
             <button 
-              onClick={() => setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', interval: 'ANNUAL', gstRate: 18 })} 
+              onClick={() => {
+                setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
+                setPendingCashfreeOrder(null);
+                setRequiresPriceConfirmation(false);
+              }}
               className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full text-gray-500 hover:bg-gray-200 transition-colors"
             >
               <X size={18} />
@@ -645,10 +776,20 @@ Current Plan: ${currentDisplayPlan}`;
               <p className="text-xs text-gray-500 mt-1">
                 Plan Code: <strong className="font-mono text-gray-800">{showPaymentModal.planCode}</strong> (v{showPaymentModal.version})
               </p>
-              <div className="mt-3 p-2 bg-slate-50 rounded-xl border border-slate-100 inline-block font-mono">
-                <span className="text-xs text-slate-500">Base Price: </span>
-                <span className="text-base font-extrabold text-slate-900">₹{showPaymentModal.price}</span>
-                <span className="text-xs text-slate-500"> + {showPaymentModal.gstRate}% GST</span>
+              <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-100 inline-block text-left font-mono">
+                <div className="text-xs text-slate-600">Base price: ₹{showPaymentModal.price}</div>
+                <div className="text-xs text-slate-600">
+                  GST ({pendingCashfreeOrder?.gstRate ?? showPaymentModal.gstRate}%): ₹{(
+                    pendingCashfreeOrder?.gstAmount ??
+                    Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100
+                  ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div className="mt-1 border-t border-slate-200 pt-1 text-sm font-extrabold text-slate-900">
+                  Total due: ₹{(
+                    pendingCashfreeOrder?.totalAmount ??
+                    showPaymentModal.baseAmount + Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100
+                  ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
               </div>
             </div>
 
@@ -660,46 +801,46 @@ Current Plan: ${currentDisplayPlan}`;
                 </p>
               </div>
 
-              {/* Step 1: Open Razorpay Link */}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
-                <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1.5">Step 1</p>
-                <p className="text-xs text-gray-700 mb-2">Pay securely online via UPI, Credit/Debit card, or NetBanking.</p>
-                <a 
-                  href={RAZORPAY_PAYMENT_LINK}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full bg-[#3395FF] hover:bg-[#2083ef] text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center transition-colors shadow-xs"
-                >
-                  Pay ₹{showPaymentModal.price} via Razorpay <ExternalLink size={13} className="ml-1.5" />
-                </a>
+              <label className="block text-xs font-semibold text-slate-700">
+                Mobile number for payment
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  value={customerPhone}
+                  onChange={(event) => setCustomerPhone(event.target.value)}
+                  placeholder="10-digit Indian mobile number"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+
+              {requiresPriceConfirmation && pendingCashfreeOrder && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                  The server-confirmed total is ₹{pendingCashfreeOrder.totalAmount.toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })}, which differs from the displayed catalog price. Review the amount above and confirm to continue.
+                </div>
+              )}
+
+              <div className="text-[11px] leading-relaxed text-slate-500">
+                Cashfree will securely collect this one-time plan payment. Payment must be verified by WorkForcePro before access changes; renewals are manual.
               </div>
 
-              {/* Step 2: Confirm on WhatsApp */}
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3">
-                <p className="text-xs text-green-700 font-bold uppercase tracking-wider mb-1.5">Step 2</p>
-                <p className="text-xs text-green-800 mb-2">Submit your payment receipt for official invoicing records.</p>
-                <a 
-                  href={whatsappPaymentUrl} 
-                  target="_blank" 
-                  rel="noreferrer"
-                  className="w-full bg-[#25D366] hover:bg-[#1ebd5a] text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center transition-colors shadow-xs"
-                >
-                  <MessageCircle size={15} className="mr-1.5" /> Submit Receipt on WhatsApp
-                </a>
-              </div>
-
-              {/* Step 3: Instant Mid-Period Activation */}
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                <p className="text-xs text-blue-700 font-bold uppercase tracking-wider mb-1.5">Instant Activation</p>
-                <p className="text-xs text-blue-800 mb-2.5">Confirm payment to immediately unlock all {showPaymentModal.planName} features without waiting for billing period end.</p>
-                <button
-                  onClick={() => handleImmediateActivation(showPaymentModal.planCode, showPaymentModal.version)}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-bold text-xs flex items-center justify-center transition-colors shadow-md shadow-blue-500/20"
-                >
-                  <Sparkles size={14} className="mr-1.5 text-amber-300" />
-                  <span>Confirm &amp; Unlock Features Now</span>
-                </button>
-              </div>
+              <button
+                onClick={handleCashfreeCheckout}
+                disabled={isPaying || profile?.role !== 'FACTORY_OWNER'}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md shadow-blue-500/20"
+              >
+                {isPaying ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    <span>Connecting to Cashfree...</span>
+                  </>
+                ) : (
+                  <span>{requiresPriceConfirmation ? 'Confirm amount and continue' : 'Continue with Cashfree'}</span>
+                )}
+              </button>
             </div>
           </div>
         </div>

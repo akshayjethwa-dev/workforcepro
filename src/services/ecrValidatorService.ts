@@ -570,7 +570,11 @@ export const ecrValidatorService = {
 
       // CHECK 5 (Edge Case 1): Employee resigned/exited without EPFO Exit (DOE) marked
       const isInactiveOrExited =
-        Boolean(isoExitDate) || w.status === 'INACTIVE' || w.isActive === false;
+        Boolean(isoExitDate) ||
+        w.status === 'INACTIVE' ||
+        w.status === 'RESIGNED' ||
+        w.status === 'TERMINATED' ||
+        w.isActive === false;
 
       if (isInactiveOrExited && !epfoExitMarked) {
         const exitedInPrevMonth = Boolean(exitMonth && exitMonth < month);
@@ -583,7 +587,7 @@ export const ecrValidatorService = {
             : 'EPFO Date of Exit (DOE) Pending',
           message: exitedInPrevMonth
             ? `Employee resigned/exited on ${isoExitDate} (prior month), but Date of Exit is not marked in EPFO portal. Next month ECR filings will fail validation until DOE is recorded.`
-            : `Employee is marked ${isoExitDate ? `exited (${isoExitDate})` : 'INACTIVE'}, but EPFO Date of Exit (DOE) has not been marked in Unified Portal.`,
+            : `Employee is marked ${isoExitDate ? `exited (${isoExitDate})` : w.status || 'INACTIVE'}, but EPFO Date of Exit (DOE) has not been marked in Unified Portal.`,
           remediationHint: 'Log into Unified Portal -> Member -> Mark Exit (DOE) with exit reason, then click "Mark DOE Done" below.',
           canMarkDoeDone: true,
         });

@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
+import { triggerAutomatedDraftFnf } from '../services/fnfService';
 import { Worker, ShiftConfig, Branch, OrgSettings, WorkerSkillCategory } from '../types/index';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
@@ -450,13 +451,34 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         { ignoreRevisionCutoff: true, orgSettings: settings || undefined }
       );
 
+      const nextStatus: Worker['status'] = formData.status || 'ACTIVE';
+      const isSeparated =
+        nextStatus === 'RESIGNED' ||
+        nextStatus === 'TERMINATED' ||
+        nextStatus === 'INACTIVE';
+      const resolvedExitDate =
+        isSeparated && !formData.dateOfExit
+          ? new Date().toISOString().split('T')[0]
+          : formData.dateOfExit || undefined;
+
       const workerData: any = {
         ...formData,
         state: finalAudit.state,
         tenantId: profile.tenantId,
         photoUrl: mainPhotoUrl, 
         faceDescriptor: descriptor, 
-        status: 'ACTIVE',
+        status: nextStatus,
+        isActive: !isSeparated,
+        ...(resolvedExitDate ? { dateOfExit: resolvedExitDate } : {}),
+        ...(nextStatus === 'RESIGNED'
+          ? { exitReason: 'RESIGNATION' }
+          : nextStatus === 'TERMINATED'
+          ? { exitReason: 'TERMINATION' }
+          : {}),
+        noticePeriodDays:
+          typeof formData.noticePeriodDays === 'number'
+            ? formData.noticePeriodDays
+            : Number(formData.noticePeriodDays || 30),
         isContractor: Boolean(formData.isContractor || formData.employmentType === 'CONTRACTOR'),
         ptExemptionStatus: formData.ptExempt ? 'PT_EXEMPT' : 'NONE',
         ptExemptionReason: formData.ptExempt ? 'MULTIPLE_EMPLOYER' : undefined,
@@ -503,7 +525,26 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       
       if (isEditing && initialData?.id) {
           await dbService.updateWorker(initialData.id, workerData);
-          toast.success(`Updated ${formData.name}'s profile`);
+          const wasNotSeparated =
+            initialData.status !== 'RESIGNED' && initialData.status !== 'TERMINATED';
+          if (
+            (nextStatus === 'RESIGNED' || nextStatus === 'TERMINATED') &&
+            wasNotSeparated
+          ) {
+            await triggerAutomatedDraftFnf({
+              tenantId: profile.tenantId,
+              worker: { ...initialData, ...workerData, id: initialData.id },
+              exitDate: resolvedExitDate || new Date().toISOString().split('T')[0],
+              exitReason: nextStatus === 'TERMINATED' ? 'TERMINATION' : 'RESIGNATION',
+              actorEmail: profile.email || 'admin@factory.in',
+              orgSettings: settings,
+            });
+            toast.success(
+              `${formData.name} marked ${nextStatus}. Draft FnF Statement generated with 2-working-day Sec 17(2) deadline.`
+            );
+          } else {
+            toast.success(`Updated ${formData.name}'s profile`);
+          }
       } else {
           await dbService.addWorker(workerData);
           toast.success(`Registered ${formData.name} successfully`);
@@ -735,6 +776,57 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                      ))}
                    </select>
                  </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase ml-1">Notice Period (Days)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono text-sm"
+                    value={formData.noticePeriodDays ?? (formData.category === 'Permanent' ? 30 : 15)}
+                    onChange={e => setFormData({...formData, noticePeriodDays: Math.max(0, parseInt(e.target.value) || 0)})}
+                  />
+                </div>
+                {isEditing && (
+                  <>
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 uppercase ml-1">Employment Status</label>
+                      <select
+                        className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold min-h-12"
+                        value={formData.status || 'ACTIVE'}
+                        onChange={e => {
+                          const s = e.target.value as Worker['status'];
+                          setFormData({
+                            ...formData,
+                            status: s,
+                            dateOfExit:
+                              (s === 'RESIGNED' || s === 'TERMINATED' || s === 'INACTIVE') && !formData.dateOfExit
+                                ? new Date().toISOString().split('T')[0]
+                                : formData.dateOfExit,
+                          });
+                        }}
+                      >
+                        <option value="ACTIVE">ACTIVE</option>
+                        <option value="RESIGNED">RESIGNED (Auto-Triggers FnF)</option>
+                        <option value="TERMINATED">TERMINATED (Auto-Triggers FnF)</option>
+                        <option value="INACTIVE">INACTIVE</option>
+                      </select>
+                    </div>
+                    {(formData.status === 'RESIGNED' || formData.status === 'TERMINATED' || formData.status === 'INACTIVE') && (
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase ml-1">Exit Date</label>
+                        <input
+                          type="date"
+                          className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono min-h-12"
+                          value={formData.dateOfExit || new Date().toISOString().split('T')[0]}
+                          onChange={e => setFormData({...formData, dateOfExit: e.target.value})}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="mt-4 pt-4 border-t border-gray-100">

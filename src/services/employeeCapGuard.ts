@@ -120,6 +120,8 @@ class EmployeeCapGuard {
   async getTenantCapStatus(tenantId: string): Promise<EmployeeCapStatus> {
     // 1. Resolve tenant plan and subscription
     const sub = await planCatalogService.getTenantSubscription(tenantId);
+    let remoteSubscription: any = null;
+    let billingCycleEndsAt: string | undefined;
     let planCode = sub?.planCode || 'FREE';
     
     // Fallback to tenant profile if no subscription found
@@ -129,18 +131,26 @@ class EmployeeCapGuard {
       if (tenant?.plan) {
         planCode = tenant.plan;
       }
+      if (tenant?.cashfreeSubscription?.provider === 'CASHFREE' &&
+          tenant.cashfreeSubscription.status === 'ACTIVE') {
+        remoteSubscription = tenant.cashfreeSubscription;
+        planCode = remoteSubscription.planCode || planCode;
+      }
+      billingCycleEndsAt = tenant?.billingCycleEndsAt;
     }
 
-    const plan = await planCatalogService.getPlanByCode(planCode);
+    const catalogPlanCode = planCode.toUpperCase() === 'STARTER' ? 'GROWTH' : planCode;
+    const plan = await planCatalogService.getPlanByCode(catalogPlanCode);
     const activeVersion = plan ? planCatalogService.getCurrentVersion(plan) : null;
+    const activeSubscription = sub || remoteSubscription;
 
     // Use locked price/cap from subscription if available, or current version
-    const cap = sub?.priceLockedAt.employeeCap !== undefined 
-      ? sub.priceLockedAt.employeeCap 
+    const cap = activeSubscription?.priceLockedAt?.employeeCap !== undefined
+      ? activeSubscription.priceLockedAt.employeeCap
       : (activeVersion?.employeeCap ?? 10);
 
-    const overageRate = sub?.priceLockedAt.overageRate !== undefined
-      ? (sub.priceLockedAt.overageRate ?? 0)
+    const overageRate = activeSubscription?.priceLockedAt?.overageRate !== undefined
+      ? (activeSubscription.priceLockedAt.overageRate ?? 0)
       : (activeVersion?.overageRate ?? 0);
 
     const softCapLimit = cap; // Cap threshold (100%)
@@ -176,8 +186,8 @@ class EmployeeCapGuard {
     }
 
     const now = new Date();
-    const periodStart = sub?.currentPeriodStart || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const periodEnd = sub?.currentPeriodEnd || new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
+    const periodStart = activeSubscription?.currentPeriodStart || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const periodEnd = activeSubscription?.currentPeriodEnd || billingCycleEndsAt || new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString();
 
     return {
       tenantId,

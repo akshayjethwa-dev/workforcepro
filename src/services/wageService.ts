@@ -483,7 +483,7 @@ export const wageService = {
     const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
     const regularNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
 
-    // Task 4: Full & Final (FnF) Gratuity Settlement Integration
+    // Task 4 & Automated FnF Trigger: Full & Final (FnF) Settlement Integration
     const savedFnf = getSyncFnfSettlementForWorkerMonth(worker.tenantId, worker.id, month);
     const isExitInMonth = Boolean(exitDate && exitDate.startsWith(month));
     let gratuitySettlement = 0;
@@ -503,6 +503,7 @@ export const wageService = {
         isFnF: true,
         exitDate: effectiveExitDate,
         exitReason: savedFnf?.exitReason || gCalc.exitReason || 'RESIGNATION',
+        separationStatus: savedFnf?.separationStatus,
         deathInService: gCalc.deathInService,
         gratuityPayable: gratuitySettlement,
         roundedYears: gCalc.effectiveYearsForFormula,
@@ -511,6 +512,23 @@ export const wageService = {
         nomineeRelation: savedFnf?.nomineeRelation || gCalc.nomineeRelation,
         ceilingApplied: gCalc.ceilingApplied,
         fnfRecordId: savedFnf?.id,
+        pendingSalaryDays: savedFnf?.pendingSalaryDays,
+        pendingWagesEarned: savedFnf?.pendingWagesEarned,
+        leaveEncashmentDays: savedFnf?.leaveEncashmentDays,
+        leaveEncashmentAmount: savedFnf?.leaveEncashmentAmount,
+        noticePeriodRequiredDays: savedFnf?.noticePeriodRequiredDays,
+        noticePeriodServedDays: savedFnf?.noticePeriodServedDays,
+        noticeShortfallDays: savedFnf?.noticeShortfallDays,
+        noticePayDailyRate: savedFnf?.noticePayDailyRate,
+        noticePayRecovery: savedFnf?.noticePayRecovery,
+        noticePayWaived: savedFnf?.noticePayWaived,
+        advanceAndEwaRecovery: savedFnf?.advanceAndEwaRecovery,
+        statutoryDeductions: savedFnf?.statutoryDeductions,
+        wageDeadlineAt: savedFnf?.deadlineTracking?.effectiveDeadlineAt,
+        gratuityDeadlineAt: savedFnf?.deadlineTracking?.gratuityDeadlineAt,
+        legalHoldActive: Boolean(savedFnf?.legalHold?.active || savedFnf?.status === 'LEGAL_HOLD'),
+        legalHoldReason: savedFnf?.legalHold?.reason,
+        wageFnfNetPayable: savedFnf?.fnfWageNetPayable,
       };
     }
 

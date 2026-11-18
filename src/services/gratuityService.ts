@@ -522,6 +522,9 @@ export function buildFnfSettlementPreview(params: {
   nomineeName?: string;
   nomineeRelation?: string;
   leaveEncashmentDays?: number;
+  noticePeriodRequiredDays?: number;
+  noticePeriodServedDays?: number;
+  noticePayWaived?: boolean;
   monthlyPayrollForExitMonth?: MonthlyPayroll;
   attendanceRecords?: AttendanceRecord[];
   advances?: Advance[];
@@ -545,40 +548,116 @@ export function buildFnfSettlementPreview(params: {
   });
 
   const payroll = params.monthlyPayrollForExitMonth;
-  const pendingSalaryDays = payroll?.attendanceSummary.payableDays ?? 0;
-  const pendingWagesEarned = payroll ? round2(payroll.earnings.gross) : 0;
+  let pendingSalaryDays = payroll?.attendanceSummary.payableDays ?? 0;
+  let pendingWagesEarned = payroll ? round2(payroll.earnings.gross) : 0;
 
-  const leaveDays = Math.max(0, Number(params.leaveEncashmentDays || 0));
+  const attendanceInExitMonth = (params.attendanceRecords || []).filter(
+    (a) => a.workerId === params.worker.id && a.date.startsWith(exitMonth) && a.date <= exitDateIso
+  );
+  if (attendanceInExitMonth.length === 0 && pendingWagesEarned <= 0) {
+    const [yr, mo, dy] = exitDateIso.split('-').map(Number);
+    const daysInMonth = new Date(yr, mo, 0).getDate();
+    const monthlyGross =
+      params.worker.monthlySalary ||
+      (params.worker.wageConfig?.type === 'MONTHLY'
+        ? params.worker.wageConfig.amount
+        : (params.worker.dailyWage || params.worker.wageConfig?.amount || 650) * 26);
+    pendingSalaryDays = Math.max(1, dy);
+    pendingWagesEarned = Math.round((monthlyGross / Math.max(1, daysInMonth)) * pendingSalaryDays);
+  }
+
+  const leaveDays = Math.max(
+    0,
+    Number(
+      params.leaveEncashmentDays ??
+        params.worker.leaveBalances?.pl ??
+        params.orgSettings?.leavePolicy?.pl ??
+        0
+    )
+  );
   const dailyBasicDaRate = gratuityCalc.lastDrawnBasicPlusDa / 26;
   const leaveEncashmentAmount = Math.round(dailyBasicDaRate * leaveDays);
 
-  const advanceAndEwaRecovery = payroll
-    ? round2(payroll.deductions.advances)
-    : round2(
-        (params.advances || [])
-          .filter(
-            (a) =>
-              a.workerId === params.worker.id &&
-              a.date.startsWith(exitMonth) &&
-              a.status === 'APPROVED' &&
-              !a.repaid
-          )
-          .reduce((sum, a) => sum + a.amount, 0)
-      );
+  const defaultNoticeRequired =
+    params.exitReason === 'RESIGNATION'
+      ? params.worker.noticePeriodDays ?? (params.worker.category === 'Permanent' ? 30 : 15)
+      : 0;
+  const noticePeriodRequiredDays = Math.max(
+    0,
+    Number(params.noticePeriodRequiredDays ?? defaultNoticeRequired)
+  );
+  const noticePeriodServedDays = Math.min(
+    noticePeriodRequiredDays,
+    Math.max(0, Number(params.noticePeriodServedDays ?? 0))
+  );
+  const noticeShortfallDays = Math.max(0, noticePeriodRequiredDays - noticePeriodServedDays);
+  const noticePayWaived = Boolean(params.noticePayWaived);
+  const monthlyEqGross =
+    params.worker.monthlySalary ||
+    (params.worker.wageConfig?.type === 'MONTHLY'
+      ? params.worker.wageConfig.amount
+      : (params.worker.dailyWage || params.worker.wageConfig?.amount || 650) * 26);
+  const noticePayDailyRate = round2(monthlyEqGross / 26);
+  const noticePayRecovery =
+    noticePayWaived || noticeShortfallDays === 0
+      ? 0
+      : round2(noticeShortfallDays * noticePayDailyRate);
+
+  const unpaidAdvancesTotal = round2(
+    (params.advances || [])
+      .filter(
+        (a) =>
+          a.workerId === params.worker.id &&
+          !a.repaid &&
+          (a.status === 'APPROVED' || !a.status) &&
+          a.date <= exitDateIso
+      )
+      .reduce((sum, a) => sum + a.amount, 0)
+  );
+  const advanceAndEwaRecovery = Math.max(
+    unpaidAdvancesTotal,
+    payroll ? round2(payroll.deductions.advances) : 0
+  );
 
   const statutoryDeductions = payroll?.statutory
     ? round2(payroll.statutory.totalEmployeeStatutory)
     : 0;
 
   const gratuityPayable = gratuityCalc.payableGratuityAmount;
-  const grossFnfPayable = round2(pendingWagesEarned + leaveEncashmentAmount + gratuityPayable);
-  const netFnfPayable = Math.max(
-    0,
-    round2(grossFnfPayable - advanceAndEwaRecovery - statutoryDeductions)
+  const rawWageNet = round2(
+    pendingWagesEarned +
+      leaveEncashmentAmount -
+      noticePayRecovery -
+      advanceAndEwaRecovery -
+      statutoryDeductions
   );
+  const fnfWageNetPayable = Math.max(0, rawWageNet);
+  const excessRecoveryCarryover = rawWageNet < 0 ? round2(Math.abs(rawWageNet)) : 0;
+  const grossFnfPayable = round2(pendingWagesEarned + leaveEncashmentAmount + gratuityPayable);
+  const netFnfPayable = round2(fnfWageNetPayable + gratuityPayable);
+
+  // Compute 2-working-day deadline (skipping org weeklyOffs & holidays)
+  const [ey, em, ed] = exitDateIso.split('-').map(Number);
+  const deadlineCursor = new Date(ey, em - 1, ed, 23, 59, 59, 999);
+  const offDays = params.orgSettings?.weeklyOffs?.defaultDays?.length
+    ? params.orgSettings.weeklyOffs.defaultDays
+    : [0];
+  let rem = 2;
+  let guard = 0;
+  while (rem > 0 && guard < 30) {
+    deadlineCursor.setDate(deadlineCursor.getDate() + 1);
+    const iso = `${deadlineCursor.getFullYear()}-${String(deadlineCursor.getMonth() + 1).padStart(2, '0')}-${String(deadlineCursor.getDate()).padStart(2, '0')}`;
+    const isHol = params.orgSettings?.holidays?.some((h) => h.date === iso);
+    const isOff = offDays.includes(deadlineCursor.getDay());
+    if (!isHol && !isOff) rem--;
+    guard++;
+  }
+  const baseDeadlineAt = deadlineCursor.toISOString();
+  const gratuityDeadlineAt = new Date(ey, em - 1, ed + 30, 23, 59, 59, 999).toISOString();
+  const fnfId = `fnf_${params.worker.id}_${exitDateIso}`;
 
   return {
-    id: `fnf_${params.worker.id}_${exitDateIso}`,
+    id: fnfId,
     tenantId: params.tenantId,
     workerId: params.worker.id,
     workerName: params.worker.name,
@@ -586,6 +665,15 @@ export function buildFnfSettlementPreview(params: {
     department: params.worker.department || 'General',
     exitDate: exitDateIso,
     exitReason: params.exitReason,
+    separationStatus:
+      params.exitReason === 'TERMINATION'
+        ? 'TERMINATED'
+        : params.exitReason === 'RESIGNATION'
+        ? 'RESIGNED'
+        : params.exitReason === 'RETIREMENT'
+        ? 'RETIRED'
+        : params.exitReason,
+    triggeredAt: new Date().toISOString(),
     deathInService,
     nomineeName: params.nomineeName || params.worker.nomineeName,
     nomineeRelation: params.nomineeRelation || params.worker.nomineeRelation,
@@ -594,15 +682,56 @@ export function buildFnfSettlementPreview(params: {
     pendingWagesEarned,
     leaveEncashmentDays: leaveDays,
     leaveEncashmentAmount,
+    noticePeriodRequiredDays,
+    noticePeriodServedDays,
+    noticeShortfallDays,
+    noticePayDailyRate,
+    noticePayRecovery,
+    noticePayWaived,
+    noticeRecoveryFormula:
+      noticeShortfallDays > 0
+        ? noticePayWaived
+          ? `Waived (${noticeShortfallDays}d shortfall)`
+          : `${noticeShortfallDays}d × ₹${noticePayDailyRate.toLocaleString('en-IN')}/day = ₹${noticePayRecovery.toLocaleString('en-IN')}`
+        : 'No notice shortfall',
     gratuityCalculation: gratuityCalc,
     gratuityPayable,
     advanceAndEwaRecovery,
     statutoryDeductions,
     grossFnfPayable,
+    fnfWageNetPayable,
+    excessRecoveryCarryover,
     netFnfPayable,
     status: 'DRAFT',
     notes: params.notes,
     createdAt: new Date().toISOString(),
+    deadlineTracking: {
+      workingDaysLimit: 2,
+      baseDeadlineAt,
+      effectiveDeadlineAt: baseDeadlineAt,
+      totalPausedMs: 0,
+      isPaused: false,
+      gratuityDeadlineAt,
+      interestRateAnnualPct: 12,
+    },
+    paymentSchedules: {
+      wageFnf: {
+        id: `${fnfId}_sched_wage`,
+        label: 'Schedule A · Wage & Leave FnF Settlement',
+        legalBasis: 'Sec 17(2), Code on Wages (2 Working Days)',
+        amount: fnfWageNetPayable,
+        dueAt: baseDeadlineAt,
+        status: 'PENDING',
+      },
+      gratuity: {
+        id: `${fnfId}_sched_gratuity`,
+        label: 'Schedule B · Statutory Gratuity Settlement',
+        legalBasis: 'Sec 7(3), Payment of Gratuity Act (30 Calendar Days)',
+        amount: gratuityPayable,
+        dueAt: gratuityDeadlineAt,
+        status: gratuityPayable > 0 ? 'PENDING' : 'NOT_APPLICABLE',
+      },
+    },
   };
 }
 
@@ -634,7 +763,10 @@ export function getSyncFnfSettlementForWorkerMonth(
     (rec) =>
       rec.workerId === workerId &&
       rec.exitDate.startsWith(month) &&
-      (rec.status === 'APPROVED' || rec.status === 'SETTLED' || rec.status === 'DRAFT')
+      (rec.status === 'APPROVED' ||
+        rec.status === 'SETTLED' ||
+        rec.status === 'DRAFT' ||
+        rec.status === 'LEGAL_HOLD')
   );
   return match || null;
 }
