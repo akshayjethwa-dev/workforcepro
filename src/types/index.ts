@@ -156,6 +156,9 @@ export interface ShiftConfig {
 export interface Branch {
   id: string;
   name: string;
+  state?: string;
+  wageZone?: string;
+  scheduledEmployment?: ScheduledEmploymentCategory | string;
   location?: { lat: number; lng: number; radius: number; address?: string };
   autoPunchEnabled?: boolean;
   dwellTimeMinutes?: number; // default 2 minutes
@@ -196,9 +199,21 @@ export interface OrgSettings {
     dailyWagePfPercentage?: number; 
     pfContributionRate?: number; 
     epsContributionRate?: number; 
-    epfWageCeiling?: number; 
+    epfWageCeiling?: number;
+    epfNotificationCeiling?: number; // Statutory EPFO ceiling notification (₹25,000)
+    enforceEcrPreValidation?: boolean;
     esiEnabled?: boolean;
     esiWageCeiling?: number;
+    unionizedCba?: {
+      hasActiveCba: boolean;
+      unionName?: string;
+      agreementRef?: string;
+      prohibitsUnilateralRestructure: boolean;
+      lastReviewedAt?: string;
+      notes?: string;
+    };
+    minimumWageRevisions?: MinimumWageRevisionRule[];
+    ptLwfConfig?: PtLwfOrgConfig;
   };
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
@@ -311,15 +326,216 @@ export interface Punch {
   isOlderDeviceFallback?: boolean;
 }
 
+export type WageComplianceStatus = 'COMPLIANT' | 'NON_COMPLIANT';
+export type WageComplianceFlag = 'NON_COMPLIANT' | 'MINIMUM_WAGE_VIOLATION';
+export type WorkerSkillCategory = 'UNSKILLED' | 'SEMI_SKILLED' | 'SKILLED' | 'HIGHLY_SKILLED';
+export type ScheduledEmploymentCategory =
+  | 'Engineering & Manufacturing'
+  | 'Textiles & Garments'
+  | 'Construction & Infrastructure'
+  | 'Shops & Commercial Establishments'
+  | 'Logistics & Warehousing'
+  | 'Food & Beverages';
+
+export interface MinimumWageRevisionRule {
+  id: string;
+  state: string;
+  zone: string;
+  scheduledEmployment?: ScheduledEmploymentCategory | string;
+  skillCategory: WorkerSkillCategory;
+  effectiveDate: string; // YYYY-MM-DD (mid-month revision effective date)
+  previousMonthlyFloor: number;
+  revisedMonthlyFloor: number;
+  notificationDate: string; // YYYY-MM-DD
+  notificationRef: string;
+}
+
+export interface MidMonthMinWageRevisionInfo {
+  isRevisedInMonth: boolean;
+  revisionDate: string;
+  previousMonthlyFloor: number;
+  revisedMonthlyFloor: number;
+  daysAtPreviousRate: number;
+  daysAtRevisedRate: number;
+  totalDaysInMonth: number;
+  proratedMonthlyFloor: number;
+}
+
+export type PtExemptionStatus = 'NONE' | 'PT_EXEMPT';
+export type PtExemptionReason =
+  | 'PREVIOUS_EMPLOYER_DECLARATION'
+  | 'MULTIPLE_EMPLOYER'
+  | 'STATUTORY_EXEMPT'
+  | 'OTHER';
+
+export type LwfSkippedReason =
+  | 'NON_DEDUCTION_MONTH'
+  | 'CONTRACTOR_EXCLUDED'
+  | 'STATE_NO_LWF'
+  | 'DISABLED_IN_SETTINGS'
+  | 'WAGE_CEILING_EXCEEDED'
+  | 'BELOW_WAGE_THRESHOLD';
+
+export type LwfWageCeilingMode = 'NONE' | 'EXEMPT_ABOVE' | 'EXEMPT_BELOW';
+
+export interface StateLwfConfigOverride {
+  enabled?: boolean;
+  cycle?: 'MONTHLY' | 'HALF_YEARLY' | 'ANNUAL' | 'NONE';
+  employeeAmount?: number;
+  employerAmount?: number;
+  employeePercentageRate?: number | null;
+  months?: number[]; // e.g. [6, 12] for June & December
+  excludeContractors?: boolean;
+  wageCeiling?: number | null;
+  wageCeilingMode?: LwfWageCeilingMode;
+}
+
+export interface LwfTransferSplitBreakdown {
+  isMidYearTransfer: boolean;
+  transferEffectiveDate: string;
+  previousState: string;
+  currentState: string;
+  previousStateCycle: 'MONTHLY' | 'HALF_YEARLY' | 'ANNUAL' | 'NONE';
+  currentStateCycle: 'MONTHLY' | 'HALF_YEARLY' | 'ANNUAL' | 'NONE';
+  monthsWorkedInPreviousState: number;
+  monthsWorkedInCurrentState: number;
+  previousStateCycleMonths: number;
+  currentStateCycleMonths: number;
+  previousStateEmployeeLwf: number;
+  previousStateEmployerLwf: number;
+  currentStateEmployeeLwf: number;
+  currentStateEmployerLwf: number;
+  totalEmployeeLwf: number;
+  totalEmployerLwf: number;
+  splitSummary: string;
+}
+
+export interface PtLwfOrgConfig {
+  gujaratPtFeb300Adjustment?: boolean; // default true: ₹300 in February to reach ₹2,500 annual cap
+  maharashtraPtFeb300Adjustment?: boolean; // default true
+  ptMidMonthProrationEnabled?: boolean; // default true
+  lwfOverrides?: Record<string, StateLwfConfigOverride>;
+}
+
+export interface WageBreakdownComponents {
+  basic: number;
+  da?: number;
+  retainingAllowance?: number;
+  hra: number;
+  travel?: number;
+  medical?: number;
+  others: number;
+  employerPf?: number;
+  employerGratuity?: number;
+}
+
+export interface WageStructureAuditResult {
+  workerId?: string;
+  workerName?: string;
+  workerCategory?: string;
+  wageType: 'DAILY' | 'MONTHLY';
+  dailyMultiplier?: 26 | 30;
+  state: string;
+  skillCategory: WorkerSkillCategory;
+  evaluationDate: string;
+  effectiveRevisionDate?: string;
+  revisionApplied: boolean;
+
+  // Core 50% Rule Components (Monthly Equivalents for Daily Wage)
+  basicPay: number;
+  da: number;
+  retainingAllowance: number;
+  wageBase: number; // Basic Pay + DA + Retaining Allowance
+
+  hra: number;
+  travelAllowance: number;
+  medicalAllowance: number;
+  otherAllowances: number;
+  excludedComponents: number; // HRA + Travel + Medical + Other Allowances
+
+  // Employer Contributions (Explicitly excluded from Total Remuneration denominator)
+  employerPf: number;
+  employerGratuity: number;
+  employerContributionsExcluded: number;
+
+  // Denominators & Thresholds
+  totalRemuneration: number; // WageBase + ExcludedComponents (50% Rule Denominator)
+  totalCtcWithEmployer: number; // TotalRemuneration + EmployerContributions
+  fiftyPercentThreshold: number; // totalRemuneration * 0.50
+
+  wageBasePercentage: number;
+  excludedPercentage: number;
+
+  // 50% Rule Verdict
+  isFiftyPercentNonCompliant: boolean;
+  status: WageComplianceStatus;
+  gapAmount: number; // ExcludedComponents - (TotalRemuneration * 0.50), or 0
+  deemedWageAddBack: number;
+  compliantWageBase?: number; // WageBase + deemedWageAddBack
+  estimatedAdditionalPfMonthly: number;
+  estimatedAdditionalGratuityMonthly: number;
+  estimatedAdditionalGratuityAnnual?: number;
+  warningMessage?: string;
+
+  // State Minimum Wage Check
+  wageZone: string;
+  scheduledEmployment: string;
+  minimumWageNotificationDate: string;
+  minimumWageNotificationRef: string;
+  workLocationSource: 'WORKER_LOCATION' | 'BRANCH_LOCATION' | 'HEAD_OFFICE_FALLBACK';
+  isOnProbation: boolean;
+  probationExemptionBlockedNote?: string;
+  midMonthRevisionInfo?: MidMonthMinWageRevisionInfo;
+  statutoryMinimumWageMonthly: number;
+  statutoryMinimumWageDaily: number;
+  isMinimumWageViolation: boolean;
+  minimumWageGap: number;
+  minimumWageWarning?: string;
+  blockingErrorCode?: 'MINIMUM_WAGE_VIOLATION';
+
+  complianceFlags: WageComplianceFlag[];
+  hasAnyViolation: boolean;
+  verificationSource?: 'CLOUD_FUNCTION' | 'CLIENT_ENGINE';
+}
+
+export interface SalaryStructureAuditReport {
+  tenantId: string;
+  auditedAt: string;
+  asOfDate: string;
+  verificationSource: 'CLOUD_FUNCTION' | 'CLIENT_ENGINE';
+  totalWorkersAudited: number;
+  compliantCount: number;
+  nonCompliantCount: number;
+  minimumWageViolationCount: number;
+  totalComplianceGapMonthly: number;
+  estimatedExtraStatutoryLiabilityMonthly: number;
+  results: WageStructureAuditResult[];
+}
+
+export interface PayrollServerValidationResult {
+  tenantId: string;
+  month: string;
+  validatedAt: string;
+  verificationSource: 'CLOUD_FUNCTION' | 'CLIENT_ENGINE';
+  hasFlaggedWorkers: boolean;
+  isPayrollBlocked?: boolean;
+  blockingErrorCode?: 'MINIMUM_WAGE_VIOLATION';
+  blockingReason?: string;
+  nonCompliantCount: number;
+  minimumWageViolationCount: number;
+  totalGapAmount: number;
+  flaggedWorkers: WageStructureAuditResult[];
+  blockingMinimumWageWorkers?: WageStructureAuditResult[];
+  allResults: WageStructureAuditResult[];
+}
+
 export interface WageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
   basicPercentage?: number; 
-  monthlyBreakdown?: {
-    basic: number;
-    hra: number;
-    others: number;
-  };
+  dailyMultiplier?: 26 | 30;
+  monthlyBreakdown?: WageBreakdownComponents;
+  dailyBreakdown?: WageBreakdownComponents;
   overtimeEligible: boolean;
   overtimeRatePerHour?: number;
   workingDaysPerMonth?: number;
@@ -328,6 +544,10 @@ export interface WageConfig {
     food: number;
     nightShift: number;
   };
+  complianceStatus?: WageComplianceStatus;
+  complianceFlags?: WageComplianceFlag[];
+  wageAuditSummary?: WageStructureAuditResult;
+  acknowledgedNonCompliant?: boolean;
 }
 
 export interface Worker {
@@ -372,6 +592,9 @@ export interface Worker {
   updatedAt?: string;
   // India Statutory Compliance Extensions
   state?: string;
+  wageZone?: string;
+  scheduledEmployment?: ScheduledEmploymentCategory | string;
+  workLocationAddress?: string;
   stateEffectiveDate?: string;
   previousState?: string;
   taxRegime?: 'NEW' | 'OLD';
@@ -381,10 +604,48 @@ export interface Worker {
   esiOptOut?: boolean;
   salaryRevisionDate?: string;
   previousWageAmount?: number;
+  previousWageConfig?: WageConfig;
+  skillCategory?: WorkerSkillCategory;
+  isOnProbation?: boolean;
+  probationEndDate?: string;
   // Shared-Device Quick Switch (PIN/QR)
   kioskPin?: string; // 4-6 digit quick switch PIN unique per tenant
   pinLockedUntil?: string; // ISO date string if in cooldown
   pinFailedAttempts?: number;
+  // Task 4: Gratuity, Tenure, Subsidiary Transfer, Nominee & Exit Metadata
+  employmentType?: 'PERMANENT' | 'FIXED_TERM' | 'CONTRACT' | 'CONTRACTOR' | 'DAILY_WAGE';
+  isContractor?: boolean;
+  contractDurationMonths?: number;
+  // Task 7: PT Exemption (Multiple Employers / Declaration)
+  ptExempt?: boolean;
+  ptExemptionStatus?: PtExemptionStatus;
+  ptExemptionReason?: PtExemptionReason;
+  ptPreviousEmployerDeclaration?: {
+    declared: boolean;
+    previousEmployerName?: string;
+    certificateRef?: string;
+    declaredDate?: string;
+  };
+  exitReason?: GratuityExitReason;
+  deathInService?: boolean;
+  nomineeName?: string;
+  nomineeRelation?: string;
+  nomineePhone?: string;
+  subsidiaryTransfer?: {
+    transferredFromSubsidiary: boolean;
+    subsidiaryName?: string;
+    previousJoiningDate?: string;
+    transferDate?: string;
+    noBreakInService: boolean;
+  };
+  // Task 8: EPFO UAN, KYC & Pre-Upload ECR Master Metadata
+  epfoUanStatus?: EpfoUanStatus;
+  epfoRegisteredName?: string;
+  epfoNameOverrideApproved?: boolean;
+  epfoNameChangeLegalRef?: string;
+  epfoKyc?: EpfoKycStatus;
+  epfoExitMarked?: boolean;
+  epfoExitMarkedDate?: string;
 }
 
 export interface TimeRecord {
@@ -483,14 +744,20 @@ export interface StatutoryCalculationTrace {
   esiCalculation: string;
   ptRuleApplied: string;
   ptCalculation: string;
+  lwfRuleApplied?: string;
+  lwfCalculation?: string;
   tdsRuleApplied: string;
   tdsCalculation: string;
   employerLiabilitySummary: string;
+  excessAllowanceAddBackSummary?: string;
   sourceValues: {
     basic: number;
     gross: number;
     overtime: number;
     allowances: number;
+    originalWageBase?: number;
+    notionalWageAddition?: number;
+    compliantWageBase?: number;
     pfQualifyingWages: number;
     esiQualifyingWages: number;
     state: string;
@@ -499,7 +766,74 @@ export interface StatutoryCalculationTrace {
     annualProjectedGross: number;
     totalExemptions: number;
     taxableIncome: number;
+    isPtExempt?: boolean;
+    isPtProrated?: boolean;
+    ptDaysWorked?: number;
+    ptTotalDaysInMonth?: number;
+    isContractor?: boolean;
+    lwfApplicableMonth?: boolean;
+    lwfWorkLocationSource?: 'WORKER_LOCATION' | 'BRANCH_LOCATION' | 'HEAD_OFFICE_FALLBACK';
+    lwfWageCeiling?: number;
+    monthNumber?: number;
   };
+}
+
+export interface GratuityImpactProjection {
+  applicable: boolean;
+  originalMonthlyAccrual: number;
+  recalculatedMonthlyAccrual: number;
+  monthlyIncrease: number;
+  annualIncrease: number;
+  reason?: string;
+}
+
+export interface WageComplianceAudit {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  payrollMonth: string; // YYYY-MM
+  auditedAt: string;
+  labourCodeEffectiveDate: string; // '2025-11-21'
+  isLabourCodeEffective: boolean;
+  isRetrospectivePeriod: boolean;
+  retrospectiveWarning?: string;
+  complianceStatus: WageComplianceStatus;
+  addBackApplied: boolean;
+
+  // Component breakdown for the payroll run
+  basicPay: number;
+  da: number;
+  retainingAllowance: number;
+  originalWageBase: number;
+  excludedComponents: number;
+  totalRemunerationForRule: number;
+  fiftyPercentThreshold: number;
+  rawExcessAllowance: number; // Excluded - (0.50 * TotalRemuneration), can be <= 0
+  notionalWageAddition: number; // max(0, rawExcessAllowance)
+  recalculatedWageBase: number; // CompliantWageBase
+
+  // PF & ESI Wage Bases & Contribution Deltas
+  originalPfWageBase: number;
+  recalculatedPfWageBase: number;
+  originalEsiWageBase: number;
+  recalculatedEsiWageBase: number;
+  originalEmployeePf: number;
+  recalculatedEmployeePf: number;
+  pfDeltaEmployee: number;
+  originalEmployerPf: number;
+  recalculatedEmployerPf: number;
+  pfDeltaEmployer: number;
+  originalEmployeeEsi: number;
+  recalculatedEmployeeEsi: number;
+  esiDeltaEmployee: number;
+  originalEmployerEsi: number;
+  recalculatedEmployerEsi: number;
+  esiDeltaEmployer: number;
+
+  // Gratuity Impact Projection
+  gratuityImpact: GratuityImpactProjection;
+  formulaText: string;
 }
 
 export interface StatutoryBreakdown {
@@ -507,6 +841,7 @@ export interface StatutoryBreakdown {
   employeePf: number;
   employeeEsi: number;
   professionalTax: number;
+  employeeLwf: number;
   tds: number;
   totalEmployeeStatutory: number;
 
@@ -517,15 +852,47 @@ export interface StatutoryBreakdown {
   employerAdminCharges: number;
   totalEmployerPf: number;
   employerEsi: number;
+  employerLwf: number;
   totalEmployerStatutory: number;
 
   // Wage Bases & Attributes
   pfWageBase: number;
   esiWageBase: number;
+  originalPfWageBase?: number;
+  originalEsiWageBase?: number;
+  notionalWageAddition?: number;
+  compliantWageBase?: number;
+  originalWageBase?: number;
+  isLabourCodeEffective?: boolean;
+  isRetrospectivePeriod?: boolean;
+  retrospectiveWarning?: string;
+  gratuityImpact?: GratuityImpactProjection;
   ptGrossBase: number;
   annualTaxableIncome: number;
   taxRegime: 'NEW' | 'OLD';
   state: string;
+
+  // PT & LWF Audit Metadata
+  isPtExempt?: boolean;
+  ptExemptionStatus?: PtExemptionStatus;
+  ptExemptionNote?: string;
+  ptFebruaryAdjustmentApplied?: boolean;
+  ptProratedInfo?: {
+    isProrated: boolean;
+    fullMonthPt: number;
+    proratedPt: number;
+    daysWorked: number;
+    totalDaysInMonth: number;
+    joiningDate?: string;
+  };
+  isLwfApplicableMonth?: boolean;
+  lwfCycleLabel?: string;
+  lwfSkippedReason?: LwfSkippedReason;
+  isContractorExcludedFromLwf?: boolean;
+  lwfWorkLocationSource?: 'WORKER_LOCATION' | 'BRANCH_LOCATION' | 'HEAD_OFFICE_FALLBACK';
+  lwfWageCeilingApplied?: number;
+  lwfWageCeilingMode?: LwfWageCeilingMode;
+  lwfTransferSplit?: LwfTransferSplitBreakdown;
 
   // Audit Flags & Notes
   esiDroppedNote?: string;
@@ -603,6 +970,23 @@ export interface MonthlyPayroll {
   };
   statutory?: StatutoryBreakdown;
   employerCostToCompany?: number;
+  notionalWageAddition?: number;
+  wageStructureAudit?: WageStructureAuditResult;
+  wageComplianceAudit?: WageComplianceAudit;
+  gratuitySettlement?: number;
+  fnfSummary?: {
+    isFnF: boolean;
+    exitDate: string;
+    exitReason?: GratuityExitReason;
+    deathInService?: boolean;
+    gratuityPayable: number;
+    roundedYears: number;
+    lastDrawnBasicPlusDa: number;
+    nomineeName?: string;
+    nomineeRelation?: string;
+    ceilingApplied: boolean;
+    fnfRecordId?: string;
+  };
   netPayable: number;
   carriedForwardAdvance?: number;
   status: 'DRAFT' | 'LOCKED' | 'PAID';
@@ -728,7 +1112,7 @@ export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX' | 'ROSTER';
+export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX' | 'ROSTER' | 'CTC_SIMULATOR' | 'GRATUITY' | 'ANNUAL_BONUS' | 'POSH_ICC';
 
 export interface PunchConflict {
   id: string;
@@ -871,7 +1255,7 @@ export interface InboxAuditEntry {
 // MANAGER-INITIATED MAGIC LINK (SCOPED TOKENS)
 // ==========================================
 
-export type MagicLinkScope = 'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY' | 'PUNCH' | 'punch';
+export type MagicLinkScope = 'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY' | 'PUNCH' | 'punch' | 'SALARY_RESTRUCTURE' | 'POSH_COMPLAINT';
 export type MagicLinkChannel = 'WHATSAPP' | 'SMS' | 'COPY_LINK';
 
 export interface DeviceAccessEntry {
@@ -880,6 +1264,23 @@ export interface DeviceAccessEntry {
   timestamp: string;
   ip?: string;
   deviceModel?: string;
+}
+
+export interface MagicLinkRestructureSummary {
+  effectiveDate: string;
+  templateLabel: string;
+  wageType: 'DAILY' | 'MONTHLY';
+  oldBasic: number;
+  newBasic: number;
+  oldExcluded: number;
+  newExcluded: number;
+  totalRemuneration: number;
+  shiftAmount: number;
+  pfDeltaMonthly: number;
+  gratuityDeltaAnnual: number;
+  consentStatus?: 'SENT_WHATSAPP' | 'ACKNOWLEDGED' | 'DISPUTED';
+  respondedAt?: string;
+  workerNote?: string;
 }
 
 export interface WorkerAccessToken {
@@ -909,6 +1310,7 @@ export interface WorkerAccessToken {
   flaggedMultiDevice?: boolean;
   flaggedReason?: string;
   deliveryStatus?: 'DELIVERED' | 'FAILED' | 'PENDING';
+  restructureSummary?: MagicLinkRestructureSummary;
 }
 
 export type RevocationReason = 'lost phone' | 'worker exit' | 'suspicious access' | 'shared link' | 'other';
@@ -1484,6 +1886,798 @@ export type WhatsAppCommandKey =
   | 'OPT_IN_START' 
   | 'HELP_MENU'
   | 'UNKNOWN';
+
+// ==========================================
+// TASK 3: EMPLOYER CTC RESTRUCTURING SIMULATOR & CONSENT
+// ==========================================
+
+export type CtcRestructureTemplateId = 'BASIC_50' | 'BASIC_55' | 'BASIC_60' | 'CUSTOM';
+
+export interface CtcSimulationInput {
+  totalCtcMonthly: number;
+  currentBasic: number;
+  da?: number;
+  retainingAllowance?: number;
+  hra: number;
+  travel: number;
+  medical: number;
+  others: number;
+  targetBasicPercentage: number; // e.g., 50, 55, 60
+  state: string;
+  skillCategory: WorkerSkillCategory;
+  capPfAt15k: boolean;
+  esiEnabled: boolean;
+}
+
+export interface CtcSimulationResult {
+  totalRemuneration: number;
+  currentBasic: number;
+  currentWageBase: number;
+  currentExcluded: number;
+  currentBasicPct: number;
+  required50PctBasic: number;
+  targetBasicPercentage: number;
+  targetBasic: number;
+  targetWageBase: number;
+  targetExcluded: number;
+  shiftAmount: number;
+  breakdownBefore: {
+    basic: number;
+    da: number;
+    retaining: number;
+    hra: number;
+    travel: number;
+    medical: number;
+    others: number;
+  };
+  breakdownAfter: {
+    basic: number;
+    da: number;
+    retaining: number;
+    hra: number;
+    travel: number;
+    medical: number;
+    others: number;
+  };
+  // Financial Impact
+  employeePfBefore: number;
+  employeePfAfter: number;
+  pfEmployeeDeltaMonthly: number;
+  employerPfBefore: number;
+  employerPfAfter: number;
+  pfEmployerDeltaMonthly: number;
+  pfTotalDeltaMonthly: number;
+  gratuityMonthlyBefore: number;
+  gratuityMonthlyAfter: number;
+  gratuityMonthlyDelta: number;
+  gratuityAnnualBefore: number;
+  gratuityAnnualAfter: number;
+  gratuityAnnualDelta: number;
+  esiEmployerBefore: number;
+  esiEmployerAfter: number;
+  esiEmployerDeltaMonthly: number;
+  employerCostDeltaMonthly: number;
+  takeHomeBefore: number;
+  takeHomeAfter: number;
+  takeHomeDeltaMonthly: number;
+  // Compliance & Minimum Wage Guard
+  isCurrentlyCompliant: boolean;
+  willBeCompliant: boolean;
+  state: string;
+  skillCategory: WorkerSkillCategory;
+  stateMinimumWageMonthly: number;
+  violatesMinimumWage: boolean;
+  requiresCtcTopUp: boolean;
+  shortfallFromMinWage: number;
+  minimumWageBlockReason?: string;
+  impactNarrative: string;
+}
+
+export interface CtcSimulationWorkerPlan {
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  designation: string;
+  department: string;
+  wageType: 'DAILY' | 'MONTHLY';
+  dailyMultiplier: 26 | 30;
+  state: string;
+  skillCategory: WorkerSkillCategory;
+  isCurrentlyCompliant: boolean;
+  canApply: boolean;
+  blockedReason?: string;
+  simulation: CtcSimulationResult;
+  proposedWageConfig: WageConfig;
+}
+
+export type EmployeeRestructureConsentStatus =
+  | 'NOT_SENT'
+  | 'SENT_WHATSAPP'
+  | 'ACKNOWLEDGED'
+  | 'DISPUTED';
+
+export interface EmployeeRestructureConsentRecord {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  appliedAt: string;
+  effectiveDate: string;
+  templateLabel: string;
+  oldBasic: number;
+  newBasic: number;
+  oldExcluded: number;
+  newExcluded: number;
+  totalRemuneration: number;
+  shiftAmount: number;
+  pfEmployerDeltaMonthly: number;
+  gratuityAnnualDelta: number;
+  status: EmployeeRestructureConsentStatus;
+  channel: 'WHATSAPP';
+  magicToken?: string;
+  whatsappUrl?: string;
+  portalUrl?: string;
+  messagePreview?: string;
+  sentAt?: string;
+  acknowledgedAt?: string;
+  workerNote?: string;
+}
+
+export interface CtcBulkRestructureAuditLog {
+  id: string;
+  tenantId: string;
+  executedAt: string;
+  executedBy: string;
+  effectiveDate: string;
+  templateLabel: string;
+  targetBasicPercentage: number;
+  workersUpdatedCount: number;
+  skippedCount: number;
+  workerIds: string[];
+  workerNames: string[];
+  totalShiftedMonthly: number;
+  totalEmployerPfDeltaMonthly: number;
+  totalGratuityDeltaAnnual: number;
+  cbaActive: boolean;
+  cbaOverrideRef?: string;
+  revisionLettersPrepared: number;
+}
+
+// ==========================================
+// TASK 4: GRATUITY ACCRUAL & FNF SETTLEMENT
+// ==========================================
+
+export type GratuityExitReason =
+  | 'RESIGNATION'
+  | 'RETIREMENT'
+  | 'TERMINATION'
+  | 'END_OF_CONTRACT'
+  | 'DEATH_IN_SERVICE'
+  | 'PERMANENT_DISABLEMENT';
+
+export type GratuityEligibilityRule =
+  | 'FIVE_YEAR_STANDARD'
+  | 'ONE_YEAR_FIXED_TERM_NOV_2025'
+  | 'DEATH_IN_SERVICE_OVERRIDE'
+  | 'NOT_ELIGIBLE';
+
+export interface GratuityTenureBreakdown {
+  entityStartDate: string; // YYYY-MM-DD
+  effectiveStartDate: string; // YYYY-MM-DD (uses previousJoiningDate if no-break subsidiary transfer)
+  endDate: string; // YYYY-MM-DD
+  continuousServiceAggregated: boolean;
+  subsidiaryName?: string;
+  priorSubsidiaryMonths: number;
+  breakInServiceDetected: boolean;
+  breakInServiceNote?: string;
+  years: number;
+  months: number;
+  days: number;
+  totalMonths: number;
+  continuousYearsExact: number;
+  exceedsSixMonthsInFinalYear: boolean;
+  roundedServiceYears: number;
+  formattedTenure: string;
+}
+
+export interface GratuityCalculationResult {
+  workerId: string;
+  workerName: string;
+  designation: string;
+  department: string;
+  employmentType: 'PERMANENT' | 'FIXED_TERM' | 'CONTRACT' | 'CONTRACTOR' | 'DAILY_WAGE';
+  asOfDate: string;
+  dateOfExit?: string;
+  exitReason?: GratuityExitReason;
+  deathInService: boolean;
+  nomineeName?: string;
+  nomineeRelation?: string;
+  nomineePhone?: string;
+  // Last Drawn Basic + DA (Never historical average)
+  lastDrawnBasic: number;
+  lastDrawnDa: number;
+  lastDrawnBasicPlusDa: number;
+  usedLastDrawnNotAverage: boolean;
+  salaryRevisionDate?: string;
+  previousPreRevisionBasicPlusDa?: number;
+  historicalAverageBasicPlusDa?: number;
+  // Tenure & Round-up
+  tenure: GratuityTenureBreakdown;
+  // Eligibility
+  eligibilityRule: GratuityEligibilityRule;
+  minimumServiceRequiredYears: number;
+  isEligible: boolean;
+  isFixedTermNov2025Qualified: boolean;
+  eligibilityNote: string;
+  // Statutory Formula & ₹20 Lakh Ceiling
+  effectiveYearsForFormula: number;
+  rawFormulaAmount: number; // (lastDrawnBasicPlusDa * 15 / 26) * effectiveYearsForFormula
+  provisionalAccruedAmount: number; // Pro-rata balance-sheet accrual for cash-flow planning
+  statutoryCeiling: number; // 2000000 (₹20,00,000)
+  ceilingApplied: boolean;
+  cappedExcessAmount: number;
+  payableGratuityAmount: number; // 0 if ineligible, else min(rawFormulaAmount, 2000000)
+  monthlyAccrualIncrement: number; // (lastDrawnBasicPlusDa * 15 / 26) / 12
+  annualAccrualIncrement: number; // lastDrawnBasicPlusDa * 15 / 26
+  formulaText: string;
+}
+
+export interface GratuityOrgProjection {
+  asOfDate: string;
+  totalWorkersAnalyzed: number;
+  eligibleEmployeesCount: number;
+  standardFiveYearEligibleCount: number;
+  fixedTermOneYearEligibleCount: number;
+  deathInServiceCount: number;
+  unvestedEmployeesCount: number;
+  ceilingCappedCount: number;
+  vestedPayableLiability: number;
+  unvestedAccruedReserve: number;
+  totalProvisionalAccruedLiability: number;
+  ceilingClippedTotal: number;
+  monthlyAccrualRunRate: number;
+  annualAccrualRunRate: number;
+  breakdowns: GratuityCalculationResult[];
+}
+
+export interface FnfSettlementRecord {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  designation: string;
+  department: string;
+  exitDate: string; // YYYY-MM-DD
+  exitReason: GratuityExitReason;
+  deathInService: boolean;
+  nomineeName?: string;
+  nomineeRelation?: string;
+  nomineePhone?: string;
+  pendingSalaryDays: number;
+  pendingWagesEarned: number;
+  leaveEncashmentDays: number;
+  leaveEncashmentAmount: number;
+  gratuityCalculation: GratuityCalculationResult;
+  gratuityPayable: number;
+  advanceAndEwaRecovery: number;
+  statutoryDeductions: number;
+  grossFnfPayable: number;
+  netFnfPayable: number;
+  status: 'DRAFT' | 'APPROVED' | 'SETTLED';
+  notes?: string;
+  createdAt: string;
+  settledAt?: string;
+  settledBy?: string;
+}
+
+// ==========================================
+// TASK 5: ANNUAL STATUTORY BONUS ENGINE
+// ==========================================
+
+export type BonusEligibilityStatus =
+  | 'ELIGIBLE'
+  | 'DISQUALIFIED_ABOVE_21K'
+  | 'PART_YEAR_BELOW_30_DAYS';
+
+export type BonusWindowStatus =
+  | 'WITHIN_WINDOW'
+  | 'URGENT_DUE_SOON'
+  | 'OVERDUE_PENALTY_RISK'
+  | 'FY_IN_PROGRESS';
+
+export interface BonusWindowDeadlineInfo {
+  financialYear: string; // e.g. '2025-26'
+  fyStartDate: string; // '2025-04-01'
+  fyEndDate: string; // '2026-03-31'
+  statutoryDeadlineDate: string; // '2026-11-30' (8 months from FY end)
+  evaluationDate: string;
+  daysRemaining: number;
+  daysOverdue: number;
+  isWithinEightMonthWindow: boolean;
+  windowStatus: BonusWindowStatus;
+  statusMessage: string;
+}
+
+export interface BonusAllocableSurplusInput {
+  financialYear: string;
+  companyType: 'DOMESTIC_60_PCT' | 'NON_DOMESTIC_67_PCT';
+  grossProfit: number;
+  depreciation: number;
+  directTaxes: number;
+  returnOnCapital: number;
+  priorSetOnCarriedForward: number;
+  priorSetOffCarriedForward: number;
+  isEmployerLossMaking: boolean;
+  formCExemptionFiledRef?: string;
+}
+
+export interface BonusFormARegister {
+  financialYear: string;
+  companyName: string;
+  grossProfit: number;
+  lessDepreciation: number;
+  lessDirectTaxes: number;
+  lessReturnOnCapital: number;
+  availableSurplus: number;
+  allocableSurplusPercentage: 60 | 67;
+  allocableSurplus: number;
+  isEmployerLossMaking: boolean;
+}
+
+export interface BonusFormBSetOnSetOffRow {
+  accountingYear: string;
+  amountAllocableAsBonus: number;
+  amountPayableAsBonus: number;
+  setOnForYear: number;
+  setOffForYear: number;
+  netSetOnCarriedForward: number;
+  netSetOffCarriedForward: number;
+  remarks: string;
+}
+
+export interface BonusEmployeeCalculation {
+  workerId: string;
+  workerName: string;
+  fatherName?: string;
+  designation: string;
+  department: string;
+  monthlyGrossEarning: number; // Used for ₹21,000 eligibility ceiling
+  monthlyBasicPlusDa: number;
+  cappedMonthlyBonusWageBase: number; // min(Basic + DA, 7000)
+  annualUncappedBasicPlusDa: number;
+  annualCappedBonusWageBase: number; // cappedMonthly * 12 * prorationRatio
+  workedDaysInFy: number;
+  totalCalendarDaysInFy: number;
+  prorationRatio: number; // workedDaysInFy / totalCalendarDaysInFy
+  isPartYearProrated: boolean;
+  eligibilityStatus: BonusEligibilityStatus;
+  isStatutoryEligible: boolean;
+  disqualificationReason?: string;
+  bonusRatePct: number; // 8.33 to 20.00
+  statutoryBonusAmount: number;
+  // Ex-gratia support for > ₹21,000/month employees (excluded from statutory registers)
+  exGratiaAmount: number;
+  totalGrossBonusOrExGratia: number;
+  includedInStatutoryRegisters: boolean;
+  // Off-cycle TDS treatment (Sec 192 marginal tax computation)
+  taxRegime: 'NEW' | 'OLD';
+  normalAnnualTaxWithoutBonus: number;
+  annualTaxWithBonus: number;
+  bonusTdsDeduction: number;
+  effectiveTdsRatePct: number;
+  pfDeduction: number; // Always 0 on statutory annual bonus
+  esiDeduction: number; // Always 0 on annual bonus
+  netOffCyclePayout: number;
+}
+
+export interface BonusFormCRow {
+  slNo: number;
+  workerId: string;
+  workerName: string;
+  fatherOrHusbandName: string;
+  completed15YearsAge: 'Yes' | 'No';
+  designation: string;
+  daysWorkedInYear: number;
+  totalSalaryOrWageInYear: number;
+  statutoryBonusPayable: number;
+  pujaOrInterimBonusPaid: number;
+  tdsIncomeTaxDeducted: number;
+  totalDeductions: number;
+  netAmountPayable: number;
+  actualAmountPaid: number;
+  dateOfPayment: string;
+  remarks: string;
+}
+
+export interface BonusFormDReturn {
+  financialYear: string;
+  establishmentName: string;
+  employerName: string;
+  address: string;
+  accountingYearEndedOn: string;
+  totalEligibleEmployees: number;
+  totalEligibleSalaryOrWage: number;
+  bonusPercentageDeclared: number;
+  totalStatutoryBonusPayable: number;
+  totalExGratiaPaidSeparately: number;
+  totalStatutoryTdsDeducted: number;
+  dateOfPayment: string;
+  isEmployerLossMaking: boolean;
+  formCExemptionRequired: boolean;
+  formCExemptionFiledRef?: string;
+  statutoryDeadlineDate: string;
+  paidWithinEightMonths: boolean;
+}
+
+export interface BonusOffCycleRun {
+  id: string;
+  tenantId: string;
+  financialYear: string;
+  payoutDate: string;
+  bonusRatePct: number;
+  isEmployerLossMaking: boolean;
+  formCExemptionRequired: boolean;
+  formCExemptionFiledRef?: string;
+  windowInfo: BonusWindowDeadlineInfo;
+  eligibleCount: number;
+  disqualifiedAbove21kCount: number;
+  totalStatutoryBonusGross: number;
+  totalExGratiaGross: number;
+  totalBonusTdsDeducted: number;
+  totalNetOffCycleDisbursed: number;
+  status: 'DRAFT' | 'APPROVED' | 'DISBURSED';
+  createdBy: string;
+  createdAt: string;
+  disbursedAt?: string;
+  items: BonusEmployeeCalculation[];
+  formA: BonusFormARegister;
+  formB: BonusFormBSetOnSetOffRow[];
+  formC: BonusFormCRow[];
+  formD: BonusFormDReturn;
+}
+
+// ==========================================
+// TASK 8: PRE-UPLOAD EPFO ECR VALIDATOR
+// ==========================================
+
+export type EpfoUanStatus = 'ACTIVE' | 'INACTIVE' | 'UNSEEDED' | 'DEACTIVATED';
+
+export interface EpfoKycStatus {
+  aadhaarApproved: boolean;
+  bankApproved: boolean;
+  panApproved?: boolean;
+  verifiedAt?: string;
+}
+
+export type EcrValidationCheckCode =
+  | 'MISSING_UAN'
+  | 'INVALID_UAN'
+  | 'INACTIVE_UAN'
+  | 'KYC_NOT_APPROVED'
+  | 'DUPLICATE_UAN'
+  | 'WAGE_CEILING_EXCEEDED'
+  | 'EPFO_EXIT_NOT_MARKED'
+  | 'UAN_NAME_MISMATCH';
+
+export type EcrIssueSeverity = 'BLOCK' | 'WARNING' | 'INFO';
+
+export interface EcrValidationIssue {
+  code: EcrValidationCheckCode;
+  epfoPortalCode: string;
+  severity: EcrIssueSeverity;
+  title: string;
+  message: string;
+  remediationHint: string;
+  canAutoCapWage?: boolean;
+  canOverrideName?: boolean;
+  canMarkDoeDone?: boolean;
+  canVerifyKyc?: boolean;
+}
+
+export interface EcrComputedNumbers {
+  grossWages: number;
+  rawEpfWages: number;
+  epfWages: number;
+  epsWages: number;
+  edliWages: number;
+  eeShare: number;
+  epsShare: number;
+  erEpfShare: number;
+  ncpDays: number;
+  refundAdvances: number;
+  isAge58Plus: boolean;
+  wasWageCappedAtCeiling: boolean;
+}
+
+export interface EcrValidatedWorkerRow {
+  workerId: string;
+  payrollName: string;
+  epfoRegisteredName: string;
+  ecrMemberNameUsed: string;
+  nameSource: 'PAYROLL' | 'EPFO_RECORD' | 'LEGAL_OVERRIDE';
+  legalNameChangeRef?: string;
+  uan: string;
+  uanStatus: EpfoUanStatus;
+  aadhaarKycApproved: boolean;
+  bankKycApproved: boolean;
+  dateOfExit?: string;
+  epfoExitMarked: boolean;
+  status: 'PASSED' | 'FAILED' | 'WARNING_ONLY' | 'EXCLUDED' | 'OPTED_OUT' | 'PRIOR_EXITED';
+  hasBlockingError: boolean;
+  isExcluded: boolean;
+  willBeIncludedInFile: boolean;
+  issues: EcrValidationIssue[];
+  ecrLine: string;
+  numbers: EcrComputedNumbers;
+}
+
+export interface EcrValidationSummary {
+  totalWorkersEvaluated: number;
+  eligibleForEcrCount: number;
+  passedCount: number;
+  failedCount: number;
+  warningOnlyCount: number;
+  excludedCount: number;
+  includedInFinalFileCount: number;
+  optedOutOrPriorExitedCount: number;
+  missingOrInactiveUanCount: number;
+  kycPendingCount: number;
+  duplicateUanCount: number;
+  wageCeilingExceededCount: number;
+  exitNotMarkedCount: number;
+  nameMismatchResolvedCount: number;
+  statutoryCeilingApplied: number;
+  totalGrossWages: number;
+  totalEpfWages: number;
+  totalEeShare: number;
+  totalEpsShare: number;
+  totalErEpfShare: number;
+  totalAdminAndEdliCharges: number;
+  totalChallanPayable: number;
+}
+
+export interface EcrValidationReport {
+  tenantId: string;
+  month: string; // YYYY-MM
+  mode: 'PRIMARY' | 'SUPPLEMENTARY';
+  validatedAt: string;
+  summary: EcrValidationSummary;
+  rows: EcrValidatedWorkerRow[];
+  includedRows: EcrValidatedWorkerRow[];
+  failedRows: EcrValidatedWorkerRow[];
+  excludedRows: EcrValidatedWorkerRow[];
+  ecrContent: string;
+  errorReportText: string;
+  canDownloadEcr: boolean;
+}
+
+export interface SupplementaryEcrPendingItem {
+  workerId: string;
+  workerName: string;
+  uan?: string;
+  month: string;
+  excludedAt: string;
+  failureCodes: EcrValidationCheckCode[];
+  failureSummary: string;
+}
+
+// ==========================================
+// TASK 9: DIGITAL INTERNAL COMMITTEE (ICC) & POSH ACT COMPLIANCE
+// ==========================================
+
+export type IccMemberRole = 'PRESIDING_OFFICER' | 'INTERNAL_MEMBER' | 'EXTERNAL_MEMBER';
+
+export interface IccMember {
+  id: string;
+  role: IccMemberRole;
+  name: string;
+  designation: string;
+  department?: string;
+  email?: string;
+  phone?: string;
+  workerId?: string;
+  organization?: string; // NGO / legal qualification for external member
+  appointedDate: string; // YYYY-MM-DD
+  isWoman?: boolean;
+  isActive: boolean;
+}
+
+export interface IccCommitteeConfig {
+  tenantId: string;
+  presidingOfficer: IccMember | null;
+  internalMembers: IccMember[];
+  externalMember: IccMember | null;
+  allowAnonymousComplaints: boolean;
+  localCommitteeDistrict: string;
+  localCommitteeEmail?: string;
+  autoRemindDay60: boolean;
+  autoRemindDay80: boolean;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface PoshThresholdEvaluation {
+  activeEmployeeCount: number;
+  thresholdLimit: 10;
+  formalIccMandatory: boolean;
+  isIccValid: boolean;
+  hasPresidingOfficer: boolean;
+  internalMembersCount: number;
+  hasExternalMember: boolean;
+  missingRequirements: string[];
+  advisoryNote: string;
+}
+
+export interface EncryptedComplaintPayload {
+  algorithm: 'AES-GCM-256';
+  keyId: string;
+  iv: string;
+  ciphertext: string;
+  encryptedAt: string;
+}
+
+export interface PoshConfidentialDetails {
+  complainantName?: string;
+  complainantWorkerId?: string;
+  complainantDepartment?: string;
+  complainantPhone?: string;
+  respondentName: string;
+  respondentWorkerId?: string;
+  respondentRoleOrDept?: string;
+  incidentDate: string;
+  incidentLocation: string;
+  incidentDescription: string;
+  witnessDetails?: string;
+  evidenceNotes?: string;
+  conciliationRequested?: boolean;
+}
+
+export type PoshComplaintStatus =
+  | 'FILED'
+  | 'INQUIRY_IN_PROGRESS'
+  | 'REPORT_SUBMITTED'
+  | 'ACTION_TAKEN'
+  | 'CLOSED'
+  | 'REFERRED_TO_LOCAL_COMMITTEE';
+
+export type PoshFindingOutcome =
+  | 'PENDING'
+  | 'SUBSTANTIATED'
+  | 'UNSUBSTANTIATED'
+  | 'CONCILIATED'
+  | 'MALICIOUS_FALSE';
+
+export interface PoshInquiryEntry {
+  id: string;
+  loggedAt: string;
+  loggedByMemberId: string;
+  loggedByName: string;
+  loggedByRole: IccMemberRole | 'SYSTEM';
+  entryType:
+    | 'ACKNOWLEDGEMENT'
+    | 'CONFLICT_REASSIGNMENT'
+    | 'CONCILIATION'
+    | 'HEARING'
+    | 'EVIDENCE_REVIEW'
+    | 'REPORT_SUBMISSION'
+    | 'EMPLOYER_ACTION'
+    | 'LOCAL_COMMITTEE_REFERRAL';
+  summary: string;
+}
+
+export interface PoshTimelineStatus {
+  filedDate: string;
+  daysElapsed: number;
+  inquiryDeadlineAt: string;
+  inquiryDaysRemaining: number;
+  isDay60ReminderDue: boolean;
+  isDay80EscalationDue: boolean;
+  isInquiryOverdue: boolean;
+  isPendingOver90Days: boolean;
+  inquiryCompletedAt?: string;
+  reportDeadlineAt?: string;
+  reportSubmittedAt?: string;
+  reportDaysRemaining?: number;
+  isReportOverdue: boolean;
+  employerActionDeadlineAt?: string;
+  slaStage:
+    | 'ON_TRACK'
+    | 'DAY_60_REMINDER'
+    | 'DAY_80_URGENT'
+    | 'INQUIRY_OVERDUE_90D'
+    | 'REPORT_10D_DUE'
+    | 'REPORT_OVERDUE'
+    | 'COMPLETED';
+}
+
+export interface PoshComplaintRecord {
+  id: string;
+  caseCode: string;
+  tenantId: string;
+  filedAt: string;
+  filedVia: 'WEB_PORTAL' | 'WORKER_PWA' | 'MAGIC_LINK';
+  status: PoshComplaintStatus;
+  isAnonymous: boolean;
+  maskedComplainantAlias: string;
+  respondentIsIccMember: boolean;
+  conflictOfInterest: boolean;
+  recusedMemberIds: string[];
+  routedToExternalMember: boolean;
+  assignedHandlerRole: IccMemberRole | 'LOCAL_COMMITTEE';
+  assignedHandlerName: string;
+  encryptedPayload: EncryptedComplaintPayload;
+  inquiryStartedAt?: string;
+  inquiryCompletedAt?: string;
+  reportSubmittedAt?: string;
+  findingOutcome: PoshFindingOutcome;
+  employerActionTaken?: string;
+  employerActionDate?: string;
+  reminder60SentAt?: string;
+  reminder80SentAt?: string;
+  inquiryTimeline: PoshInquiryEntry[];
+  thresholdAtFiling: {
+    activeEmployeeCount: number;
+    formalIccMandatory: boolean;
+  };
+}
+
+export interface PoshActorContext {
+  actorType: 'GENERAL_ADMIN' | 'ICC_MEMBER' | 'WORKER';
+  userId?: string;
+  workerId?: string;
+  email?: string;
+  name?: string;
+  iccMemberId?: string;
+  iccRole?: IccMemberRole;
+}
+
+export interface PoshComplaintView {
+  record: PoshComplaintRecord;
+  timeline: PoshTimelineStatus;
+  canViewDetails: boolean;
+  redactionReason?: 'NON_ICC_ADMIN_STATUS_ONLY' | 'CONFLICT_OF_INTEREST_RECUSED' | 'ACCUSED_ANONYMOUS_MASKED';
+  decryptedDetails: PoshConfidentialDetails | null;
+  visibleComplainantLabel: string;
+  visibleRespondentLabel: string;
+}
+
+export interface PoshWorkshopRecord {
+  id: string;
+  tenantId: string;
+  date: string; // YYYY-MM-DD
+  title: string;
+  trainerName: string;
+  attendeesCount: number;
+  mode: 'IN_PERSON' | 'ONLINE' | 'FLOOR_ORIENTATION';
+  notes?: string;
+}
+
+export interface AnnualPoshDistrictReport {
+  year: number;
+  tenantId: string;
+  companyName: string;
+  districtOfficerJurisdiction: string;
+  generatedAt: string;
+  activeEmployeeCount: number;
+  formalIccMandatory: boolean;
+  iccConstituted: boolean;
+  presidingOfficerName: string;
+  externalMemberName: string;
+  complaintsReceivedCount: number;
+  complaintsDisposedCount: number;
+  complaintsPendingOver90DaysCount: number;
+  complaintsPendingUnder90DaysCount: number;
+  workshopsConductedCount: number;
+  workshopParticipantsTotal: number;
+  natureOfActionsSummary: { action: string; count: number }[];
+  reportText: string;
+}
+
+
+
+
+
 
 
 

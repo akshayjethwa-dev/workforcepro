@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, Building2, Users, Clock, LogOut, ChevronRight, User, Shield, 
   History, FileText, CreditCard, PieChart, IdCard, Headset, FileCheck, 
-  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox, Calendar, Lock
+  Trash2, AlertTriangle, Loader2, Home, Camera, Sparkles, Settings, IndianRupee, BookOpen, Inbox, Calendar, Lock, Calculator, Award, Landmark
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -254,6 +254,9 @@ export const Sidebar: React.FC<Props> = ({
                 locked={!isEntitled('ADVANCED_PAYROLL')}
                 availableOn="Pro"
               />
+              <NavItem icon={Calculator} label="CTC Simulator (50% Rule)" screen="CTC_SIMULATOR" />
+              <NavItem icon={Award} label="Gratuity & FnF Settlement" screen="GRATUITY" />
+              <NavItem icon={Landmark} label="Annual Statutory Bonus" screen="ANNUAL_BONUS" />
               <NavItem icon={History} label="Daily Wage Logs" screen="DAILY_LOGS" />
               <NavItem 
                 icon={IdCard} 
@@ -263,6 +266,7 @@ export const Sidebar: React.FC<Props> = ({
                 availableOn="Starter"
               />
               <NavItem icon={PieChart} label="Factory Reports" screen="REPORTS" />
+              <NavItem icon={Shield} label="POSH & ICC Compliance" screen="POSH_ICC" />
             </div>
 
             {isOwner && (

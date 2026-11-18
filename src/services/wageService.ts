@@ -1,6 +1,12 @@
 import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig } from '../types/index';
 import { attendanceLogic } from './attendanceLogic'; 
 import { statutoryEngine } from './statutoryEngine';
+import { validateWorkerWageStructure } from './wageStructureValidationService';
+import {
+  calculateWorkerGratuity,
+  getSyncFnfSettlementForWorkerMonth,
+  normalizeFlexibleDateString,
+} from './gratuityService';
 
 export const ensureWageConfig = (worker: Worker): WageConfig => {
   const isMonthly = (worker as any).wageType === 'MONTHLY' || 
@@ -28,17 +34,26 @@ export const ensureWageConfig = (worker: Worker): WageConfig => {
                               (worker as any).overtimeRate || 
                               ((resolvedAmount / 8) * 1.5);
 
+  const dailyMultiplier = worker.wageConfig?.dailyMultiplier || (worker.wageConfig?.workingDaysPerMonth === 30 ? 30 : 26);
+
   return {
     type: isMonthly ? 'MONTHLY' : 'DAILY',
     amount: resolvedAmount,
+    basicPercentage: worker.wageConfig?.basicPercentage,
+    dailyMultiplier,
+    monthlyBreakdown: worker.wageConfig?.monthlyBreakdown,
+    dailyBreakdown: worker.wageConfig?.dailyBreakdown,
     overtimeEligible,
     overtimeRatePerHour,
-    workingDaysPerMonth: worker.wageConfig?.workingDaysPerMonth || 26,
+    workingDaysPerMonth: worker.wageConfig?.workingDaysPerMonth || dailyMultiplier,
     allowances: worker.wageConfig?.allowances || {
       travel: 0,
       food: 0,
       nightShift: 0
-    }
+    },
+    complianceStatus: worker.wageConfig?.complianceStatus,
+    complianceFlags: worker.wageConfig?.complianceFlags,
+    acknowledgedNonCompliant: worker.wageConfig?.acknowledgedNonCompliant
   };
 };
 
@@ -165,8 +180,8 @@ export const wageService = {
     const totalWorkingDays = config.workingDaysPerMonth || daysInMonth;
 
     // Helper to get clean YYYY-MM-DD
-    const joiningDate = (worker.joinedDate || worker.dateOfJoining || '').slice(0, 10);
-    const exitDate = (worker.dateOfExit || '').slice(0, 10);
+    const joiningDate = normalizeFlexibleDateString(worker.joinedDate || worker.dateOfJoining) || '';
+    const exitDate = normalizeFlexibleDateString(worker.dateOfExit) || '';
 
     const dailyStatuses = new Map<number, string>();
     const dailyRecords = new Map<number, AttendanceRecord>();
@@ -268,7 +283,16 @@ export const wageService = {
             continue;
         }
 
-        const dailyRate = isMonthly ? config.amount / totalWorkingDays : config.amount;
+        const dateStr = `${yearStr}-${monthStr}-${day.toString().padStart(2, '0')}`;
+        const effectiveAmountForDay =
+          worker.salaryRevisionDate &&
+          dateStr < worker.salaryRevisionDate &&
+          typeof worker.previousWageAmount === 'number' &&
+          worker.previousWageAmount > 0
+            ? worker.previousWageAmount
+            : config.amount;
+
+        const dailyRate = isMonthly ? effectiveAmountForDay / totalWorkingDays : effectiveAmountForDay;
         
         let dwBaseWage = 0, dwOTWage = 0, dwAllowances = 0;
 
@@ -350,21 +374,71 @@ export const wageService = {
         }
     });
 
-    // Compute Indian Statutory Deductions (PF, ESI, State PT, TDS)
+    // Split earned package into WageBase (Basic+DA+Retaining) vs Excluded Allowances (HRA+Travel+Medical+Others)
+    const round2 = (v: number) => Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
+    const evalDate = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+    const structAudit = validateWorkerWageStructure(worker, {
+      evaluationDate: evalDate,
+      orgSettings
+    });
+
+    let earnedWageBase = round2(totalBasic);
+    let earnedPackageExcluded = 0;
+    const usePreviousStructure = Boolean(
+      worker.salaryRevisionDate && evalDate < worker.salaryRevisionDate && worker.previousWageConfig
+    );
+    const activeBreakdownConfig = usePreviousStructure ? worker.previousWageConfig! : config;
+
+    if (isMonthly && activeBreakdownConfig.monthlyBreakdown) {
+      const mb = activeBreakdownConfig.monthlyBreakdown;
+      const mbBase = (mb.basic || 0) + (mb.da || 0) + (mb.retainingAllowance || 0);
+      const mbTotal = mbBase + (mb.hra || 0) + (mb.travel || 0) + (mb.medical || 0) + (mb.others || 0);
+      if (mbTotal > 0) {
+        earnedWageBase = round2(totalBasic * (mbBase / mbTotal));
+        earnedPackageExcluded = round2(totalBasic - earnedWageBase);
+      }
+    } else if (!isMonthly && activeBreakdownConfig.dailyBreakdown) {
+      const db = activeBreakdownConfig.dailyBreakdown;
+      const dbBase = (db.basic || 0) + (db.da || 0) + (db.retainingAllowance || 0);
+      const dbTotal = dbBase + (db.hra || 0) + (db.travel || 0) + (db.medical || 0) + (db.others || 0);
+      if (dbTotal > 0) {
+        earnedWageBase = round2(totalBasic * (dbBase / dbTotal));
+        earnedPackageExcluded = round2(totalBasic - earnedWageBase);
+      }
+    } else if (typeof activeBreakdownConfig.basicPercentage === 'number' && activeBreakdownConfig.basicPercentage > 0 && activeBreakdownConfig.basicPercentage < 100) {
+      earnedWageBase = round2((totalBasic * activeBreakdownConfig.basicPercentage) / 100);
+      earnedPackageExcluded = round2(totalBasic - earnedWageBase);
+    }
+
+    const totalEarnedAllowances = round2(earnedPackageExcluded + totalAllowances);
+
+    const joinedInThisMonth = Boolean(joiningDate && joiningDate.startsWith(month) && parseInt(joiningDate.slice(8, 10), 10) > 1);
+    const contractualRateForMonth = usePreviousStructure && worker.previousWageAmount && worker.previousWageAmount > 0
+      ? worker.previousWageAmount
+      : (isMonthly ? config.amount : config.amount * (config.workingDaysPerMonth || 26));
+
+    // Compute Indian Statutory Deductions (PF, ESI, State PT, LWF, TDS) with 50% Rule Add-Back
     const statutoryResult = statutoryEngine.computeStatutoryDeductions(
       worker,
-      totalBasic,
+      earnedWageBase,
       gross,
       totalOTPay,
-      totalAllowances,
+      totalEarnedAllowances,
       month,
-      orgSettings
+      orgSettings,
+      undefined,
+      {
+        midMonthJoiningDaysWorked: joinedInThisMonth ? Math.min(daysInMonth, payableDays) : undefined,
+        totalDaysInMonth: daysInMonth,
+        contractualMonthlyGross: contractualRateForMonth,
+      }
     );
 
-    // Add statutory deductions as distinct line items
+    // Add statutory deductions as distinct line items (PT and LWF always itemized separately)
     if (statutoryResult.statutory.employeePf > 0) {
+      const addBackTag = (statutoryResult.statutory.notionalWageAddition || 0) > 0 ? ' · Incl. 50% Rule Add-Back' : '';
       deductionDetails.push({
-        description: `Provident Fund (EPF 12%${statutoryResult.statutory.isPfCapped ? ' Capped' : ''})`,
+        description: `Provident Fund (EPF 12%${statutoryResult.statutory.isPfCapped ? ' Capped' : ''}${addBackTag})`,
         amount: statutoryResult.statutory.employeePf
       });
     }
@@ -375,9 +449,24 @@ export const wageService = {
       });
     }
     if (statutoryResult.statutory.professionalTax > 0) {
+      const ptSuffix = statutoryResult.statutory.ptProratedInfo?.isProrated
+        ? ` · Pro-rated ${statutoryResult.statutory.ptProratedInfo.daysWorked}/${statutoryResult.statutory.ptProratedInfo.totalDaysInMonth}d`
+        : statutoryResult.statutory.ptFebruaryAdjustmentApplied
+        ? ' · Feb Annual Cap Adjustment'
+        : '';
       deductionDetails.push({
-        description: `Professional Tax (${statutoryResult.statutory.state})`,
+        description: `Professional Tax (${statutoryResult.statutory.state}${ptSuffix})`,
         amount: statutoryResult.statutory.professionalTax
+      });
+    }
+    if (statutoryResult.statutory.employeeLwf > 0) {
+      const split = statutoryResult.statutory.lwfTransferSplit;
+      const lwfDesc = split?.isMidYearTransfer
+        ? `Labour Welfare Fund (LWF · ${split.previousState} ${split.monthsWorkedInPreviousState}m + ${split.currentState} ${split.monthsWorkedInCurrentState}m Split)`
+        : `Labour Welfare Fund (LWF · ${statutoryResult.statutory.state}${statutoryResult.statutory.lwfCycleLabel ? ` · ${statutoryResult.statutory.lwfCycleLabel}` : ''})`;
+      deductionDetails.push({
+        description: lwfDesc,
+        amount: statutoryResult.statutory.employeeLwf
       });
     }
     if (statutoryResult.statutory.tds > 0) {
@@ -392,7 +481,40 @@ export const wageService = {
     // Carry Forward Logic (If Advances & Deductions taken exceed Gross Earned)
     const rawNetPayable = gross - totalDeductions;
     const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
-    const finalNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
+    const regularNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
+
+    // Task 4: Full & Final (FnF) Gratuity Settlement Integration
+    const savedFnf = getSyncFnfSettlementForWorkerMonth(worker.tenantId, worker.id, month);
+    const isExitInMonth = Boolean(exitDate && exitDate.startsWith(month));
+    let gratuitySettlement = 0;
+    let fnfSummary: MonthlyPayroll['fnfSummary'] | undefined = undefined;
+
+    if (savedFnf || isExitInMonth) {
+      const effectiveExitDate = savedFnf?.exitDate || exitDate;
+      const gCalc =
+        savedFnf?.gratuityCalculation ||
+        calculateWorkerGratuity(worker, {
+          asOfDate: effectiveExitDate,
+          exitDateOverride: effectiveExitDate,
+          orgSettings,
+        });
+      gratuitySettlement = savedFnf ? savedFnf.gratuityPayable : gCalc.payableGratuityAmount;
+      fnfSummary = {
+        isFnF: true,
+        exitDate: effectiveExitDate,
+        exitReason: savedFnf?.exitReason || gCalc.exitReason || 'RESIGNATION',
+        deathInService: gCalc.deathInService,
+        gratuityPayable: gratuitySettlement,
+        roundedYears: gCalc.effectiveYearsForFormula,
+        lastDrawnBasicPlusDa: gCalc.lastDrawnBasicPlusDa,
+        nomineeName: savedFnf?.nomineeName || gCalc.nomineeName,
+        nomineeRelation: savedFnf?.nomineeRelation || gCalc.nomineeRelation,
+        ceilingApplied: gCalc.ceilingApplied,
+        fnfRecordId: savedFnf?.id,
+      };
+    }
+
+    const finalNetPayable = regularNetPayable + gratuitySettlement;
 
     return {
       id: `payroll_${worker.id}_${month}`,
@@ -418,12 +540,12 @@ export const wageService = {
         totalOvertimeHours: parseFloat(totalOvertimeHours.toFixed(1))
       },
       earnings: {
-        basic: parseFloat(totalBasic.toFixed(2)),
+        basic: parseFloat(earnedWageBase.toFixed(2)),
         overtime: parseFloat(totalOTPay.toFixed(2)),
         allowances: {
             travel: 0,
             food: 0,
-            other: parseFloat(totalAllowances.toFixed(2))
+            other: parseFloat(totalEarnedAllowances.toFixed(2))
         },
         gross: parseFloat(gross.toFixed(2))
       },
@@ -436,6 +558,11 @@ export const wageService = {
       },
       statutory: statutoryResult.statutory,
       employerCostToCompany: parseFloat(statutoryResult.employerCostToCompany.toFixed(2)),
+      notionalWageAddition: statutoryResult.statutory.notionalWageAddition || 0,
+      wageStructureAudit: structAudit,
+      wageComplianceAudit: statutoryResult.wageComplianceAudit,
+      ...(gratuitySettlement > 0 ? { gratuitySettlement: parseFloat(gratuitySettlement.toFixed(2)) } : {}),
+      ...(fnfSummary ? { fnfSummary } : {}),
       netPayable: parseFloat(finalNetPayable.toFixed(2)),
       carriedForwardAdvance: parseFloat(carriedForwardAdvance.toFixed(2)),
       status: 'DRAFT'

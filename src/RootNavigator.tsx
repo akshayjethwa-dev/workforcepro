@@ -23,6 +23,10 @@ import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
 import { InboxScreen } from './screens/inboxScreen';
 import { RosterScreen } from './screens/RosterScreen';
+import { CtcSimulatorScreen } from './screens/CtcSimulatorScreen';
+import { GratuityScreen } from './screens/GratuityScreen';
+import { AnnualBonusScreen } from './screens/AnnualBonusScreen';
+import { PoshIccScreen } from './screens/PoshIccScreen';
 import { useBackButton } from './hooks/useBackButton';
 
 // LEGAL & SUPPORT SCREENS
@@ -193,6 +197,12 @@ export const RootNavigator: React.FC = () => {
                   onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
                   onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
                   onNavigateToBilling={() => setCurrentScreen('BILLING')}
+                  onOpenFnfGratuity={(workerId) => {
+                    if (typeof sessionStorage !== 'undefined') {
+                      sessionStorage.setItem('gratuity_fnf_worker_id', workerId);
+                    }
+                    setCurrentScreen('GRATUITY');
+                  }}
                />;
       case 'ID_CARDS': 
         return isEntitled('DIGITAL_ID_CARDS') 
@@ -200,8 +210,12 @@ export const RootNavigator: React.FC = () => {
           : <UpgradeRequiredView featureKey="DIGITAL_ID_CARDS" onNavigate={setCurrentScreen} />;
       case 'PAYROLL': 
         return isEntitled('ADVANCED_PAYROLL') 
-          ? <PayrollScreen /> 
+          ? <PayrollScreen onNavigate={setCurrentScreen} /> 
           : <UpgradeRequiredView featureKey="ADVANCED_PAYROLL" onNavigate={setCurrentScreen} />;
+      case 'CTC_SIMULATOR': return <CtcSimulatorScreen onNavigate={setCurrentScreen} />;
+      case 'GRATUITY': return <GratuityScreen onNavigate={setCurrentScreen} />;
+      case 'ANNUAL_BONUS': return <AnnualBonusScreen onNavigate={setCurrentScreen} />;
+      case 'POSH_ICC': return <PoshIccScreen onNavigate={setCurrentScreen} />;
       case 'ATTENDANCE': return <AttendanceScreen />;
       case 'ROSTER': 
         return isEntitled('REGULATE_PUNCH') 

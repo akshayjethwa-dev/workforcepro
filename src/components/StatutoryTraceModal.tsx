@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   X, Calculator, ShieldCheck, FileSpreadsheet, Building2, 
-  Info, CheckCircle2, AlertTriangle, ArrowRight, Copy, Check 
+  Info, CheckCircle2, AlertTriangle, ArrowRight, Copy, Check, Scale
 } from 'lucide-react';
 import { MonthlyPayroll } from '../types/index';
 import { useToast } from '../contexts/ToastContext';
@@ -21,12 +21,23 @@ export const StatutoryTraceModal: React.FC<Props> = ({ isOpen, onClose, payroll 
   const stat = payroll.statutory;
   const trace = stat.calculationTrace;
   const src = trace.sourceValues;
+  const notionalAdd = stat.notionalWageAddition ?? src.notionalWageAddition ?? 0;
+  const origWageBase = stat.originalWageBase ?? src.originalWageBase ?? payroll.earnings.basic;
+  const compliantWageBase = stat.compliantWageBase ?? src.compliantWageBase ?? origWageBase;
+  const grat = stat.gratuityImpact ?? payroll.wageComplianceAudit?.gratuityImpact;
 
   const handleCopyTrace = () => {
     const traceText = `
 --- STATUTORY CALCULATION AUDIT TRACE ---
 Worker: ${payroll.workerName} (${payroll.workerDesignation})
 Month: ${payroll.month} | State: ${stat.state} | Regime: ${stat.taxRegime}
+
+0. LABOUR CODE 50% RULE & EXCESS ALLOWANCE ADD-BACK:
+${trace.excessAllowanceAddBackSummary || 'Compliant structure (Add-back ₹0)'}
+Original WageBase: ₹${origWageBase} | Notional Wage Addition: +₹${notionalAdd} | CompliantWageBase: ₹${compliantWageBase}
+PF Wage Base: ₹${stat.originalPfWageBase ?? stat.pfWageBase} → ₹${stat.pfWageBase} | ESI Wage Base: ₹${stat.originalEsiWageBase ?? stat.esiWageBase} → ₹${stat.esiWageBase}
+${grat ? `Gratuity Accrual Impact: +₹${grat.monthlyIncrease}/mo (+₹${grat.annualIncrease}/yr)` : ''}
+${stat.retrospectiveWarning ? `Warning: ${stat.retrospectiveWarning}` : ''}
 
 1. PROVIDENT FUND (PF):
 Rule: ${trace.pfRuleApplied}
@@ -42,14 +53,19 @@ ${stat.esiDroppedNote ? `Note: ${stat.esiDroppedNote}` : ''}
 3. PROFESSIONAL TAX (PT):
 Rule: ${trace.ptRuleApplied}
 Formula: ${trace.ptCalculation}
-PT Deducted: ₹${stat.professionalTax}
+PT Deducted: ₹${stat.professionalTax}${stat.isPtExempt ? ' (PT_EXEMPT)' : ''}${stat.ptProratedInfo ? ` (Pro-rated ${stat.ptProratedInfo.daysWorked}/${stat.ptProratedInfo.totalDaysInMonth} days)` : ''}
 
-4. TDS (INCOME TAX):
+4. LABOUR WELFARE FUND (LWF):
+Rule: ${trace.lwfRuleApplied || `${stat.state} State LWF Schedule`}
+Formula: ${trace.lwfCalculation || `Employee ₹${stat.employeeLwf || 0} | Employer ₹${stat.employerLwf || 0}`}
+Employee LWF: ₹${stat.employeeLwf || 0} | Employer LWF: ₹${stat.employerLwf || 0}${stat.isContractorExcludedFromLwf ? ' (CONTRACTOR Excluded)' : ''}
+
+5. TDS (INCOME TAX):
 Rule: ${trace.tdsRuleApplied}
 Formula: ${trace.tdsCalculation}
 Monthly TDS: ₹${stat.tds}
 
-5. TOTAL STATUTORY LIABILITY:
+6. TOTAL STATUTORY LIABILITY:
 Employee Deductions: ₹${stat.totalEmployeeStatutory}
 Employer Contributions: ₹${stat.totalEmployerStatutory}
 Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earnings.gross + stat.totalEmployerStatutory)}
@@ -75,8 +91,8 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
                 <h3 className="text-lg font-black text-slate-900">
                   Statutory Calculation Trace
                 </h3>
-                <span className="px-2 py-0.5 rounded-full text-xs font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                  {stat.state}
+                <span className="text-xs font-mono font-bold text-blue-700">
+                  · {stat.state}
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
@@ -109,11 +125,11 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
           <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
             <div>
               <span className="text-slate-400 block text-[10px] uppercase font-bold">Basic Wages</span>
-              <span className="font-mono font-bold text-slate-900">₹{payroll.earnings.basic.toLocaleString()}</span>
+              <span className="font-mono tabular-nums font-bold text-slate-900">₹{payroll.earnings.basic.toLocaleString()}</span>
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase font-bold">Gross Earnings</span>
-              <span className="font-mono font-bold text-slate-900">₹{payroll.earnings.gross.toLocaleString()}</span>
+              <span className="font-mono tabular-nums font-bold text-slate-900">₹{payroll.earnings.gross.toLocaleString()}</span>
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase font-bold">Tax Regime</span>
@@ -121,18 +137,92 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase font-bold">Net Payable</span>
-              <span className="font-mono font-black text-emerald-700">₹{payroll.netPayable.toLocaleString()}</span>
+              <span className="font-mono tabular-nums font-black text-emerald-700">₹{payroll.netPayable.toLocaleString()}</span>
             </div>
           </div>
+
+          {/* 0. 50% Rule Excess Allowance Add-Back & Gratuity Impact */}
+          {stat.isRetrospectivePeriod && stat.retrospectiveWarning ? (
+            <div className="p-4 rounded-2xl border border-amber-300 bg-amber-50/80 space-y-1.5">
+              <div className="flex items-center gap-2 text-xs font-extrabold uppercase text-amber-950">
+                <AlertTriangle size={16} className="text-amber-700 shrink-0" />
+                <span>Retrospective Period (Pre-21 Nov 2025) — Legacy Rules Applied</span>
+              </div>
+              <p className="text-xs text-amber-900 leading-relaxed">{stat.retrospectiveWarning}</p>
+            </div>
+          ) : (
+            <div
+              className={`p-4 rounded-2xl border space-y-2.5 ${
+                notionalAdd > 0
+                  ? 'border-amber-200 bg-amber-50/50'
+                  : 'border-emerald-200 bg-emerald-50/40'
+              }`}
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span
+                  className={`text-xs font-extrabold uppercase flex items-center gap-1.5 ${
+                    notionalAdd > 0 ? 'text-amber-950' : 'text-emerald-950'
+                  }`}
+                >
+                  <Scale size={16} className={notionalAdd > 0 ? 'text-amber-600' : 'text-emerald-600'} />
+                  <span>0. Labour Code 50% Rule (Eff. 21 Nov 2025)</span>
+                </span>
+                <span
+                  className={`text-[11px] font-mono tabular-nums font-black ${
+                    notionalAdd > 0 ? 'text-amber-800' : 'text-emerald-800'
+                  }`}
+                >
+                  {notionalAdd > 0 ? `Add-Back +₹${notionalAdd.toLocaleString('en-IN')}` : 'COMPLIANT · ₹0 Add-Back'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-xs bg-white p-2.5 rounded-xl border border-slate-200/80 font-mono tabular-nums">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-sans font-bold block">Original WageBase</span>
+                  <span className="font-bold text-slate-900">₹{origWageBase.toLocaleString('en-IN')}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-sans font-bold block">Notional Addition</span>
+                  <span className={`font-bold ${notionalAdd > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                    +₹{notionalAdd.toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-sans font-bold block">CompliantWageBase</span>
+                  <span className="font-black text-slate-900">₹{compliantWageBase.toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              {trace.excessAllowanceAddBackSummary && (
+                <div className="text-[11px] font-mono text-slate-700 bg-white/80 px-2.5 py-1.5 rounded-lg border border-slate-200/70">
+                  {trace.excessAllowanceAddBackSummary}
+                </div>
+              )}
+
+              {grat && grat.applicable && (
+                <div className="flex items-center justify-between flex-wrap gap-2 text-[11px] pt-1 text-slate-700">
+                  <span>
+                    Gratuity Accrual (15/26): <strong className="font-mono">₹{grat.originalMonthlyAccrual}/mo</strong> →{' '}
+                    <strong className="font-mono">₹{grat.recalculatedMonthlyAccrual}/mo</strong>
+                  </span>
+                  {grat.annualIncrease > 0 && (
+                    <span className="font-mono font-bold text-rose-700">
+                      Gratuity Liability Delta: +₹{grat.monthlyIncrease.toLocaleString('en-IN')}/mo (+₹{grat.annualIncrease.toLocaleString('en-IN')}/yr)
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 1. Provident Fund (PF) Trace */}
           <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50/40 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-extrabold uppercase text-blue-900 flex items-center gap-1.5">
                 <ShieldCheck size={16} className="text-blue-600" />
-                1. Employees' Provident Fund (EPF & MP Act 1952)
+                1. Employees' Provident Fund (EPF &amp; MP Act 1952)
               </span>
-              <span className="text-xs font-black font-mono text-blue-950">
+              <span className="text-xs font-black font-mono tabular-nums text-blue-950">
                 Employee: ₹{stat.employeePf} | Employer: ₹{stat.totalEmployerPf}
               </span>
             </div>
@@ -158,7 +248,7 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
                 <ShieldCheck size={16} className={stat.isEsiApplicable ? 'text-teal-600' : 'text-amber-600'} />
                 2. Employee State Insurance (ESI Act 1948)
               </span>
-              <span className="text-xs font-black font-mono text-slate-900">
+              <span className="text-xs font-black font-mono tabular-nums text-slate-900">
                 {stat.isEsiApplicable ? `Employee: ₹${stat.employeeEsi} | Employer: ₹${stat.employerEsi}` : 'Exempt (₹0)'}
               </span>
             </div>
@@ -177,32 +267,85 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
           </div>
 
           {/* 3. Professional Tax (PT) Trace */}
-          <div className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/40 space-y-2">
-            <div className="flex items-center justify-between">
+          <div className={`p-4 rounded-2xl border space-y-2 ${
+            stat.isPtExempt ? 'border-emerald-200 bg-emerald-50/40' : 'border-indigo-200 bg-indigo-50/40'
+          }`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-extrabold uppercase text-indigo-900 flex items-center gap-1.5">
                 <Building2 size={16} className="text-indigo-600" />
                 3. State Professional Tax ({stat.state})
               </span>
-              <span className="text-xs font-black font-mono text-indigo-950">
+              <span className="text-xs font-black font-mono tabular-nums text-indigo-950">
                 PT Deducted: ₹{stat.professionalTax}
+                {stat.isPtExempt && <span className="text-emerald-700"> · PT_EXEMPT</span>}
+                {stat.ptProratedInfo && (
+                  <span className="text-blue-700">
+                    {' '}· Pro-rated {stat.ptProratedInfo.daysWorked}/{stat.ptProratedInfo.totalDaysInMonth}d
+                  </span>
+                )}
+                {stat.ptFebruaryAdjustmentApplied && <span className="text-indigo-700"> · Feb Adj.</span>}
               </span>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed font-medium">
               {trace.ptRuleApplied}
             </p>
+            {stat.ptExemptionNote && (
+              <div className="p-2.5 bg-white/90 border border-emerald-200 rounded-xl text-xs text-emerald-900 font-semibold flex items-start gap-2">
+                <CheckCircle2 size={15} className="text-emerald-700 shrink-0 mt-0.5" />
+                <span>{stat.ptExemptionNote}</span>
+              </div>
+            )}
             <div className="p-2.5 bg-white rounded-xl border border-indigo-100 font-mono text-xs text-slate-800">
               {trace.ptCalculation}
             </div>
           </div>
 
-          {/* 4. TDS (Income Tax) Trace */}
+          {/* 4. Labour Welfare Fund (LWF) Trace */}
+          <div className={`p-4 rounded-2xl border space-y-2 ${
+            stat.isContractorExcludedFromLwf
+              ? 'border-slate-200 bg-slate-50/70'
+              : (stat.employeeLwf || 0) > 0
+              ? 'border-cyan-200 bg-cyan-50/40'
+              : 'border-slate-200 bg-slate-50/40'
+          }`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-extrabold uppercase text-slate-900 flex items-center gap-1.5">
+                <ShieldCheck size={16} className="text-cyan-700" />
+                4. State Labour Welfare Fund ({stat.state} LWF · {stat.lwfCycleLabel || 'Cycle'})
+              </span>
+              <span className="text-xs font-black font-mono tabular-nums text-slate-900">
+                {stat.isContractorExcludedFromLwf
+                  ? 'CONTRACTOR · LWF Skipped (₹0)'
+                  : `Employee: ₹${stat.employeeLwf || 0} | Employer: ₹${stat.employerLwf || 0}`}
+              </span>
+            </div>
+            <div className="text-[11px] font-mono text-slate-500">
+              Location Source: <strong className="text-slate-800">{stat.lwfWorkLocationSource || 'WORKER_LOCATION'}</strong>
+              {stat.lwfWageCeilingApplied ? ` · Wage Ceiling: ₹${stat.lwfWageCeilingApplied.toLocaleString('en-IN')}` : ''}
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed font-medium">
+              {trace.lwfRuleApplied || `State LWF schedule (${stat.lwfCycleLabel || 'Applicable cycle'}).`}
+            </p>
+            {stat.lwfTransferSplit && (
+              <div className="p-2.5 bg-indigo-50/60 border border-indigo-200 rounded-xl text-[11px] font-mono text-indigo-950">
+                <strong>Mid-Year Transfer Split ({stat.lwfTransferSplit.transferEffectiveDate}):</strong>{' '}
+                {stat.lwfTransferSplit.previousState} ({stat.lwfTransferSplit.monthsWorkedInPreviousState}m: EE ₹{stat.lwfTransferSplit.previousStateEmployeeLwf} / ER ₹{stat.lwfTransferSplit.previousStateEmployerLwf}) +{' '}
+                {stat.lwfTransferSplit.currentState} ({stat.lwfTransferSplit.monthsWorkedInCurrentState}m: EE ₹{stat.lwfTransferSplit.currentStateEmployeeLwf} / ER ₹{stat.lwfTransferSplit.currentStateEmployerLwf})
+              </div>
+            )}
+            <div className="p-2.5 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-800">
+              {trace.lwfCalculation || `Employee ₹${stat.employeeLwf || 0} | Employer ₹${stat.employerLwf || 0}`}
+            </div>
+          </div>
+
+          {/* 5. TDS (Income Tax) Trace */}
           <div className="p-4 rounded-2xl border border-violet-200 bg-violet-50/40 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-extrabold uppercase text-violet-900 flex items-center gap-1.5">
                 <FileSpreadsheet size={16} className="text-violet-600" />
-                4. Tax Deducted at Source (TDS - Section 192)
+                5. Tax Deducted at Source (TDS - Section 192)
               </span>
-              <span className="text-xs font-black font-mono text-violet-950">
+              <span className="text-xs font-black font-mono tabular-nums text-violet-950">
                 Monthly TDS: ₹{stat.tds}
               </span>
             </div>
@@ -214,29 +357,33 @@ Total Cost To Company (CTC): ₹${payroll.employerCostToCompany || (payroll.earn
             </div>
           </div>
 
-          {/* 5. Employer Statutory Liabilities & Cost To Company (CTC) */}
+          {/* 6. Employer Statutory Liabilities & Cost To Company (CTC) */}
           <div className="p-4 rounded-2xl border border-slate-300 bg-slate-900 text-white space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Employer Statutory Liability & CTC Impact
+                Employer Statutory Liability &amp; CTC Impact
               </span>
-              <span className="text-sm font-black font-mono text-emerald-400">
+              <span className="text-sm font-black font-mono tabular-nums text-emerald-400">
                 +₹{stat.totalEmployerStatutory.toLocaleString()} / mo
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
               <div className="p-2 bg-slate-800/80 rounded-xl">
                 <span className="text-slate-400 block text-[10px]">Employer PF Total (13.0%)</span>
-                <span className="font-mono font-bold text-white">₹{stat.totalEmployerPf.toLocaleString()}</span>
+                <span className="font-mono tabular-nums font-bold text-white">₹{stat.totalEmployerPf.toLocaleString()}</span>
               </div>
               <div className="p-2 bg-slate-800/80 rounded-xl">
                 <span className="text-slate-400 block text-[10px]">Employer ESI Total (3.25%)</span>
-                <span className="font-mono font-bold text-white">₹{stat.employerEsi.toLocaleString()}</span>
+                <span className="font-mono tabular-nums font-bold text-white">₹{stat.employerEsi.toLocaleString()}</span>
+              </div>
+              <div className="p-2 bg-slate-800/80 rounded-xl">
+                <span className="text-slate-400 block text-[10px]">Employer LWF ({stat.state})</span>
+                <span className="font-mono tabular-nums font-bold text-white">₹{(stat.employerLwf || 0).toLocaleString()}</span>
               </div>
             </div>
             <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
               <span className="text-slate-400 font-medium">True Monthly Cost to Company (CTC):</span>
-              <span className="text-base font-black font-mono text-emerald-400">
+              <span className="text-base font-black font-mono tabular-nums text-emerald-400">
                 ₹{(payroll.employerCostToCompany || (payroll.earnings.gross + stat.totalEmployerStatutory)).toLocaleString()}
               </span>
             </div>

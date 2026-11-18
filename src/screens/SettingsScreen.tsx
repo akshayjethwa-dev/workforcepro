@@ -10,7 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
-import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig, SafetyCheckInConfig, DeviceIntegrityConfig } from '../types/index';
+import { OrgSettings, ShiftConfig, Branch, KioskTerminal, ScreenName, WhatsAppBridgeConfig, SafetyCheckInConfig, DeviceIntegrityConfig, INDIAN_STATES, MinimumWageRevisionRule, PtLwfOrgConfig } from '../types/index';
 import { whatsappService } from '../services/whatsappService';
 import { safetyCheckInService, DEFAULT_SAFETY_CONFIG } from '../services/safetyCheckInService';
 import { deviceAttestationService, DEFAULT_DEVICE_INTEGRITY_CONFIG } from '../services/deviceAttestationService';
@@ -19,6 +19,15 @@ import { SetupGuideModal } from '../components/SetupGuideModal';
 import { A11yAuditModal } from '../components/A11yAuditModal';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
 import { FIELD_MODE_FALLBACK_MAPPINGS } from '../utils/wcagColor';
+import { SalaryStructureAuditPanel } from '../components/SalaryStructureAuditPanel';
+import { MinimumWageSchedulePanel } from '../components/MinimumWageSchedulePanel';
+import { PtLwfConfigPanel } from '../components/PtLwfConfigPanel';
+import {
+  DEFAULT_SCHEDULED_EMPLOYMENT,
+  getDefaultZoneForState,
+  getZonesForState,
+  SCHEDULED_EMPLOYMENT_CATEGORIES,
+} from '../services/minimumWageDatabase';
 
 import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -236,7 +245,14 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
         toast.info("Multiple branches requires Enterprise plan. Please upgrade in Billing.");
         return;
     }
-    const newBranch: Branch = { id: `branch_${Date.now()}`, name: 'New Branch' };
+    const defaultState = 'Maharashtra';
+    const newBranch: Branch = {
+      id: `branch_${Date.now()}`,
+      name: 'New Branch',
+      state: defaultState,
+      wageZone: getDefaultZoneForState(defaultState),
+      scheduledEmployment: DEFAULT_SCHEDULED_EMPLOYMENT,
+    };
     setSettings({ ...settings, branches: [...(settings.branches || []), newBranch] });
     toast.success("Branch added. Click Save to apply.");
   };
@@ -2199,6 +2215,85 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
                 </div>
 
                 <div className="p-6">
+                  <div className="mb-6 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                          Work Location &amp; Statutory Wage Jurisdiction
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Used to enforce multi-state minimum wages for workers assigned to this facility (overrides head office).
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shrink-0">
+                        {branch.state || 'Maharashtra'} · {branch.wageZone || getDefaultZoneForState(branch.state || 'Maharashtra')}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                          State Jurisdiction
+                        </label>
+                        <select
+                          value={branch.state || 'Maharashtra'}
+                          onChange={(e) => {
+                            const nextState = e.target.value;
+                            updateBranchDetails(branch.id, {
+                              state: nextState,
+                              wageZone: getDefaultZoneForState(nextState),
+                            });
+                          }}
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {INDIAN_STATES.map((st) => (
+                            <option key={st} value={st}>
+                              {st}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                          Minimum Wage Zone
+                        </label>
+                        <select
+                          value={branch.wageZone || getDefaultZoneForState(branch.state || 'Maharashtra')}
+                          onChange={(e) =>
+                            updateBranchDetails(branch.id, { wageZone: e.target.value })
+                          }
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {getZonesForState(branch.state || 'Maharashtra').map((z) => (
+                            <option key={z} value={z}>
+                              {z}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
+                          Scheduled Employment
+                        </label>
+                        <select
+                          value={branch.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
+                          onChange={(e) =>
+                            updateBranchDetails(branch.id, { scheduledEmployment: e.target.value })
+                          }
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {SCHEDULED_EMPLOYMENT_CATEGORIES.map((cat) => (
+                            <option key={cat} value={cat}>
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Location Geofencing</h4>
                   
                   {limits?.geofencingEnabled !== false ? (
@@ -2743,6 +2838,237 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
               </div>
             </div>
           </div>
+
+          {/* Section 3: Salary Structure Audit (50% Basic Wage Rule & Minimum Wage) */}
+          {profile?.tenantId && (
+            <SalaryStructureAuditPanel
+              tenantId={profile.tenantId}
+              orgSettings={settings}
+              onOpenCtcSimulator={onNavigate ? () => onNavigate('CTC_SIMULATOR') : undefined}
+            />
+          )}
+
+          {/* Section 4: Unionized Workforce & Collective Bargaining Agreement (CBA) Governance */}
+          <div className="px-1 mb-1">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+              4. Unionized Workforce &amp; Collective Bargaining Agreement (CBA)
+            </h3>
+          </div>
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  Active Collective Bargaining Agreement (CBA)
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
+                  When enabled, the CTC Restructuring Simulator flags affected facilities and blocks unilateral salary component restructuring until a Union settlement reference is logged.
+                </p>
+              </div>
+              <label className="inline-flex items-center gap-2.5 cursor-pointer select-none shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings?.compliance?.unionizedCba?.hasActiveCba)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setSettings((s) =>
+                      s
+                        ? {
+                            ...s,
+                            compliance: {
+                              ...(s.compliance || {}),
+                              unionizedCba: {
+                                ...(s.compliance?.unionizedCba || {}),
+                                hasActiveCba: checked,
+                                prohibitsUnilateralRestructure:
+                                  s.compliance?.unionizedCba?.prohibitsUnilateralRestructure ?? true,
+                              },
+                            },
+                          }
+                        : null
+                    );
+                  }}
+                  className="w-4 h-4 rounded accent-slate-900"
+                />
+                <span className="text-xs font-bold text-slate-800">
+                  Tenant Has Active Union CBA
+                </span>
+              </label>
+            </div>
+
+            {settings?.compliance?.unionizedCba?.hasActiveCba && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter ml-1">
+                    Recognized Union Name
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+                    value={settings.compliance.unionizedCba.unionName || ''}
+                    onChange={(e) =>
+                      setSettings((s) =>
+                        s
+                          ? {
+                              ...s,
+                              compliance: {
+                                ...(s.compliance || {}),
+                                unionizedCba: {
+                                  ...(s.compliance?.unionizedCba || { hasActiveCba: true, prohibitsUnilateralRestructure: true }),
+                                  unionName: e.target.value,
+                                },
+                              },
+                            }
+                          : null
+                      )
+                    }
+                    placeholder="e.g. Maharashtra Kamgar Union (INTUC)"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-1.5 block tracking-tighter ml-1">
+                    CBA Agreement Reference No.
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold font-mono text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+                    value={settings.compliance.unionizedCba.agreementRef || ''}
+                    onChange={(e) =>
+                      setSettings((s) =>
+                        s
+                          ? {
+                              ...s,
+                              compliance: {
+                                ...(s.compliance || {}),
+                                unionizedCba: {
+                                  ...(s.compliance?.unionizedCba || { hasActiveCba: true, prohibitsUnilateralRestructure: true }),
+                                  agreementRef: e.target.value,
+                                },
+                              },
+                            }
+                          : null
+                      )
+                    }
+                    placeholder="e.g. CBA-2025-MH-04"
+                  />
+                </div>
+                <label className="md:col-span-2 flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.compliance.unionizedCba.prohibitsUnilateralRestructure !== false}
+                    onChange={(e) =>
+                      setSettings((s) =>
+                        s
+                          ? {
+                              ...s,
+                              compliance: {
+                                ...(s.compliance || {}),
+                                unionizedCba: {
+                                  ...(s.compliance?.unionizedCba || { hasActiveCba: true, prohibitsUnilateralRestructure: true }),
+                                  prohibitsUnilateralRestructure: e.target.checked,
+                                },
+                              },
+                            }
+                          : null
+                      )
+                    }
+                    className="w-4 h-4 rounded accent-amber-600"
+                  />
+                  <span>
+                    Prohibit unilateral salary component restructuring without documented Union settlement
+                  </span>
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* Section 5: State Minimum Wage Schedule & Mid-Month Revision Rules */}
+          {settings && (
+            <>
+              <div className="px-1 mb-1">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                  5. State Minimum Wage Database &amp; Mid-Month Revisions
+                </h3>
+              </div>
+              <MinimumWageSchedulePanel
+                orgSettings={settings}
+                saving={saving}
+                onUpdateRevisions={async (revisions: MinimumWageRevisionRule[]) => {
+                  const updatedSettings: OrgSettings = {
+                    ...settings,
+                    compliance: {
+                      ...(settings.compliance || {}),
+                      minimumWageRevisions: revisions,
+                    },
+                  };
+                  setSettings(updatedSettings);
+                  if (profile?.tenantId) {
+                    setSaving(true);
+                    try {
+                      await dbService.saveOrgSettings(profile.tenantId, updatedSettings);
+                      setInitialSettings((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              compliance: {
+                                ...(prev.compliance || {}),
+                                minimumWageRevisions: revisions,
+                              },
+                            }
+                          : updatedSettings
+                      );
+                      toast.success('State minimum wage revision rules saved.');
+                    } catch {
+                      toast.error('Failed to persist minimum wage revision rules.');
+                    } finally {
+                      setSaving(false);
+                    }
+                  }
+                }}
+              />
+
+              <div className="px-1 mb-1">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                  6. State Professional Tax (PT) &amp; Labour Welfare Fund (LWF) Engine
+                </h3>
+              </div>
+              <PtLwfConfigPanel
+                orgSettings={settings}
+                saving={saving}
+                onSavePtLwfConfig={async (ptLwfConfig: PtLwfOrgConfig) => {
+                  const updatedSettings: OrgSettings = {
+                    ...settings,
+                    compliance: {
+                      ...(settings.compliance || {}),
+                      ptLwfConfig,
+                    },
+                  };
+                  setSettings(updatedSettings);
+                  if (profile?.tenantId) {
+                    setSaving(true);
+                    try {
+                      await dbService.saveOrgSettings(profile.tenantId, updatedSettings);
+                      setInitialSettings((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              compliance: {
+                                ...(prev.compliance || {}),
+                                ptLwfConfig,
+                              },
+                            }
+                          : updatedSettings
+                      );
+                      toast.success('PT & State LWF configuration saved.');
+                    } catch {
+                      toast.error('Failed to persist PT & LWF configuration.');
+                    } finally {
+                      setSaving(false);
+                    }
+                  }
+                }}
+              />
+            </>
+          )}
         </div>
       )}
 

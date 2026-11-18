@@ -287,6 +287,23 @@ export const SendMagicLinkModal: React.FC<Props> = ({
                 <div className="font-bold text-xs text-slate-900">Punch Link</div>
                 <p className="text-[10px] text-slate-500 mt-0.5">1-Tap Device Bound</p>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setScope('POSH_COMPLAINT')}
+                className={`p-3 rounded-2xl border text-left transition-all ${
+                  scope === 'POSH_COMPLAINT'
+                    ? 'border-slate-900 bg-slate-100 shadow-xs ring-2 ring-slate-900/20'
+                    : 'border-slate-200 hover:bg-slate-50 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-base">🔒</span>
+                  {scope === 'POSH_COMPLAINT' && <Check size={14} className="text-slate-900" />}
+                </div>
+                <div className="font-bold text-xs text-slate-900">POSH ICC</div>
+                <p className="text-[10px] text-slate-500 mt-0.5">Encrypted Report</p>
+              </button>
             </div>
           </div>
 

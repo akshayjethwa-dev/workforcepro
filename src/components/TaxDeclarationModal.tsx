@@ -3,9 +3,10 @@ import {
   X, Shield, FileText, CheckCircle2, AlertTriangle, 
   MapPin, IndianRupee, Lock, Unlock, Calendar, Info 
 } from 'lucide-react';
-import { Worker, INDIAN_STATES } from '../types/index';
+import { Worker, INDIAN_STATES, PtExemptionStatus } from '../types/index';
 import { dbService } from '../services/db';
 import { useToast } from '../contexts/ToastContext';
+import { resolveStateLwfRule } from '../services/ptLwfDatabase';
 
 interface Props {
   isOpen: boolean;
@@ -28,6 +29,27 @@ export const TaxDeclarationModal: React.FC<Props> = ({
   const [selectedState, setSelectedState] = useState<string>(worker?.state || 'Maharashtra');
   const [stateEffectiveDate, setStateEffectiveDate] = useState<string>(worker?.stateEffectiveDate || '');
   const [previousState, setPreviousState] = useState<string>(worker?.previousState || '');
+
+  // PT Exemption (Multiple Employers) & LWF Contractor Tag
+  const [ptExempt, setPtExempt] = useState<boolean>(
+    Boolean(worker?.ptExempt || worker?.ptExemptionStatus === 'PT_EXEMPT' || worker?.ptPreviousEmployerDeclaration?.declared)
+  );
+  const [prevEmployerName, setPrevEmployerName] = useState<string>(
+    worker?.ptPreviousEmployerDeclaration?.previousEmployerName || ''
+  );
+  const [prevEmployerRef, setPrevEmployerRef] = useState<string>(
+    worker?.ptPreviousEmployerDeclaration?.certificateRef || ''
+  );
+  const [prevEmployerDate, setPrevEmployerDate] = useState<string>(
+    worker?.ptPreviousEmployerDeclaration?.declaredDate || ''
+  );
+  const [employmentType, setEmploymentType] = useState<NonNullable<Worker['employmentType']>>(
+    worker?.employmentType ||
+      (worker?.isContractor ? 'CONTRACTOR' : worker?.category === 'Daily Wage' ? 'DAILY_WAGE' : 'PERMANENT')
+  );
+  const [isContractor, setIsContractor] = useState<boolean>(
+    Boolean(worker?.isContractor || worker?.employmentType === 'CONTRACTOR')
+  );
   
   // Declarations
   const [sec80C, setSec80C] = useState<number>(worker?.taxDeclarations?.section80C || 0);
@@ -44,6 +66,17 @@ export const TaxDeclarationModal: React.FC<Props> = ({
       setSelectedState(worker.state || 'Maharashtra');
       setStateEffectiveDate(worker.stateEffectiveDate || '');
       setPreviousState(worker.previousState || '');
+      setPtExempt(
+        Boolean(worker.ptExempt || worker.ptExemptionStatus === 'PT_EXEMPT' || worker.ptPreviousEmployerDeclaration?.declared)
+      );
+      setPrevEmployerName(worker.ptPreviousEmployerDeclaration?.previousEmployerName || '');
+      setPrevEmployerRef(worker.ptPreviousEmployerDeclaration?.certificateRef || '');
+      setPrevEmployerDate(worker.ptPreviousEmployerDeclaration?.declaredDate || '');
+      const inferredEmpType: NonNullable<Worker['employmentType']> =
+        worker.employmentType ||
+        (worker.isContractor ? 'CONTRACTOR' : worker.category === 'Daily Wage' ? 'DAILY_WAGE' : 'PERMANENT');
+      setEmploymentType(inferredEmpType);
+      setIsContractor(Boolean(worker.isContractor || worker.employmentType === 'CONTRACTOR'));
       setSec80C(worker.taxDeclarations?.section80C || 0);
       setSec80D(worker.taxDeclarations?.section80D || 0);
       setHra(worker.taxDeclarations?.hraExemption || 0);
@@ -67,10 +100,24 @@ export const TaxDeclarationModal: React.FC<Props> = ({
     e.preventDefault();
     setSaving(true);
     try {
+      const ptStatus: PtExemptionStatus = ptExempt ? 'PT_EXEMPT' : 'NONE';
       const updatedWorker: Partial<Worker> = {
         state: selectedState,
         previousState: previousState || undefined,
         stateEffectiveDate: stateEffectiveDate || undefined,
+        employmentType,
+        isContractor: isContractor || employmentType === 'CONTRACTOR',
+        ptExempt,
+        ptExemptionStatus: ptStatus,
+        ptExemptionReason: ptExempt ? 'MULTIPLE_EMPLOYER' : undefined,
+        ptPreviousEmployerDeclaration: ptExempt
+          ? {
+              declared: true,
+              previousEmployerName: prevEmployerName.trim() || 'Previous Employer',
+              certificateRef: prevEmployerRef.trim() || undefined,
+              declaredDate: prevEmployerDate || new Date().toISOString().slice(0, 10),
+            }
+          : undefined,
         taxRegime: regime,
         taxDeclarationLocked: isLocked,
         taxDeclarations: {
@@ -193,24 +240,24 @@ export const TaxDeclarationModal: React.FC<Props> = ({
             )}
           </div>
 
-          {/* State & Professional Tax Configuration */}
+          {/* Work Location State, PT & LWF Configuration */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
             <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <MapPin size={15} className="text-blue-600" />
-              State for Professional Tax (PT Slabs)
+              Work Location State &amp; Transfer (PT &amp; LWF Jurisdiction)
             </span>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Active State Jurisdiction
+                  Employee Work Location State
                 </label>
                 <select
                   value={selectedState}
-                  onChange={(e) => setSelectedState(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedState(e.target.value)}
                   className="w-full h-11 px-3 text-xs font-bold rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 >
-                  {INDIAN_STATES.map((st) => (
+                  {INDIAN_STATES.map((st: string) => (
                     <option key={st} value={st}>{st}</option>
                   ))}
                 </select>
@@ -223,29 +270,147 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                 <input
                   type="date"
                   value={stateEffectiveDate}
-                  onChange={(e) => setStateEffectiveDate(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setStateEffectiveDate(e.target.value)}
                   className="w-full h-11 px-3 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 />
               </div>
             </div>
 
+            <div className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] text-slate-600 font-mono">
+              {(() => {
+                const lwfRule = resolveStateLwfRule(selectedState);
+                return lwfRule.enabled
+                  ? `${selectedState} LWF: ${lwfRule.cycleLabel} · EE ₹${lwfRule.employeeAmount}${lwfRule.employeePercentageRate ? ' cap' : ''} / ER ₹${lwfRule.employerAmount}${lwfRule.wageCeiling ? ` · Ceiling ≤ ₹${lwfRule.wageCeiling.toLocaleString('en-IN')}` : ''}`
+                  : `${selectedState} LWF: No active LWF (₹0 deducted)`;
+              })()}
+            </div>
+
             {stateEffectiveDate && (
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Previous State Before Transfer
+                  Previous Work State Before Transfer (Splits LWF Liability by Months Worked)
                 </label>
                 <select
                   value={previousState}
-                  onChange={(e) => setPreviousState(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setPreviousState(e.target.value)}
                   className="w-full h-11 px-3 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 >
                   <option value="">Select Previous State...</option>
-                  {INDIAN_STATES.map((st) => (
+                  {INDIAN_STATES.map((st: string) => (
                     <option key={st} value={st}>{st}</option>
                   ))}
                 </select>
               </div>
             )}
+
+            {/* Multiple Employers PT Exemption (PT_EXEMPT) */}
+            <div className="pt-3 border-t border-slate-200 space-y-2.5">
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={ptExempt}
+                  onChange={(e) => setPtExempt(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                />
+                <div className="text-xs">
+                  <span className="font-bold text-slate-900 block">
+                    Mark as <span className="font-mono text-emerald-700">PT_EXEMPT</span> (Multiple Employers PT Declaration)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Skips Professional Tax deduction when the employee has submitted proof of PT already paid via another employer.
+                  </span>
+                </div>
+              </label>
+
+              {ptExempt && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pl-6">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Previous Employer Name
+                    </label>
+                    <input
+                      type="text"
+                      value={prevEmployerName}
+                      onChange={(e) => setPrevEmployerName(e.target.value)}
+                      placeholder="e.g. Apex Textile Mills"
+                      className="w-full h-9 px-2.5 text-xs rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Declaration / Cert Ref
+                    </label>
+                    <input
+                      type="text"
+                      value={prevEmployerRef}
+                      onChange={(e) => setPrevEmployerRef(e.target.value)}
+                      placeholder="e.g. PT-DECL-2026-04"
+                      className="w-full h-9 px-2.5 text-xs font-mono rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      Declaration Date
+                    </label>
+                    <input
+                      type="date"
+                      value={prevEmployerDate}
+                      onChange={(e) => setPrevEmployerDate(e.target.value)}
+                      className="w-full h-9 px-2.5 text-xs font-mono rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* LWF Contractor Tag & Employment Type */}
+            <div className="pt-3 border-t border-slate-200 space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Employment Classification (Gratuity &amp; LWF)
+                  </label>
+                  <select
+                    value={employmentType}
+                    onChange={(e) => {
+                      const nextType = e.target.value as NonNullable<Worker['employmentType']>;
+                      setEmploymentType(nextType);
+                      setIsContractor(nextType === 'CONTRACTOR' || nextType === 'CONTRACT');
+                    }}
+                    className="w-full h-10 px-3 text-xs font-bold rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  >
+                    <option value="PERMANENT">PERMANENT (Regular On-Roll)</option>
+                    <option value="FIXED_TERM">FIXED_TERM (1-Yr Gratuity Rule)</option>
+                    <option value="CONTRACTOR">CONTRACTOR (Excluded from LWF if State Permits)</option>
+                    <option value="CONTRACT">CONTRACT (Third-Party Agency)</option>
+                    <option value="DAILY_WAGE">DAILY_WAGE (Daily Rated)</option>
+                  </select>
+                </div>
+
+                <label className="flex items-start gap-2.5 p-2.5 bg-white border border-slate-200 rounded-xl cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={isContractor}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setIsContractor(checked);
+                      if (checked && employmentType !== 'CONTRACTOR') {
+                        setEmploymentType('CONTRACTOR');
+                      } else if (!checked && employmentType === 'CONTRACTOR') {
+                        setEmploymentType('PERMANENT');
+                      }
+                    }}
+                    className="mt-0.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-900 font-mono block">CONTRACTOR Tag</span>
+                    <span className="text-[11px] text-slate-500">
+                      Automatically skips LWF in {selectedState} when state rules permit contractor exclusion.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Chapter VI-A Investment Declarations (For Old Regime) */}

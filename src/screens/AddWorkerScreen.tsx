@@ -8,13 +8,27 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { faceService } from '../services/faceService';
-import { Worker, ShiftConfig, Branch, OrgSettings } from '../types/index';
+import { Worker, ShiftConfig, Branch, OrgSettings, WorkerSkillCategory } from '../types/index';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { storage } from '../lib/firebase';
 import { useBackButton } from '../hooks/useBackButton'; 
 import { quickSwitchService } from '../services/quickSwitchService';
 import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
 import { EmployeeCapExceededError } from '../services/employeeCapGuard';
+import { INDIAN_STATES } from '../types/index';
+import {
+  DEFAULT_SCHEDULED_EMPLOYMENT,
+  getDefaultZoneForState,
+  getStateMinimumWage,
+  getZonesForState,
+  rebalanceWageConfigTo50Percent,
+  resolveWorkerDefaultState,
+  resolveWorkerWorkLocation,
+  SCHEDULED_EMPLOYMENT_CATEGORIES,
+  SKILL_LEVEL_LABELS,
+  validateWorkerWageStructure,
+} from '../services/wageStructureValidationService';
+import { WageStructureValidatorCard } from '../components/WageStructureValidatorCard';
 
 interface Props {
   onBack: () => void;
@@ -83,10 +97,17 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     weeklyOffOverride: undefined, 
     leaveBalances: undefined, // Default to undefined to use factory policy
     wageConfig: {
-      type: 'DAILY', amount: 0, overtimeEligible: false, 
+      type: 'DAILY', amount: 0, dailyMultiplier: 26, workingDaysPerMonth: 26, overtimeEligible: false, 
       allowances: { travel: 0, food: 0, nightShift: 0 },
-      monthlyBreakdown: { basic: 0, hra: 0, others: 0 }
+      monthlyBreakdown: { basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0 },
+      dailyBreakdown: { basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0 }
     },
+    state: 'Maharashtra',
+    wageZone: getDefaultZoneForState('Maharashtra'),
+    scheduledEmployment: DEFAULT_SCHEDULED_EMPLOYMENT,
+    skillCategory: 'UNSKILLED',
+    isOnProbation: false,
+    salaryRevisionDate: '',
     uan: '',
     esicIp: '',
     pan: '',
@@ -96,6 +117,9 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     dateOfExit: '', 
     status: 'ACTIVE'
   });
+
+  const [useDailyBreakdown, setUseDailyBreakdown] = useState(false);
+  const [acknowledgedNonCompliant, setAcknowledgedNonCompliant] = useState(false);
 
   useBackButton(() => {
     if (currentStep > 0) {
@@ -120,11 +144,16 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         setAvailableDepartments(depts);
         
         if (!isEditing) {
+          const defaultBranch = branches[0];
+          const initLoc = resolveWorkerWorkLocation({ branchId: defaultBranch.id }, orgSettings);
           setFormData(prev => ({ 
              ...prev, 
              shiftId: orgSettings.shifts.length > 0 ? orgSettings.shifts[0].id : 'default',
-             branchId: branches[0].id,
-             department: depts[0]
+             branchId: defaultBranch.id,
+             department: depts[0],
+             state: initLoc.state,
+             wageZone: initLoc.wageZone,
+             scheduledEmployment: initLoc.scheduledEmployment,
           }));
         }
       });
@@ -133,15 +162,52 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   useEffect(() => {
     if (initialData) {
-        setFormData(initialData);
+        const hydrated = { ...initialData };
+        if (
+          (hydrated.wageConfig?.type === 'MONTHLY' || hydrated.wageType === 'MONTHLY') &&
+          !hydrated.wageConfig?.monthlyBreakdown
+        ) {
+          const audit = validateWorkerWageStructure(hydrated, { ignoreRevisionCutoff: true });
+          hydrated.wageConfig = {
+            ...(hydrated.wageConfig || {
+              type: 'MONTHLY',
+              amount: audit.totalRemuneration,
+              overtimeEligible: true,
+              allowances: { travel: 0, food: 0, nightShift: 0 },
+            }),
+            type: 'MONTHLY',
+            amount: audit.totalRemuneration,
+            basicPercentage: Math.round(audit.wageBasePercentage),
+            monthlyBreakdown: {
+              basic: audit.basicPay,
+              da: audit.da,
+              retainingAllowance: audit.retainingAllowance,
+              hra: audit.hra,
+              travel: audit.travelAllowance,
+              medical: audit.medicalAllowance,
+              others: audit.otherAllowances,
+              employerPf: audit.employerPf,
+              employerGratuity: audit.employerGratuity,
+            },
+          };
+        }
+        setFormData(hydrated);
+        setAcknowledgedNonCompliant(Boolean(hydrated.wageConfig?.acknowledgedNonCompliant));
+        if (hydrated.wageConfig?.dailyBreakdown && (
+          (hydrated.wageConfig.dailyBreakdown.basic || 0) +
+          (hydrated.wageConfig.dailyBreakdown.hra || 0) +
+          (hydrated.wageConfig.dailyBreakdown.others || 0) > 0
+        )) {
+          setUseDailyBreakdown(true);
+        }
         // STRICT CHECK: Only turn toggle ON if they actually have a custom saved policy
-        if (initialData.leaveBalances && Object.keys(initialData.leaveBalances).length > 0) {
+        if (hydrated.leaveBalances && Object.keys(hydrated.leaveBalances).length > 0) {
             setIsLeaveOverride(true);
         } else {
             setIsLeaveOverride(false);
         }
         
-        if (initialData.faceDescriptor && initialData.faceDescriptor.length > 0) {
+        if (hydrated.faceDescriptor && hydrated.faceDescriptor.length > 0) {
              setCapturedImages(["EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA", "EXISTING_DATA"]);
         }
     }
@@ -191,23 +257,88 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       setCapturedImages([]); 
   };
 
-  const handleMonthlyWageChange = (field: 'basic' | 'hra' | 'others', value: string) => {
+  type BreakdownField =
+    | 'basic'
+    | 'da'
+    | 'retainingAllowance'
+    | 'hra'
+    | 'travel'
+    | 'medical'
+    | 'others'
+    | 'employerPf'
+    | 'employerGratuity';
+
+  const handleMonthlyWageChange = (field: BreakdownField, value: string) => {
     const numVal = parseFloat(value) || 0;
     setFormData(prev => {
-      const currentBreakdown = prev.wageConfig?.monthlyBreakdown || { basic: 0, hra: 0, others: 0 };
+      const currentBreakdown = prev.wageConfig?.monthlyBreakdown || {
+        basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0
+      };
       const updatedBreakdown = { ...currentBreakdown, [field]: numVal };
-      const newTotal = updatedBreakdown.basic + updatedBreakdown.hra + updatedBreakdown.others;
-      
+      const newTotalRemuneration =
+        (updatedBreakdown.basic || 0) +
+        (updatedBreakdown.da || 0) +
+        (updatedBreakdown.retainingAllowance || 0) +
+        (updatedBreakdown.hra || 0) +
+        (updatedBreakdown.travel || 0) +
+        (updatedBreakdown.medical || 0) +
+        (updatedBreakdown.others || 0);
+      const wageBase =
+        (updatedBreakdown.basic || 0) +
+        (updatedBreakdown.da || 0) +
+        (updatedBreakdown.retainingAllowance || 0);
+
       return {
         ...prev,
         wageConfig: {
           ...prev.wageConfig!,
           monthlyBreakdown: updatedBreakdown,
-          amount: newTotal 
+          amount: newTotalRemuneration,
+          basicPercentage: newTotalRemuneration > 0 ? Math.round((wageBase / newTotalRemuneration) * 100) : 0
         }
       };
     });
   };
+
+  const handleDailyBreakdownChange = (field: BreakdownField, value: string) => {
+    const numVal = parseFloat(value) || 0;
+    setFormData(prev => {
+      const currentBreakdown = prev.wageConfig?.dailyBreakdown || {
+        basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0
+      };
+      const updatedBreakdown = { ...currentBreakdown, [field]: numVal };
+      const dailyTotal =
+        (updatedBreakdown.basic || 0) +
+        (updatedBreakdown.da || 0) +
+        (updatedBreakdown.retainingAllowance || 0) +
+        (updatedBreakdown.hra || 0) +
+        (updatedBreakdown.travel || 0) +
+        (updatedBreakdown.medical || 0) +
+        (updatedBreakdown.others || 0);
+      const dailyWageBase =
+        (updatedBreakdown.basic || 0) +
+        (updatedBreakdown.da || 0) +
+        (updatedBreakdown.retainingAllowance || 0);
+
+      return {
+        ...prev,
+        wageConfig: {
+          ...prev.wageConfig!,
+          dailyBreakdown: updatedBreakdown,
+          amount: dailyTotal,
+          basicPercentage: dailyTotal > 0 ? Math.round((dailyWageBase / dailyTotal) * 100) : 0
+        }
+      };
+    });
+  };
+
+  const liveWageAudit = validateWorkerWageStructure(
+    {
+      ...formData,
+      state: formData.state || resolveWorkerDefaultState(formData, settings || undefined),
+    },
+    { ignoreRevisionCutoff: true, orgSettings: settings || undefined }
+  );
 
   const validateStep = (step: number): boolean => {
     if (step === 0) {
@@ -304,21 +435,59 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         ? formData.wageConfig.amount 
         : (isMonthlyWage ? 25000 : 650);
 
+      const finalAudit = validateWorkerWageStructure(
+        {
+          ...formData,
+          state: formData.state || resolveWorkerDefaultState(formData, settings || undefined),
+          wageConfig: {
+            ...(formData.wageConfig || {}),
+            type: isMonthlyWage ? 'MONTHLY' : 'DAILY',
+            amount: wageAmount,
+            overtimeEligible: formData.wageConfig?.overtimeEligible ?? false,
+            allowances: formData.wageConfig?.allowances || { travel: 0, food: 0, nightShift: 0 },
+          },
+        },
+        { ignoreRevisionCutoff: true, orgSettings: settings || undefined }
+      );
+
       const workerData: any = {
         ...formData,
+        state: finalAudit.state,
         tenantId: profile.tenantId,
         photoUrl: mainPhotoUrl, 
         faceDescriptor: descriptor, 
         status: 'ACTIVE',
+        isContractor: Boolean(formData.isContractor || formData.employmentType === 'CONTRACTOR'),
+        ptExemptionStatus: formData.ptExempt ? 'PT_EXEMPT' : 'NONE',
+        ptExemptionReason: formData.ptExempt ? 'MULTIPLE_EMPLOYER' : undefined,
         wageType: isMonthlyWage ? 'MONTHLY' : 'DAILY',
         dailyWage: !isMonthlyWage ? wageAmount : undefined,
         monthlySalary: isMonthlyWage ? wageAmount : undefined,
         wageConfig: {
           ...(formData.wageConfig || {}),
           type: isMonthlyWage ? 'MONTHLY' : 'DAILY',
-          amount: wageAmount
+          amount: wageAmount,
+          dailyMultiplier: !isMonthlyWage ? (formData.wageConfig?.dailyMultiplier || 26) : undefined,
+          workingDaysPerMonth: !isMonthlyWage ? (formData.wageConfig?.dailyMultiplier || formData.wageConfig?.workingDaysPerMonth || 26) : (formData.wageConfig?.workingDaysPerMonth || 26),
+          complianceStatus: finalAudit.status,
+          complianceFlags: finalAudit.complianceFlags,
+          wageAuditSummary: finalAudit,
+          acknowledgedNonCompliant: finalAudit.isFiftyPercentNonCompliant
+            ? acknowledgedNonCompliant || true
+            : false,
         }
       };
+
+      if (isEditing && initialData?.wageConfig && formData.salaryRevisionDate) {
+        const structureChanged =
+          initialData.wageConfig.amount !== wageAmount ||
+          JSON.stringify(initialData.wageConfig.monthlyBreakdown) !== JSON.stringify(formData.wageConfig?.monthlyBreakdown) ||
+          JSON.stringify(initialData.wageConfig.dailyBreakdown) !== JSON.stringify(formData.wageConfig?.dailyBreakdown);
+        if (structureChanged) {
+          workerData.previousWageConfig = initialData.wageConfig;
+          workerData.previousWageAmount = initialData.wageConfig.amount;
+        }
+      }
 
       // FIREBASE SAFETY: Remove leaveBalances if the override toggle is OFF
       if (!isLeaveOverride) {
@@ -487,9 +656,29 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase ml-1">Primary Branch *</label>
                 <select className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                  value={formData.branchId} onChange={e => setFormData({...formData, branchId: e.target.value})}>
+                  value={formData.branchId} onChange={e => {
+                    const nextBranchId = e.target.value;
+                    const chosenBranch = availableBranches.find(b => b.id === nextBranchId);
+                    const loc = resolveWorkerWorkLocation(
+                      { branchId: nextBranchId },
+                      settings || undefined
+                    );
+                    setFormData(prev => ({
+                      ...prev,
+                      branchId: nextBranchId,
+                      ...(chosenBranch?.state || chosenBranch?.location?.address
+                        ? {
+                            state: loc.state,
+                            wageZone: loc.wageZone,
+                            scheduledEmployment: loc.scheduledEmployment,
+                          }
+                        : {}),
+                    }));
+                  }}>
                   {availableBranches.map(branch => (
-                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}{branch.state ? ` (${branch.state}${branch.wageZone ? ` · ${branch.wageZone}` : ''})` : ''}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -611,12 +800,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {/* STEP 3: WAGE */}
         {currentStep === 2 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h2 className="text-lg font-bold text-gray-800 mb-2">Wage Configuration</h2>
+            <h2 className="text-lg font-bold text-gray-800 mb-2">Wage Configuration &amp; 50% Rule Validation</h2>
             <div className="grid grid-cols-2 gap-4 mb-4">
                <button 
                  type="button"
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'DAILY'}}))}
-                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 ${
+                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 cursor-pointer ${
                     formData.wageConfig?.type === 'DAILY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
                  }`}
                >
@@ -626,7 +815,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                <button 
                  type="button"
                  onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'MONTHLY'}}))}
-                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 ${
+                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 cursor-pointer ${
                     formData.wageConfig?.type === 'MONTHLY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
                  }`}
                >
@@ -635,56 +824,366 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                </button>
             </div>
 
+            {/* Work State, Zone, Skill, Scheduled Employment, Revision Date & Probation */}
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Work State (Employee Location)</label>
+                  <select
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.state || resolveWorkerDefaultState(formData, settings || undefined)}
+                    onChange={e => {
+                      const nextSt = e.target.value;
+                      setFormData({
+                        ...formData,
+                        state: nextSt,
+                        wageZone: getDefaultZoneForState(nextSt),
+                      });
+                    }}
+                  >
+                    {INDIAN_STATES.map(st => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Minimum Wage Zone</label>
+                  <select
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.wageZone || getDefaultZoneForState(formData.state || resolveWorkerDefaultState(formData, settings || undefined))}
+                    onChange={e => setFormData({ ...formData, wageZone: e.target.value })}
+                  >
+                    {getZonesForState(formData.state || resolveWorkerDefaultState(formData, settings || undefined)).map(z => (
+                      <option key={z} value={z}>{z}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Skill Category</label>
+                  <select
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.skillCategory || 'UNSKILLED'}
+                    onChange={e => setFormData({ ...formData, skillCategory: e.target.value as WorkerSkillCategory })}
+                  >
+                    {(Object.keys(SKILL_LEVEL_LABELS) as WorkerSkillCategory[]).map(sk => (
+                      <option key={sk} value={sk}>{SKILL_LEVEL_LABELS[sk]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Scheduled Employment</label>
+                  <select
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
+                    onChange={e => setFormData({ ...formData, scheduledEmployment: e.target.value })}
+                  >
+                    {SCHEDULED_EMPLOYMENT_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Structure Effective Date</label>
+                  <input
+                    type="date"
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-mono font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    value={formData.salaryRevisionDate || ''}
+                    onChange={e => setFormData({ ...formData, salaryRevisionDate: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
+                <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(formData.isOnProbation)}
+                    onChange={e => setFormData({ ...formData, isOnProbation: e.target.checked })}
+                    className="w-4 h-4 accent-slate-900 rounded"
+                  />
+                  <span>Employee on Probation</span>
+                  <span className="text-[11px] font-normal text-slate-500">(No minimum wage exemption)</span>
+                </label>
+
+                {(() => {
+                  const st = formData.state || resolveWorkerDefaultState(formData, settings || undefined);
+                  const minInfo = getStateMinimumWage(
+                    st,
+                    formData.skillCategory || 'UNSKILLED',
+                    formData.wageZone,
+                    formData.scheduledEmployment,
+                    undefined,
+                    settings?.compliance?.minimumWageRevisions
+                  );
+                  return (
+                    <span className="text-[11px] text-slate-700 font-mono tabular-nums font-bold">
+                      Floor: ₹{minInfo.monthlyFloor.toLocaleString('en-IN')}/mo (₹{minInfo.dailyFloor}/day) · Notif. {minInfo.entry.notificationDate}
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+
             {formData.wageConfig?.type === 'DAILY' ? (
-              <div className="mt-4 animate-in fade-in">
-                <label className="text-xs font-bold text-gray-500 uppercase ml-1">Daily Rate Amount *</label>
-                <div className="relative mt-2">
-                  <IndianRupee className="absolute left-3 top-4 text-gray-400" size={20}/>
-                  <input type="number" className="w-full pl-10 p-3.5 border border-gray-200 rounded-xl font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-13"
-                    placeholder="e.g. 500"
-                    value={formData.wageConfig?.amount || ''} 
-                    onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value)}})} />
+              <div className="mt-4 space-y-4 animate-in fade-in">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Daily Rate Amount *</label>
+                    <div className="relative mt-1.5">
+                      <IndianRupee className="absolute left-3 top-4 text-gray-400" size={18}/>
+                      <input type="number" className="w-full pl-9 p-3.5 border border-gray-200 rounded-xl font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-13"
+                        placeholder="e.g. 500"
+                        value={formData.wageConfig?.amount || ''} 
+                        onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value) || 0}})} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Monthly Equivalent Multiplier</label>
+                    <div className="grid grid-cols-2 gap-2 mt-1.5">
+                      {([26, 30] as const).map(mult => (
+                        <button
+                          key={mult}
+                          type="button"
+                          onClick={() => setFormData(prev => ({
+                            ...prev,
+                            wageConfig: { ...prev.wageConfig!, dailyMultiplier: mult, workingDaysPerMonth: mult }
+                          }))}
+                          className={`min-h-13 rounded-xl border-2 text-xs font-bold transition-all cursor-pointer ${
+                            (formData.wageConfig?.dailyMultiplier || formData.wageConfig?.workingDaysPerMonth || 26) === mult
+                              ? 'border-blue-600 bg-blue-50 text-blue-700'
+                              : 'border-gray-200 bg-white text-gray-600'
+                          }`}
+                        >
+                          × {mult} Days
+                          <span className="block text-[10px] font-mono font-normal">
+                            ₹{((formData.wageConfig?.amount || 0) * mult).toLocaleString('en-IN')}/mo
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Toggleable Daily Wage Component Split */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">Specify Daily Component Breakdown (Optional)</span>
+                      <span className="text-[11px] text-slate-500">Split daily wage into Basic/DA vs HRA/Travel/Medical/Other allowances</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={useDailyBreakdown}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseDailyBreakdown(checked);
+                        if (!checked) {
+                          setFormData(prev => ({
+                            ...prev,
+                            wageConfig: { ...prev.wageConfig!, dailyBreakdown: undefined }
+                          }));
+                        }
+                      }}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+
+                  {useDailyBreakdown && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Basic *</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.basic || ''}
+                          onChange={e => handleDailyBreakdownChange('basic', e.target.value)} placeholder="e.g. 300" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily DA</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.da || ''}
+                          onChange={e => handleDailyBreakdownChange('da', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Retaining</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.retainingAllowance || ''}
+                          onChange={e => handleDailyBreakdownChange('retainingAllowance', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily HRA</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.hra || ''}
+                          onChange={e => handleDailyBreakdownChange('hra', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Travel</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.travel || ''}
+                          onChange={e => handleDailyBreakdownChange('travel', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Medical</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.medical || ''}
+                          onChange={e => handleDailyBreakdownChange('medical', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Others</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.others || ''}
+                          onChange={e => handleDailyBreakdownChange('others', e.target.value)} placeholder="0" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-indigo-700 uppercase block">ER PF+Grat/day</label>
+                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold font-mono"
+                          value={formData.wageConfig?.dailyBreakdown?.employerPf || ''}
+                          onChange={e => handleDailyBreakdownChange('employerPf', e.target.value)} placeholder="0" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
-              <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100 animate-in fade-in slide-in-from-top-2">
-                <h3 className="text-sm font-bold text-blue-900 mb-4 flex items-center">
+              <div className="mt-4 bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 animate-in fade-in slide-in-from-top-2 space-y-4">
+                <h3 className="text-sm font-bold text-blue-900 flex items-center">
                   <Briefcase size={16} className="mr-2"/> Monthly Salary Structure
                 </h3>
-                <div className="space-y-4">
+
+                {/* WageBase Group */}
+                <div className="bg-white/90 rounded-xl p-3 border border-blue-100 space-y-3">
+                  <span className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider block">
+                    WageBase = Basic Pay + DA + Retaining Allowance
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                        <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Basic + DA (PF Applicable) *</label>
-                        <div className="relative mt-1">
-                          <IndianRupee className="absolute left-3 top-3.5 text-blue-400" size={16}/>
-                          <input type="number" className="w-full pl-9 p-3 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
-                            value={formData.wageConfig?.monthlyBreakdown?.basic || ''}
-                            onChange={e => handleMonthlyWageChange('basic', e.target.value)} placeholder="e.g. 15000" />
-                        </div>
+                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Basic Pay *</label>
+                      <div className="relative mt-1">
+                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
+                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={formData.wageConfig?.monthlyBreakdown?.basic || ''}
+                          onChange={e => handleMonthlyWageChange('basic', e.target.value)} placeholder="e.g. 15000" />
+                      </div>
                     </div>
                     <div>
-                        <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">HRA (House Rent Allowance)</label>
-                        <div className="relative mt-1">
-                          <IndianRupee className="absolute left-3 top-3.5 text-blue-400" size={16}/>
-                          <input type="number" className="w-full pl-9 p-3 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
-                            value={formData.wageConfig?.monthlyBreakdown?.hra || ''}
-                            onChange={e => handleMonthlyWageChange('hra', e.target.value)} placeholder="e.g. 5000" />
-                        </div>
+                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">DA (Dearness Allow.)</label>
+                      <div className="relative mt-1">
+                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
+                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={formData.wageConfig?.monthlyBreakdown?.da || ''}
+                          onChange={e => handleMonthlyWageChange('da', e.target.value)} placeholder="0" />
+                      </div>
                     </div>
                     <div>
-                        <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Other Allowances</label>
-                        <div className="relative mt-1">
-                          <IndianRupee className="absolute left-3 top-3.5 text-blue-400" size={16}/>
-                          <input type="number" className="w-full pl-9 p-3 border border-blue-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
-                            value={formData.wageConfig?.monthlyBreakdown?.others || ''}
-                            onChange={e => handleMonthlyWageChange('others', e.target.value)} placeholder="e.g. 2000" />
-                        </div>
+                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Retaining Allowance</label>
+                      <div className="relative mt-1">
+                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
+                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={formData.wageConfig?.monthlyBreakdown?.retainingAllowance || ''}
+                          onChange={e => handleMonthlyWageChange('retainingAllowance', e.target.value)} placeholder="0" />
+                      </div>
                     </div>
+                  </div>
                 </div>
-                <div className="mt-4 pt-4 border-t border-blue-200 flex justify-between items-center">
-                    <span className="text-xs font-bold text-blue-900 uppercase">Total Gross Salary</span>
-                    <span className="text-xl font-black text-blue-700">₹ {formData.wageConfig?.amount || 0}</span>
+
+                {/* Excluded Components Group */}
+                <div className="bg-white/90 rounded-xl p-3 border border-blue-100 space-y-3">
+                  <span className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
+                    Excluded Components = HRA + Travel + Medical + Other Allowances
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">HRA</label>
+                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.hra || ''}
+                        onChange={e => handleMonthlyWageChange('hra', e.target.value)} placeholder="e.g. 5000" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Travel Allow.</label>
+                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.travel || ''}
+                        onChange={e => handleMonthlyWageChange('travel', e.target.value)} placeholder="0" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Medical Allow.</label>
+                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.medical || ''}
+                        onChange={e => handleMonthlyWageChange('medical', e.target.value)} placeholder="0" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Other Allow.</label>
+                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.others || ''}
+                        onChange={e => handleMonthlyWageChange('others', e.target.value)} placeholder="e.g. 2000" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Employer Contributions (Explicitly Excluded from 50% Denominator) */}
+                <div className="bg-indigo-50/80 rounded-xl p-3 border border-indigo-200/70 space-y-2">
+                  <span className="text-[10px] font-extrabold text-indigo-900 uppercase tracking-wider block">
+                    Employer Contributions (Excluded from 50% Rule Denominator)
+                  </span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1">Employer PF (₹/mo)</label>
+                      <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.employerPf || ''}
+                        onChange={e => handleMonthlyWageChange('employerPf', e.target.value)} placeholder="0" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1">Employer Gratuity (₹/mo)</label>
+                      <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={formData.wageConfig?.monthlyBreakdown?.employerGratuity || ''}
+                        onChange={e => handleMonthlyWageChange('employerGratuity', e.target.value)} placeholder="0" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-blue-200 flex justify-between items-center">
+                    <span className="text-xs font-bold text-blue-900 uppercase">Total Remuneration (Excl. Employer PF/Gratuity)</span>
+                    <span className="text-xl font-black font-mono text-blue-700">₹ {(formData.wageConfig?.amount || 0).toLocaleString('en-IN')}</span>
                 </div>
               </div>
+            )}
+
+            {/* LIVE 50% RULE & MINIMUM WAGE AUDIT CARD */}
+            {liveWageAudit.totalRemuneration > 0 && (
+              <WageStructureValidatorCard
+                audit={liveWageAudit}
+                acknowledgedNonCompliant={acknowledgedNonCompliant}
+                onAcknowledgeChange={setAcknowledgedNonCompliant}
+                onAutoRebalance={() => {
+                  const balanced = rebalanceWageConfigTo50Percent(
+                    { ...formData, state: formData.state || resolveWorkerDefaultState(formData, settings || undefined) },
+                    settings || undefined
+                  );
+                  if (balanced.type === 'DAILY') setUseDailyBreakdown(true);
+                  setFormData(prev => ({ ...prev, wageConfig: balanced }));
+                  setAcknowledgedNonCompliant(false);
+                  toast.success('Adjusted Basic Pay to meet the 50% Wage Rule.');
+                }}
+                onMatchMinimumWage={() => {
+                  const minFloor = liveWageAudit.statutoryMinimumWageMonthly;
+                  if (formData.wageConfig?.type === 'MONTHLY') {
+                    handleMonthlyWageChange('basic', String(minFloor));
+                  } else {
+                    const mult = liveWageAudit.dailyMultiplier || 26;
+                    const dailyMin = Math.ceil(minFloor / mult);
+                    if (useDailyBreakdown) {
+                      handleDailyBreakdownChange('basic', String(dailyMin));
+                    } else {
+                      setFormData(prev => ({
+                        ...prev,
+                        wageConfig: { ...prev.wageConfig!, amount: dailyMin }
+                      }));
+                    }
+                  }
+                  toast.success(`Updated Basic Pay to meet ${liveWageAudit.state} minimum wage floor.`);
+                }}
+                compact
+              />
             )}
 
             <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
@@ -814,6 +1313,280 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </button>
                 </div>
             )}
+
+            {/* GRATUITY, NOMINEE & SUBSIDIARY TRANSFER SETTINGS */}
+            <div className="mt-5 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Gratuity Tenure, Nominee &amp; Subsidiary Transfer</h3>
+                <p className="text-[11px] text-slate-500">
+                  Configures 5-year vs Fixed-Term 1-year (Nov 2025) gratuity eligibility, nominee details &amp; prior subsidiary continuity.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Employment Type</label>
+                  <select
+                    value={formData.employmentType || (formData.isContractor ? 'CONTRACTOR' : formData.category === 'Daily Wage' ? 'DAILY_WAGE' : 'PERMANENT')}
+                    onChange={e => {
+                      const nextType = e.target.value as Worker['employmentType'];
+                      setFormData({
+                        ...formData,
+                        employmentType: nextType,
+                        isContractor: nextType === 'CONTRACTOR' || nextType === 'CONTRACT',
+                      });
+                    }}
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-blue-600"
+                  >
+                    <option value="PERMANENT">Permanent (5-Yr Gratuity Rule)</option>
+                    <option value="FIXED_TERM">Fixed-Term Hire (1-Yr Nov 2025)</option>
+                    <option value="CONTRACTOR">CONTRACTOR (LWF Exempt if State Permits)</option>
+                    <option value="CONTRACT">Third-Party Contract</option>
+                    <option value="DAILY_WAGE">Daily Wage</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Nominee Full Name</label>
+                  <input
+                    type="text"
+                    value={formData.nomineeName || ''}
+                    onChange={e => setFormData({ ...formData, nomineeName: e.target.value })}
+                    placeholder="Beneficiary name"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Nominee Relation</label>
+                  <input
+                    type="text"
+                    value={formData.nomineeRelation || ''}
+                    onChange={e => setFormData({ ...formData, nomineeRelation: e.target.value })}
+                    placeholder="Spouse / Parent / Child"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(formData.subsidiaryTransfer?.transferredFromSubsidiary)}
+                    onChange={e =>
+                      setFormData({
+                        ...formData,
+                        subsidiaryTransfer: {
+                          transferredFromSubsidiary: e.target.checked,
+                          subsidiaryName: formData.subsidiaryTransfer?.subsidiaryName || '',
+                          previousJoiningDate: formData.subsidiaryTransfer?.previousJoiningDate || '',
+                          transferDate: formData.subsidiaryTransfer?.transferDate || formData.joinedDate || '',
+                          noBreakInService: formData.subsidiaryTransfer?.noBreakInService ?? true,
+                        },
+                      })
+                    }
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                  <span>Transferred from a group / subsidiary company (aggregate continuous service)</span>
+                </label>
+
+                {formData.subsidiaryTransfer?.transferredFromSubsidiary && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-600 block mb-1">Prior Subsidiary Name</label>
+                      <input
+                        type="text"
+                        value={formData.subsidiaryTransfer?.subsidiaryName || ''}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            subsidiaryTransfer: {
+                              ...formData.subsidiaryTransfer!,
+                              subsidiaryName: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="Subsidiary Pvt Ltd"
+                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-600 block mb-1">Original Subsidiary Joining Date</label>
+                      <input
+                        type="date"
+                        value={formData.subsidiaryTransfer?.previousJoiningDate || ''}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            subsidiaryTransfer: {
+                              ...formData.subsidiaryTransfer!,
+                              previousJoiningDate: e.target.value,
+                            },
+                          })
+                        }
+                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 p-2 bg-white border border-slate-200 rounded-lg w-full cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.subsidiaryTransfer?.noBreakInService ?? true}
+                          onChange={e =>
+                            setFormData({
+                              ...formData,
+                              subsidiaryTransfer: {
+                                ...formData.subsidiaryTransfer!,
+                                noBreakInService: e.target.checked,
+                              },
+                            })
+                          }
+                          className="w-4 h-4 accent-blue-600"
+                        />
+                        <span>No break in service</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* PROFESSIONAL TAX EXEMPTION (PT_EXEMPT) & LWF CONTRACTOR TAG */}
+            <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Professional Tax Exemption &amp; LWF Tags</h3>
+                <p className="text-[11px] text-slate-500">
+                  Handle multiple-employer PT declarations (PT_EXEMPT) and state-permitted CONTRACTOR LWF exemptions.
+                </p>
+              </div>
+
+              <label className="flex items-start gap-2.5 text-xs font-semibold text-slate-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(formData.isContractor || formData.employmentType === 'CONTRACTOR')}
+                  onChange={e => {
+                    const checked = e.target.checked;
+                    setFormData({
+                      ...formData,
+                      isContractor: checked,
+                      employmentType: checked
+                        ? 'CONTRACTOR'
+                        : formData.employmentType === 'CONTRACTOR'
+                        ? 'PERMANENT'
+                        : formData.employmentType,
+                    });
+                  }}
+                  className="w-4 h-4 mt-0.5 accent-blue-600"
+                />
+                <span>
+                  Tag worker as <span className="font-mono text-slate-900">CONTRACTOR</span>{' '}
+                  <span className="font-normal text-slate-500">
+                    (Automatically skips Labour Welfare Fund in Gujarat &amp; other states where contractor exclusion applies)
+                  </span>
+                </span>
+              </label>
+
+              <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                <label className="flex items-start gap-2.5 text-xs font-semibold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(formData.ptExempt || formData.ptExemptionStatus === 'PT_EXEMPT')}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      setFormData({
+                        ...formData,
+                        ptExempt: checked,
+                        ptExemptionStatus: checked ? 'PT_EXEMPT' : 'NONE',
+                        ptExemptionReason: checked ? 'MULTIPLE_EMPLOYER' : undefined,
+                        ptPreviousEmployerDeclaration: checked
+                          ? {
+                              declared: true,
+                              previousEmployerName: formData.ptPreviousEmployerDeclaration?.previousEmployerName || '',
+                              certificateRef: formData.ptPreviousEmployerDeclaration?.certificateRef || '',
+                              declaredDate:
+                                formData.ptPreviousEmployerDeclaration?.declaredDate ||
+                                new Date().toISOString().slice(0, 10),
+                            }
+                          : undefined,
+                      });
+                    }}
+                    className="w-4 h-4 mt-0.5 accent-blue-600"
+                  />
+                  <span>
+                    Mark as <span className="font-mono text-emerald-700">PT_EXEMPT</span>{' '}
+                    <span className="font-normal text-slate-500">
+                      (Employee provided PT-paid declaration from another / previous employer)
+                    </span>
+                  </span>
+                </label>
+
+                {(formData.ptExempt || formData.ptExemptionStatus === 'PT_EXEMPT') && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                        Previous Employer Name
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.ptPreviousEmployerDeclaration?.previousEmployerName || ''}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            ptPreviousEmployerDeclaration: {
+                              declared: true,
+                              ...(formData.ptPreviousEmployerDeclaration || {}),
+                              previousEmployerName: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="e.g. Bharat Forge Ltd"
+                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                        PT Certificate / Ref No.
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.ptPreviousEmployerDeclaration?.certificateRef || ''}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            ptPreviousEmployerDeclaration: {
+                              declared: true,
+                              ...(formData.ptPreviousEmployerDeclaration || {}),
+                              certificateRef: e.target.value,
+                            },
+                          })
+                        }
+                        placeholder="e.g. PT-CERT-2026-11"
+                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-600 block mb-1">
+                        Declaration Date
+                      </label>
+                      <input
+                        type="date"
+                        value={formData.ptPreviousEmployerDeclaration?.declaredDate || ''}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            ptPreviousEmployerDeclaration: {
+                              declared: true,
+                              ...(formData.ptPreviousEmployerDeclaration || {}),
+                              declaredDate: e.target.value,
+                            },
+                          })
+                        }
+                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

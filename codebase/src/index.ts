@@ -2,6 +2,12 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as admin from 'firebase-admin';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import {
+  auditWorkerWageStructureServer,
+  ServerBranchInput,
+  ServerMinWageRevisionRule,
+  ServerWorkerInput,
+} from './wageValidation';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -459,3 +465,225 @@ function getISTDateString(date: Date = new Date()): string {
 function getISTMonthString(): string {
   return getISTDateString().slice(0, 7);
 }
+
+// ============================================================================
+// WAGE STRUCTURE VALIDATION & 50% RULE AUDIT (SERVER-SIDE CLOUD FUNCTIONS)
+// ============================================================================
+
+export const validateWorkerWageStructure = onCall(
+  { region: 'asia-south1', timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const data = request.data as {
+      worker: ServerWorkerInput;
+      evaluationDate?: string;
+      defaultState?: string;
+      ignoreRevisionCutoff?: boolean;
+      branches?: ServerBranchInput[];
+      minimumWageRevisions?: ServerMinWageRevisionRule[];
+    };
+
+    if (!data?.worker) {
+      throw new HttpsError('invalid-argument', 'Worker wage payload is required.');
+    }
+
+    const evalDate = data.evaluationDate || getISTDateString();
+    return auditWorkerWageStructureServer(
+      data.worker,
+      evalDate,
+      data.defaultState || 'Maharashtra',
+      Boolean(data.ignoreRevisionCutoff),
+      Array.isArray(data.branches) ? data.branches : [],
+      Array.isArray(data.minimumWageRevisions) ? data.minimumWageRevisions : []
+    );
+  }
+);
+
+export const auditTenantSalaryStructures = onCall(
+  { region: 'asia-south1', timeoutSeconds: 60, memory: '512MiB' },
+  async (request) => {
+    const data = request.data as {
+      tenantId: string;
+      asOfDate?: string;
+      defaultState?: string;
+      workers?: ServerWorkerInput[];
+      branches?: ServerBranchInput[];
+      minimumWageRevisions?: ServerMinWageRevisionRule[];
+    };
+
+    if (!data?.tenantId) {
+      throw new HttpsError('invalid-argument', 'tenantId is required.');
+    }
+
+    const evalDate = data.asOfDate || getISTDateString();
+    let workersList: ServerWorkerInput[] = Array.isArray(data.workers) ? data.workers : [];
+
+    if (workersList.length === 0) {
+      const snap = await db
+        .collection('workers')
+        .where('tenantId', '==', data.tenantId)
+        .get();
+      workersList = snap.docs.map(d => ({ id: d.id, ...(d.data() as ServerWorkerInput) }));
+    }
+
+    const activeWorkers = workersList.filter(
+      w => w.status !== 'INACTIVE' && w.isActive !== false
+    );
+
+    const branches = Array.isArray(data.branches) ? data.branches : [];
+    const revisions = Array.isArray(data.minimumWageRevisions) ? data.minimumWageRevisions : [];
+
+    const results = activeWorkers.map(w =>
+      auditWorkerWageStructureServer(
+        w,
+        evalDate,
+        data.defaultState || 'Maharashtra',
+        false,
+        branches,
+        revisions
+      )
+    );
+
+    const nonCompliant = results.filter(r => r.isFiftyPercentNonCompliant);
+    const minWageViolations = results.filter(r => r.isMinimumWageViolation);
+
+    const totalComplianceGapMonthly = Math.round(
+      nonCompliant.reduce((sum, r) => sum + r.gapAmount, 0) * 100
+    ) / 100;
+
+    const estimatedExtraStatutoryLiabilityMonthly = Math.round(
+      nonCompliant.reduce(
+        (sum, r) => sum + r.estimatedAdditionalPfMonthly + r.estimatedAdditionalGratuityMonthly,
+        0
+      ) * 100
+    ) / 100;
+
+    return {
+      tenantId: data.tenantId,
+      auditedAt: new Date().toISOString(),
+      asOfDate: evalDate,
+      verificationSource: 'CLOUD_FUNCTION',
+      totalWorkersAudited: results.length,
+      compliantCount: results.filter(r => !r.isFiftyPercentNonCompliant).length,
+      nonCompliantCount: nonCompliant.length,
+      minimumWageViolationCount: minWageViolations.length,
+      totalComplianceGapMonthly,
+      estimatedExtraStatutoryLiabilityMonthly,
+      results,
+    };
+  }
+);
+
+export const validatePayrollFinalization = onCall(
+  { region: 'asia-south1', timeoutSeconds: 60, memory: '512MiB' },
+  async (request) => {
+    const data = request.data as {
+      tenantId: string;
+      month: string;
+      asOfDate?: string;
+      defaultState?: string;
+      workers?: ServerWorkerInput[];
+      branches?: ServerBranchInput[];
+      minimumWageRevisions?: ServerMinWageRevisionRule[];
+    };
+
+    if (!data?.tenantId || !data?.month) {
+      throw new HttpsError('invalid-argument', 'tenantId and month are required.');
+    }
+
+    const evalDate = data.asOfDate || `${data.month}-28`;
+    let workersList: ServerWorkerInput[] = Array.isArray(data.workers) ? data.workers : [];
+
+    if (workersList.length === 0) {
+      const snap = await db
+        .collection('workers')
+        .where('tenantId', '==', data.tenantId)
+        .get();
+      workersList = snap.docs.map(d => ({ id: d.id, ...(d.data() as ServerWorkerInput) }));
+    }
+
+    const activeWorkers = workersList.filter(
+      w => w.status !== 'INACTIVE' && w.isActive !== false
+    );
+
+    const branches = Array.isArray(data.branches) ? data.branches : [];
+    const revisions = Array.isArray(data.minimumWageRevisions) ? data.minimumWageRevisions : [];
+
+    const allResults = activeWorkers.map(w =>
+      auditWorkerWageStructureServer(
+        w,
+        evalDate,
+        data.defaultState || 'Maharashtra',
+        false,
+        branches,
+        revisions
+      )
+    );
+
+    const flaggedWorkers = allResults.filter(r => r.hasAnyViolation);
+    const blockingMinimumWageWorkers = allResults.filter(r => r.isMinimumWageViolation);
+    const isPayrollBlocked = blockingMinimumWageWorkers.length > 0;
+    const nonCompliantCount = allResults.filter(r => r.isFiftyPercentNonCompliant).length;
+    const minimumWageViolationCount = blockingMinimumWageWorkers.length;
+    const totalGapAmount = Math.round(
+      allResults.reduce((sum, r) => sum + r.gapAmount, 0) * 100
+    ) / 100;
+    const totalProjectedGratuityIncreaseAnnual = Math.round(
+      allResults.reduce(
+        (sum, r) => sum + (r.estimatedAdditionalGratuityAnnual ?? Math.round((r.deemedWageAddBack * 15) / 26)),
+        0
+      )
+    );
+    const labourCodeEffectiveDate = '2025-11-21';
+    const isRetrospectivePeriod = (data.month || '').slice(0, 7) < '2025-11';
+    const retrospectiveWarning = isRetrospectivePeriod
+      ? `Retrospective Payroll (${data.month} — pre-21 Nov 2025): Defaulting to legacy EPF/ESIC rules without 50% Rule excess allowance add-back. New Labour Code rules apply to current and future periods.`
+      : undefined;
+
+    const validatedAt = new Date().toISOString();
+
+    // Persist server pre-finalization audit trail in Firestore
+    try {
+      await db.collection('payroll_audit_logs').add({
+        tenantId: data.tenantId,
+        month: data.month,
+        validatedAt,
+        labourCodeEffectiveDate,
+        isRetrospectivePeriod,
+        actorUid: request.auth?.uid || 'system',
+        totalWorkersChecked: allResults.length,
+        nonCompliantCount,
+        minimumWageViolationCount,
+        isPayrollBlocked,
+        blockingErrorCode: isPayrollBlocked ? 'MINIMUM_WAGE_VIOLATION' : null,
+        totalGapAmount,
+        totalProjectedGratuityIncreaseAnnual,
+        flaggedWorkerIds: flaggedWorkers.map(w => w.workerId || w.workerName || 'unknown'),
+      });
+    } catch (logErr) {
+      console.warn('Could not persist payroll_audit_logs entry:', logErr);
+    }
+
+    return {
+      tenantId: data.tenantId,
+      month: data.month,
+      validatedAt,
+      labourCodeEffectiveDate,
+      isRetrospectivePeriod,
+      retrospectiveWarning,
+      verificationSource: 'CLOUD_FUNCTION',
+      hasFlaggedWorkers: flaggedWorkers.length > 0,
+      isPayrollBlocked,
+      blockingErrorCode: isPayrollBlocked ? 'MINIMUM_WAGE_VIOLATION' : undefined,
+      blockingReason: isPayrollBlocked
+        ? `MINIMUM_WAGE_VIOLATION: Payroll blocked for ${blockingMinimumWageWorkers.length} employee(s) whose Basic Pay falls below state minimum wage.`
+        : undefined,
+      nonCompliantCount,
+      minimumWageViolationCount,
+      totalGapAmount,
+      totalProjectedGratuityIncreaseAnnual,
+      flaggedWorkers,
+      blockingMinimumWageWorkers,
+      allResults,
+    };
+  }
+);

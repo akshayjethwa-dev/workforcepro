@@ -12,7 +12,8 @@ import {
   AttendanceRecord,
   FieldPunchPayload,
   DeviceAttestationPlatform,
-  DeviceIntegrityVerdict
+  DeviceIntegrityVerdict,
+  MagicLinkRestructureSummary
 } from '../types/index';
 import { tenantSecurityService } from './tenantSecurityService';
 import { dbService } from './db';
@@ -215,7 +216,8 @@ export function formatMagicMessage(
   scope: MagicLinkScope,
   linkUrl: string,
   ttlHours: number,
-  targetMonth?: string
+  targetMonth?: string,
+  restructureSummary?: MagicLinkRestructureSummary
 ): string {
   const currentMonthStr = targetMonth || new Date().toISOString().slice(0, 7);
   const [year, monthNum] = currentMonthStr.split('-');
@@ -228,6 +230,13 @@ export function formatMagicMessage(
     return `नमस्ते ${worker.name}! आपका कार्य शेड्यूल तैयार है / Your work schedule is ready:\n🔗 ${linkUrl}\n(Link expires in ${ttlHours}h)`;
   } else if (scope === 'PUNCH' || (scope as string) === 'punch') {
     return `नमस्ते ${worker.name}! आपकी दैनिक हाजिरी (One-Tap Punch) लिंक तैयार है / Your daily punch link is ready:\n🔗 ${linkUrl}\n(Link expires in ${ttlHours}h)`;
+  } else if (scope === 'SALARY_RESTRUCTURE') {
+    const basicLine = restructureSummary
+      ? `Basic ₹${restructureSummary.oldBasic.toLocaleString('en-IN')} -> ₹${restructureSummary.newBasic.toLocaleString('en-IN')} (Total CTC unchanged ₹${restructureSummary.totalRemuneration.toLocaleString('en-IN')}, effective ${restructureSummary.effectiveDate}). `
+      : '';
+    return `नमस्ते ${worker.name}! Labour Code 50% नियम के अनुसार आपका वेतन विवरण अपडेट हुआ है। ${basicLine}कृपया इस लिंक पर क्लिक करके अपनी सहमति/स्वीकृति (Acknowledge) दर्ज करें / Please review and acknowledge your salary breakup:\n🔗 ${linkUrl}\n(Link expires in ${ttlHours}h)`;
+  } else if (scope === 'POSH_COMPLAINT') {
+    return `नमस्ते ${worker.name}! गोपनीय कार्यस्थल सुरक्षा (POSH ICC) पोर्टल लिंक तैयार है / Your confidential POSH complaint & ICC support link is ready:\n🔗 ${linkUrl}\n(Encrypted at rest · Link expires in ${ttlHours}h)`;
   } else {
     return `नमस्ते ${worker.name}! आपकी उपस्थिति रिपोर्ट तैयार है / Your attendance summary is ready:\n🔗 ${linkUrl}\n(Link expires in ${ttlHours}h)`;
   }
@@ -246,6 +255,7 @@ export const magicLinkService = {
     ttlHours?: number; // 24, 48, 72, 168 (default 72)
     targetMonth?: string;
     shiftId?: string;
+    restructureSummary?: MagicLinkRestructureSummary;
   }): Promise<{
     token: string;
     tokenRecord: WorkerAccessToken;
@@ -284,7 +294,8 @@ export const magicLinkService = {
       accessLog: [],
       revoked: false,
       flaggedMultiDevice: false,
-      deliveryStatus: 'PENDING'
+      deliveryStatus: 'PENDING',
+      ...(params.restructureSummary ? { restructureSummary: params.restructureSummary } : {}),
     };
 
     const tokens = getStoredTokens();
@@ -297,7 +308,14 @@ export const magicLinkService = {
     const localUrl = `${baseUrl}?w=${token}`;
 
     const { cleanPhone } = validateWorkerPhone(params.worker.phone);
-    const messageText = formatMagicMessage(params.worker, params.scope, universalUrl, ttlHours, params.targetMonth);
+    const messageText = formatMagicMessage(
+      params.worker,
+      params.scope,
+      universalUrl,
+      ttlHours,
+      params.targetMonth,
+      params.restructureSummary
+    );
     const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`;
     const smsUrl = `sms:${cleanPhone}?body=${encodeURIComponent(messageText)}`;
 
@@ -338,6 +356,36 @@ export const magicLinkService = {
       smsUrl,
       messageText
     };
+  },
+
+  /**
+   * Records worker consent acknowledgement directly on a SALARY_RESTRUCTURE token
+   */
+  updateRestructureTokenConsent: async (
+    token: string,
+    decision: 'ACKNOWLEDGED' | 'DISPUTED',
+    respondedAt: string,
+    workerNote?: string
+  ): Promise<{ updated: boolean; tokenRecord?: WorkerAccessToken }> => {
+    if (!token) return { updated: false };
+    const tokens = getStoredTokens();
+    const idx = tokens.findIndex(t => t.token === token.trim());
+    if (idx === -1) return { updated: false };
+
+    const updatedRecord: WorkerAccessToken = {
+      ...tokens[idx],
+      restructureSummary: tokens[idx].restructureSummary
+        ? {
+            ...tokens[idx].restructureSummary!,
+            consentStatus: decision,
+            respondedAt,
+            workerNote,
+          }
+        : undefined,
+    };
+    tokens[idx] = updatedRecord;
+    saveStoredTokens(tokens);
+    return { updated: true, tokenRecord: updatedRecord };
   },
 
   /**

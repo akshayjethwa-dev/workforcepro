@@ -6,7 +6,8 @@ import { db, auth } from "../lib/firebase";
 import { 
   Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, 
   AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, 
-  DEFAULT_PLAN_CONFIG, BrandingConfig, CustomDomainConfig 
+  DEFAULT_PLAN_CONFIG, BrandingConfig, CustomDomainConfig,
+  WageComplianceAudit
 } from "../types/index";
 import { tenantSecurityService } from "./tenantSecurityService";
 import { entitlementService } from "./entitlementService";
@@ -80,10 +81,18 @@ export const normalizeWorker = (w: any): Worker => {
     wageConfig: {
       type: isMonthly ? 'MONTHLY' : 'DAILY',
       amount,
+      basicPercentage: w.wageConfig?.basicPercentage,
+      dailyMultiplier: w.wageConfig?.dailyMultiplier || (w.wageConfig?.workingDaysPerMonth === 30 ? 30 : 26),
+      monthlyBreakdown: w.wageConfig?.monthlyBreakdown,
+      dailyBreakdown: w.wageConfig?.dailyBreakdown,
       overtimeEligible: w.wageConfig?.overtimeEligible ?? true,
       overtimeRatePerHour: w.overtimeRate || w.wageConfig?.overtimeRatePerHour || (isMonthly ? 150 : 100),
       workingDaysPerMonth: w.wageConfig?.workingDaysPerMonth || 26,
-      allowances: w.wageConfig?.allowances || { travel: 50, food: 50, nightShift: 100 }
+      allowances: w.wageConfig?.allowances || { travel: 50, food: 50, nightShift: 100 },
+      complianceStatus: w.wageConfig?.complianceStatus,
+      complianceFlags: w.wageConfig?.complianceFlags,
+      wageAuditSummary: w.wageConfig?.wageAuditSummary,
+      acknowledgedNonCompliant: w.wageConfig?.acknowledgedNonCompliant
     }
   };
 };
@@ -112,9 +121,11 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     category: 'Daily Wage',
     gender: 'Male',
     dob: '1992-05-15',
+    state: 'Maharashtra',
     wageConfig: {
       type: 'DAILY',
       amount: 650,
+      dailyMultiplier: 26,
       overtimeEligible: true,
       overtimeRatePerHour: 100,
       workingDaysPerMonth: 26,
@@ -145,15 +156,16 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     category: 'Monthly',
     gender: 'Female',
     dob: '1995-08-20',
+    state: 'Gujarat',
     wageConfig: {
       type: 'MONTHLY',
       amount: 20500,
       basicPercentage: 60,
-      monthlyBreakdown: { basic: 12300, hra: 6150, others: 2050 },
+      monthlyBreakdown: { basic: 12300, da: 0, retainingAllowance: 0, hra: 5150, travel: 500, medical: 500, others: 2050, employerPf: 1476, employerGratuity: 591 },
       overtimeEligible: true,
       overtimeRatePerHour: 150,
       workingDaysPerMonth: 26,
-      allowances: { travel: 100, food: 100, nightShift: 150 }
+      allowances: { travel: 0, food: 0, nightShift: 0 }
     }
   },
   {
@@ -164,10 +176,11 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     uan: '101234567892',
     esicIp: '3123456791',
     phone: '9876543212',
-    wageType: 'DAILY',
-    dailyWage: 700,
-    hourlyWage: 87,
-    overtimeRate: 110,
+    wageType: 'MONTHLY',
+    monthlySalary: 28000,
+    dailyWage: 1077,
+    hourlyWage: 135,
+    overtimeRate: 140,
     designation: 'Maintenance Tech',
     department: 'Maintenance',
     branchId: 'default',
@@ -176,16 +189,32 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     isActive: true,
     faceEnrolled: true,
     status: 'ACTIVE',
-    category: 'Daily Wage',
+    category: 'Monthly',
     gender: 'Male',
     dob: '1990-11-12',
+    state: 'Maharashtra',
     wageConfig: {
-      type: 'DAILY',
-      amount: 700,
+      type: 'MONTHLY',
+      amount: 28000,
+      basicPercentage: 39,
+      monthlyBreakdown: {
+        basic: 9500,
+        da: 1000,
+        retainingAllowance: 500,
+        hra: 8500,
+        travel: 2500,
+        medical: 1500,
+        others: 4500,
+        employerPf: 1320,
+        employerGratuity: 529
+      },
       overtimeEligible: true,
-      overtimeRatePerHour: 110,
+      overtimeRatePerHour: 140,
       workingDaysPerMonth: 26,
-      allowances: { travel: 50, food: 50, nightShift: 100 }
+      allowances: { travel: 0, food: 0, nightShift: 0 },
+      complianceStatus: 'NON_COMPLIANT',
+      complianceFlags: ['NON_COMPLIANT', 'MINIMUM_WAGE_VIOLATION'],
+      acknowledgedNonCompliant: true
     }
   },
   {
@@ -211,13 +240,28 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     category: 'Daily Wage',
     gender: 'Male',
     dob: '1996-03-25',
+    state: 'Delhi',
     wageConfig: {
       type: 'DAILY',
       amount: 520,
+      dailyMultiplier: 26,
+      basicPercentage: 42,
+      dailyBreakdown: {
+        basic: 220,
+        da: 0,
+        retainingAllowance: 0,
+        hra: 120,
+        travel: 80,
+        medical: 50,
+        others: 50
+      },
       overtimeEligible: true,
       overtimeRatePerHour: 80,
       workingDaysPerMonth: 26,
-      allowances: { travel: 0, food: 50, nightShift: 50 }
+      allowances: { travel: 0, food: 0, nightShift: 0 },
+      complianceStatus: 'NON_COMPLIANT',
+      complianceFlags: ['NON_COMPLIANT', 'MINIMUM_WAGE_VIOLATION'],
+      acknowledgedNonCompliant: true
     }
   },
   {
@@ -243,13 +287,117 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     category: 'Daily Wage',
     gender: 'Female',
     dob: '1994-07-08',
+    state: 'Gujarat',
     wageConfig: {
       type: 'DAILY',
       amount: 600,
+      dailyMultiplier: 26,
       overtimeEligible: true,
       overtimeRatePerHour: 95,
       workingDaysPerMonth: 26,
       allowances: { travel: 50, food: 50, nightShift: 100 }
+    }
+  },
+  {
+    id: 'worker-6',
+    tenantId: 'demo-tenant-id',
+    name: 'Vikram Desai',
+    fatherName: 'Harish Desai',
+    uan: '101234567895',
+    esicIp: '3123456794',
+    phone: '9876543215',
+    wageType: 'MONTHLY',
+    monthlySalary: 32000,
+    dailyWage: 1231,
+    hourlyWage: 154,
+    overtimeRate: 180,
+    designation: 'Senior Turner',
+    department: 'Production',
+    branchId: 'default',
+    shiftId: 'default',
+    joinedDate: '2019-06-15',
+    isActive: true,
+    faceEnrolled: true,
+    status: 'ACTIVE',
+    category: 'Permanent',
+    employmentType: 'PERMANENT',
+    gender: 'Male',
+    dob: '1988-02-14',
+    state: 'Maharashtra',
+    nomineeName: 'Meera Desai',
+    nomineeRelation: 'Spouse',
+    nomineePhone: '9876501122',
+    salaryRevisionDate: '2026-04-01',
+    previousWageAmount: 24000,
+    previousWageConfig: {
+      type: 'MONTHLY',
+      amount: 24000,
+      basicPercentage: 55,
+      monthlyBreakdown: { basic: 12000, da: 1600, retainingAllowance: 0, hra: 6400, travel: 1500, medical: 1000, others: 1500 },
+      overtimeEligible: true,
+      overtimeRatePerHour: 150,
+      workingDaysPerMonth: 26,
+      allowances: { travel: 0, food: 0, nightShift: 0 }
+    },
+    wageConfig: {
+      type: 'MONTHLY',
+      amount: 32000,
+      basicPercentage: 65,
+      monthlyBreakdown: { basic: 18000, da: 2800, retainingAllowance: 0, hra: 6800, travel: 1600, medical: 1200, others: 1600, employerPf: 1800, employerGratuity: 1000 },
+      overtimeEligible: true,
+      overtimeRatePerHour: 180,
+      workingDaysPerMonth: 26,
+      allowances: { travel: 0, food: 0, nightShift: 0 },
+      complianceStatus: 'COMPLIANT'
+    }
+  },
+  {
+    id: 'worker-7',
+    tenantId: 'demo-tenant-id',
+    name: 'Anjali Nair',
+    fatherName: 'Raghavan Nair',
+    uan: '101234567896',
+    esicIp: '3123456795',
+    phone: '9876543216',
+    wageType: 'MONTHLY',
+    monthlySalary: 45000,
+    dailyWage: 1731,
+    hourlyWage: 216,
+    overtimeRate: 250,
+    designation: 'Quality Assurance Lead',
+    department: 'Quality',
+    branchId: 'default',
+    shiftId: 'default',
+    joinedDate: '2024-06-01',
+    isActive: true,
+    faceEnrolled: true,
+    status: 'ACTIVE',
+    category: 'Contract',
+    employmentType: 'FIXED_TERM',
+    contractDurationMonths: 24,
+    gender: 'Female',
+    dob: '1991-09-10',
+    state: 'Karnataka',
+    nomineeName: 'Suresh Nair',
+    nomineeRelation: 'Spouse',
+    nomineePhone: '9876503344',
+    subsidiaryTransfer: {
+      transferredFromSubsidiary: true,
+      subsidiaryName: 'Apex Components Subsidiary Pvt Ltd',
+      previousJoiningDate: '2020-02-01',
+      transferDate: '2024-06-01',
+      noBreakInService: true
+    },
+    wageConfig: {
+      type: 'MONTHLY',
+      amount: 45000,
+      basicPercentage: 58,
+      monthlyBreakdown: { basic: 26000, da: 0, retainingAllowance: 0, hra: 11000, travel: 3000, medical: 1500, others: 3500, employerPf: 1800, employerGratuity: 1250 },
+      overtimeEligible: true,
+      overtimeRatePerHour: 250,
+      workingDaysPerMonth: 26,
+      allowances: { travel: 0, food: 0, nightShift: 0 },
+      complianceStatus: 'COMPLIANT'
     }
   }
 ];
@@ -260,6 +408,15 @@ const getStoredDemoWorkers = (): Worker[] => {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
+        const seededV4 = localStorage.getItem('demo_gratuity_seed_v1') === '1';
+        if (!seededV4) {
+          const existingIds = new Set(parsed.map((w: any) => w.id));
+          const extras = INITIAL_DEMO_WORKERS.filter((w) => !existingIds.has(w.id));
+          const merged = extras.length > 0 ? [...parsed, ...extras] : parsed;
+          localStorage.setItem('demo_workers_list', JSON.stringify(merged));
+          localStorage.setItem('demo_gratuity_seed_v1', '1');
+          return merged.map(normalizeWorker);
+        }
         return parsed.map(normalizeWorker);
       }
     }
@@ -286,6 +443,8 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
     { id: 'worker-3', name: 'Amit Kumar' },
     { id: 'worker-4', name: 'Sunil Verma' },
     { id: 'worker-5', name: 'Kavita Singh' },
+    { id: 'worker-6', name: 'Vikram Desai' },
+    { id: 'worker-7', name: 'Anjali Nair' },
   ];
 
   for (let day = 1; day <= daysInMonth; day++) {
@@ -1285,7 +1444,20 @@ export const dbService = {
       gracePeriodMins: 15, maxGraceAllowed: 3, breakDurationMins: 60, minOvertimeMins:60, minHalfDayHours: 4
     }];
     const defaultDepartments = ['Production', 'Packaging', 'Maintenance', 'Loading', 'Quality'];
-    const defaultBranch = { id: 'default', name: 'Main Branch' };
+    const defaultBranch = {
+      id: 'default',
+      name: 'Main Branch (Head Office)',
+      state: 'Maharashtra',
+      wageZone: 'Zone I (Mumbai, Pune, Thane)',
+      scheduledEmployment: 'Engineering & Manufacturing',
+    };
+    const anandBranch = {
+      id: 'branch-anand',
+      name: 'Anand Manufacturing Unit',
+      state: 'Gujarat',
+      wageZone: 'Anand',
+      scheduledEmployment: 'Engineering & Manufacturing',
+    };
     const defaultWeeklyOffs: OrgSettings['weeklyOffs'] = {
       defaultDays: [0], 
       saturdayRule: 'NONE'
@@ -1298,11 +1470,16 @@ export const dbService = {
       dailyWagePfPercentage: 100,
       pfContributionRate: 12,
       epsContributionRate: 8.33,
-      epfWageCeiling: 15000
+      epfWageCeiling: 15000,
+      ptLwfConfig: {
+        gujaratPtFeb300Adjustment: true,
+        maharashtraPtFeb300Adjustment: true,
+        ptMidMonthProrationEnabled: true,
+      },
     };
 
     const fallbackSettings: OrgSettings = { 
-      shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch], departments: defaultDepartments,
+      shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch, anandBranch], departments: defaultDepartments,
       weeklyOffs: defaultWeeklyOffs, holidays: [], enableSandwichRule: false, holidayPayMultiplier: 2.0,
       compliance: defaultCompliance
     };
@@ -1662,6 +1839,12 @@ export const dbService = {
       } catch (e) {
         console.warn("Failed to save demo payroll locally:", e);
       }
+      if (payroll.wageComplianceAudit) {
+        await dbService.saveWageComplianceAudit({
+          ...payroll.wageComplianceAudit,
+          tenantId: payroll.tenantId,
+        });
+      }
       return;
     }
     try {
@@ -1680,6 +1863,81 @@ export const dbService = {
         }
         localStorage.setItem(key, JSON.stringify(list));
       } catch {}
+    }
+    if (payroll.wageComplianceAudit) {
+      await dbService.saveWageComplianceAudit({
+        ...payroll.wageComplianceAudit,
+        tenantId: payroll.tenantId,
+      });
+    }
+  },
+
+  saveWageComplianceAudit: async (audit: WageComplianceAudit): Promise<void> => {
+    if (!audit?.tenantId || !audit?.id) return;
+    const storageKey = `wage_compliance_audits_${audit.tenantId}`;
+    const upsertLocal = () => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: WageComplianceAudit[] = raw ? JSON.parse(raw) : [];
+        const idx = list.findIndex((a) => a.id === audit.id);
+        if (idx >= 0) {
+          list[idx] = audit;
+        } else {
+          list.unshift(audit);
+        }
+        localStorage.setItem(storageKey, JSON.stringify(list));
+      } catch (err) {
+        console.warn("Failed to cache WageComplianceAudit locally:", err);
+      }
+    };
+
+    if (audit.tenantId === 'demo-tenant-id') {
+      upsertLocal();
+      return;
+    }
+
+    try {
+      await setDoc(doc(db, "wage_compliance_audits", audit.id), audit, { merge: true });
+    } catch (e) {
+      console.warn("saveWageComplianceAudit firestore write error, caching locally:", e);
+    }
+    upsertLocal();
+  },
+
+  getWageComplianceAudits: async (tenantId: string, month?: string): Promise<WageComplianceAudit[]> => {
+    if (!tenantId) return [];
+    const storageKey = `wage_compliance_audits_${tenantId}`;
+    const readLocal = (): WageComplianceAudit[] => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: WageComplianceAudit[] = raw ? JSON.parse(raw) : [];
+        return month ? list.filter((a) => a.payrollMonth === month) : list;
+      } catch {
+        return [];
+      }
+    };
+
+    if (tenantId === 'demo-tenant-id') {
+      return readLocal();
+    }
+
+    try {
+      const q = month
+        ? query(
+            collection(db, "wage_compliance_audits"),
+            where("tenantId", "==", tenantId),
+            where("payrollMonth", "==", month)
+          )
+        : query(
+            collection(db, "wage_compliance_audits"),
+            where("tenantId", "==", tenantId)
+          );
+      const snap = await getDocs(q);
+      const remote = snap.docs.map((d) => ({ id: d.id, ...d.data() } as WageComplianceAudit));
+      return remote.length > 0 ? remote : readLocal();
+    } catch (e) {
+      console.warn("getWageComplianceAudits fallback to local:", e);
+      return readLocal();
     }
   },
 

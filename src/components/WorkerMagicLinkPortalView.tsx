@@ -10,7 +10,9 @@ import { WorkerAccessToken, Worker, MonthlyPayroll, AttendanceRecord, ShiftConfi
 import { magicLinkService } from '../services/magicLinkService';
 import { dbService } from '../services/db';
 import { scheduleValidationService } from '../services/scheduleValidationService';
+import { ctcSimulatorService } from '../services/ctcSimulatorService';
 import { DeviceBoundPunchView } from './DeviceBoundPunchView';
+import { PoshComplaintForm } from './PoshComplaintForm';
 
 interface Props {
   token: string;
@@ -22,6 +24,7 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   const [error, setError] = useState<string | null>(null);
   const [tokenRecord, setTokenRecord] = useState<WorkerAccessToken | null>(null);
   const [worker, setWorker] = useState<Worker | null>(null);
+  const [tenantWorkers, setTenantWorkers] = useState<Worker[]>([]);
   const [payroll, setPayroll] = useState<MonthlyPayroll | null>(null);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
@@ -30,7 +33,11 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
     primaryColor: '#2563eb'
   });
 
-  const [activeTab, setActiveTab] = useState<'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY' | 'PUNCH'>('PAYSLIP');
+  const [activeTab, setActiveTab] = useState<'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY' | 'PUNCH' | 'SALARY_RESTRUCTURE' | 'POSH_COMPLAINT'>('PAYSLIP');
+  const [consentDecision, setConsentDecision] = useState<'SENT_WHATSAPP' | 'ACKNOWLEDGED' | 'DISPUTED' | undefined>(undefined);
+  const [consentRespondedAt, setConsentRespondedAt] = useState<string | undefined>(undefined);
+  const [workerNote, setWorkerNote] = useState<string>('');
+  const [submittingConsent, setSubmittingConsent] = useState<boolean>(false);
   const [isFlaggedMultiDevice, setIsFlaggedMultiDevice] = useState<boolean>(false);
   const [showPwaPrompt, setShowPwaPrompt] = useState<boolean>(true);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
@@ -70,11 +77,27 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
         const tRecord = verification.tokenRecord;
         setTokenRecord(tRecord);
         setIsFlaggedMultiDevice(verification.isFlagged || false);
-        const normalizedScope = (tRecord.scope as string).toUpperCase() === 'PUNCH' ? 'PUNCH' : tRecord.scope as ('PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY');
+        const upperScope = (tRecord.scope as string).toUpperCase();
+        const normalizedScope =
+          upperScope === 'PUNCH'
+            ? 'PUNCH'
+            : upperScope === 'SALARY_RESTRUCTURE'
+            ? 'SALARY_RESTRUCTURE'
+            : upperScope === 'POSH_COMPLAINT'
+            ? 'POSH_COMPLAINT'
+            : (tRecord.scope as 'PAYSLIP' | 'SCHEDULE' | 'ATTENDANCE_SUMMARY');
         setActiveTab(normalizedScope);
+        if (tRecord.restructureSummary) {
+          setConsentDecision(tRecord.restructureSummary.consentStatus);
+          setConsentRespondedAt(tRecord.restructureSummary.respondedAt);
+          if (tRecord.restructureSummary.workerNote) {
+            setWorkerNote(tRecord.restructureSummary.workerNote);
+          }
+        }
 
         // 2. Load worker details
         const allWorkers = await dbService.getWorkers(tRecord.tenantId);
+        setTenantWorkers(allWorkers);
         const matchedWorker = allWorkers.find(w => w.id === tRecord.workerId);
         
         if (!matchedWorker) {
@@ -531,12 +554,219 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
             <Smartphone size={13} />
             <span>Mobile Punch</span>
           </button>
+
+          {tokenRecord.restructureSummary && (
+            <button
+              onClick={() => setActiveTab('SALARY_RESTRUCTURE')}
+              className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all ${
+                activeTab === 'SALARY_RESTRUCTURE'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ShieldCheck size={13} />
+              <span>Revision Notice</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setActiveTab('POSH_COMPLAINT')}
+            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'POSH_COMPLAINT'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Lock size={13} />
+            <span>POSH Report</span>
+          </button>
         </div>
       </div>
 
       {/* MAIN CONTAINER */}
       <main className="max-w-3xl mx-auto px-4 mt-4 w-full flex-1">
         
+        {/* ================================================================= */}
+        {/* TAB 0A: CONFIDENTIAL POSH COMPLAINT FORM (WORKER APP / PWA)       */}
+        {/* ================================================================= */}
+        {activeTab === 'POSH_COMPLAINT' && (
+          <PoshComplaintForm
+            tenantId={tokenRecord.tenantId}
+            workers={tenantWorkers}
+            filedVia="WORKER_PWA"
+            prefillWorker={worker}
+            compactMobile
+          />
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 0B: SALARY RESTRUCTURE ACKNOWLEDGEMENT (WHATSAPP CONSENT)     */}
+        {/* ================================================================= */}
+        {activeTab === 'SALARY_RESTRUCTURE' && tokenRecord.restructureSummary && (
+          <div className="bg-white rounded-3xl p-5 sm:p-8 shadow-sm border border-slate-200 space-y-5">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center pb-4 border-b border-slate-100 gap-3">
+              <div>
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                  Code on Wages 50% Rule · Compensation Revision Notice
+                </span>
+                <h3 className="text-lg sm:text-xl font-bold text-slate-900">
+                  Salary Breakup Revision ({tokenRecord.restructureSummary.templateLabel})
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Effective Date: <span className="font-mono font-semibold text-slate-700">{tokenRecord.restructureSummary.effectiveDate}</span> · Total Remuneration Unchanged
+                </p>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 text-left sm:text-right">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                  Total Gross CTC / Mo
+                </span>
+                <span className="text-xl font-black font-mono tabular-nums text-slate-900">
+                  ₹{tokenRecord.restructureSummary.totalRemuneration.toLocaleString('en-IN')}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/70 space-y-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Previous Breakup
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-600">Basic Pay</span>
+                  <span className="font-mono font-semibold text-slate-900">
+                    ₹{tokenRecord.restructureSummary.oldBasic.toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-600">HRA &amp; Allowances</span>
+                  <span className="font-mono font-semibold text-slate-900">
+                    ₹{tokenRecord.restructureSummary.oldExcluded.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="border border-emerald-200 rounded-2xl p-4 bg-emerald-50/50 space-y-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                  Revised Compliant Breakup
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-emerald-900 font-medium">Basic Pay</span>
+                  <span className="font-mono font-bold text-emerald-800">
+                    ₹{tokenRecord.restructureSummary.newBasic.toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-emerald-900 font-medium">HRA &amp; Allowances</span>
+                  <span className="font-mono font-bold text-emerald-800">
+                    ₹{tokenRecord.restructureSummary.newExcluded.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700 space-y-1.5">
+              <p className="font-semibold text-slate-900">
+                What changed for you (आपकी सैलरी में बदलाव):
+              </p>
+              <p>
+                ₹{tokenRecord.restructureSummary.shiftAmount.toLocaleString('en-IN')}/month has been shifted from allowances into Basic Pay so your compensation meets the Labour Code 50% Wage Rule. Your Total Monthly Remuneration stays at ₹{tokenRecord.restructureSummary.totalRemuneration.toLocaleString('en-IN')}.
+              </p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                Annual Gratuity Benefit Accrual Increase: +₹{tokenRecord.restructureSummary.gratuityDeltaAnnual.toLocaleString('en-IN')}/yr
+              </p>
+            </div>
+
+            {consentDecision === 'ACKNOWLEDGED' ? (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
+                <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-sm font-bold text-emerald-900">
+                    Acknowledgement Recorded / सहमति दर्ज हो गई है
+                  </h4>
+                  <p className="text-xs text-emerald-800 mt-0.5">
+                    Confirmed on {consentRespondedAt ? new Date(consentRespondedAt).toLocaleString('en-IN') : 'just now'}. You may download your updated payslips from the Payslip tab.
+                  </p>
+                </div>
+              </div>
+            ) : consentDecision === 'DISPUTED' ? (
+              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-3">
+                <AlertCircle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-sm font-bold text-amber-900">
+                    Supervisor Review Requested
+                  </h4>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    Your HR / Payroll supervisor has been notified{workerNote ? ` with your note: "${workerNote}"` : ''}.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 pt-2 border-t border-slate-100">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Optional Note or Question for HR / Payroll (वैकल्पिक टिप्पणी)
+                </label>
+                <input
+                  type="text"
+                  value={workerNote}
+                  onChange={(e) => setWorkerNote(e.target.value)}
+                  placeholder="e.g., Received and understood / Please clarify PF deduction"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <button
+                    type="button"
+                    disabled={submittingConsent}
+                    onClick={async () => {
+                      setSubmittingConsent(true);
+                      try {
+                        const res = await ctcSimulatorService.acknowledgeRestructureConsent({
+                          token,
+                          decision: 'ACKNOWLEDGED',
+                          workerNote: workerNote.trim() || undefined,
+                        });
+                        if (res.success) {
+                          setConsentDecision('ACKNOWLEDGED');
+                          setConsentRespondedAt(new Date().toISOString());
+                        }
+                      } finally {
+                        setSubmittingConsent(false);
+                      }
+                    }}
+                    className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors disabled:opacity-60"
+                  >
+                    <CheckCircle2 size={16} />
+                    <span>Acknowledge &amp; Confirm Receipt (सहमति दें)</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingConsent}
+                    onClick={async () => {
+                      setSubmittingConsent(true);
+                      try {
+                        const res = await ctcSimulatorService.acknowledgeRestructureConsent({
+                          token,
+                          decision: 'DISPUTED',
+                          workerNote: workerNote.trim() || 'Requested clarification from HR',
+                        });
+                        if (res.success) {
+                          setConsentDecision('DISPUTED');
+                          setConsentRespondedAt(new Date().toISOString());
+                        }
+                      } finally {
+                        setSubmittingConsent(false);
+                      }
+                    }}
+                    className="py-3 px-4 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors disabled:opacity-60"
+                  >
+                    <AlertCircle size={15} className="text-amber-600" />
+                    <span>Request HR Clarification</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ================================================================= */}
         {/* TAB 0: ONE-TAP MOBILE PUNCH (PUNCH SCOPE / TAB)                   */}
         {/* ================================================================= */}
@@ -670,11 +900,35 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
                     <>
                       <div className="flex justify-between text-slate-600">
                         <span>Provident Fund (EPF)</span>
-                        <span className="font-mono font-semibold text-slate-900">₹{(payroll.statutory.employeePf || 0).toLocaleString()}</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">₹{(payroll.statutory.employeePf || 0).toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between text-slate-600">
                         <span>ESIC Contribution</span>
-                        <span className="font-mono font-semibold text-slate-900">₹{(payroll.statutory.employeeEsi || 0).toLocaleString()}</span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">₹{(payroll.statutory.employeeEsi || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>
+                          Professional Tax ({payroll.statutory.state})
+                          {payroll.statutory.isPtExempt ? ' · PT_EXEMPT' : ''}
+                          {payroll.statutory.ptProratedInfo
+                            ? ` · Pro-rated (${payroll.statutory.ptProratedInfo.daysWorked}/${payroll.statutory.ptProratedInfo.totalDaysInMonth}d)`
+                            : ''}
+                        </span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">₹{(payroll.statutory.professionalTax || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>
+                          Labour Welfare Fund (LWF · {payroll.statutory.state}
+                          {payroll.statutory.lwfCycleLabel ? ` · ${payroll.statutory.lwfCycleLabel}` : ''})
+                          {payroll.statutory.isContractorExcludedFromLwf ? ' · Contractor Exempt' : ''}
+                          {payroll.statutory.lwfSkippedReason === 'WAGE_CEILING_EXCEEDED' ? ' · Above Wage Ceiling' : ''}
+                          {payroll.statutory.lwfSkippedReason === 'BELOW_WAGE_THRESHOLD' ? ' · Below Wage Threshold' : ''}
+                          {payroll.statutory.lwfSkippedReason === 'STATE_NO_LWF' ? ' · No State LWF' : ''}
+                          {payroll.statutory.lwfTransferSplit
+                            ? ` · Split (${payroll.statutory.lwfTransferSplit.previousState} ${payroll.statutory.lwfTransferSplit.monthsWorkedInPreviousState}m + ${payroll.statutory.lwfTransferSplit.currentState} ${payroll.statutory.lwfTransferSplit.monthsWorkedInCurrentState}m)`
+                            : ''}
+                        </span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-900">₹{(payroll.statutory.employeeLwf || 0).toLocaleString()}</span>
                       </div>
                     </>
                   )}

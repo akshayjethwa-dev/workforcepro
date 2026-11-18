@@ -8,6 +8,8 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
+import { EcrValidatorModal } from '../components/EcrValidatorModal';
+import { AttendanceRecord, Worker as WorkerProfile } from '../types/index';
 import * as XLSX from 'xlsx';
 
 // Capacitor Native Support
@@ -40,6 +42,10 @@ export const ReportsScreen: React.FC = () => {
   const [viewMode, setViewMode] = useState<'DAY_BY_DAY' | 'SUMMARY'>('DAY_BY_DAY');
   const [searchQuery, setSearchQuery] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('ALL');
+  const [ecrModalOpen, setEcrModalOpen] = useState(false);
+  const [ecrWorkers, setEcrWorkers] = useState<WorkerProfile[]>([]);
+  const [ecrAttendance, setEcrAttendance] = useState<AttendanceRecord[]>([]);
+  const [ecrOrgSettings, setEcrOrgSettings] = useState<any>(null);
 
   // Days in selected month
   const [yearStr, monthStr] = reportMonth.split('-');
@@ -275,7 +281,7 @@ export const ReportsScreen: React.FC = () => {
   };
 
   // ==========================================
-  // 3. EPFO ECR 2.0 OFFICIAL TEXT FILE (#~#)
+  // 3. EPFO ECR 2.0 OFFICIAL TEXT FILE (#~#) WITH PRE-UPLOAD VALIDATOR
   // ==========================================
   const generateECRTextFile = async () => {
     if (!profile?.tenantId) {
@@ -291,35 +297,12 @@ export const ReportsScreen: React.FC = () => {
         dbService.getOrgSettings(profile.tenantId)
       ]);
 
-      const pfSettings = settings?.compliance || {
-        capPfDeduction: true,
-        dailyWagePfPercentage: 100,
-        pfContributionRate: 12,
-        epsContributionRate: 8.33,
-        epfWageCeiling: 15000
-      };
-
-      const monthAttendance = allAttendance.filter(r => r.date && r.date.startsWith(reportMonth));
-
-      const { textContent, processedCount, skippedCount, challanSummary } = await runWorkerTask('GENERATE_ECR', {
-        workers,
-        monthAttendance,
-        pfSettings,
-        daysInMonth
-      });
-
-      if (processedCount === 0) {
-        toast.warning(`No eligible workers found. ${skippedCount} workers skipped (missing UAN).`);
-        setLoading(false);
-        return;
-      }
-
-      const fileName = `EPFO_ECR_2.0_${reportMonth.replace('-', '')}.txt`;
-      await saveOrDownloadFile(fileName, textContent, 'text/plain;charset=utf-8');
-      toast.success(`Official EPFO ECR 2.0 downloaded (${processedCount} members, ₹${challanSummary.totalChallanDues.toLocaleString('en-IN')} total dues)`);
-
+      setEcrWorkers(workers);
+      setEcrAttendance(allAttendance.filter(r => r.date && r.date.startsWith(reportMonth)));
+      setEcrOrgSettings(settings);
+      setEcrModalOpen(true);
     } catch (err: any) {
-      toast.error(`Failed to generate EPFO ECR file: ${err.message}`);
+      toast.error(`Failed to prepare EPFO ECR validator: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -1165,6 +1148,19 @@ export const ReportsScreen: React.FC = () => {
           </div>
         </div>
       )}
+
+      <EcrValidatorModal
+        isOpen={ecrModalOpen}
+        onClose={() => setEcrModalOpen(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        month={reportMonth}
+        workers={ecrWorkers}
+        attendance={ecrAttendance}
+        orgSettings={ecrOrgSettings}
+        onWorkerUpdated={(updated: WorkerProfile) => {
+          setEcrWorkers(prev => prev.map(w => (w.id === updated.id ? updated : w)));
+        }}
+      />
     </div>
   );
 };

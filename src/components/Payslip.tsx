@@ -6,6 +6,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
+import { useToast } from '../contexts/ToastContext';
 
 interface Props {
   data: MonthlyPayroll;
@@ -26,6 +27,7 @@ const base64ToBlob = (base64: string, type = 'application/pdf'): Blob => {
 };
 
 export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClose }) => {
+  const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
   
   // Format "2026-02" to "February 2026"
@@ -94,7 +96,7 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
           data: pdfBase64,
           directory: Directory.Documents,
         });
-        alert('Payslip PDF downloaded successfully to your Documents folder.');
+        toast.success('Payslip PDF saved to Documents folder.');
       } else {
         // Web fallback
         const link = document.createElement('a');
@@ -106,7 +108,7 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
       }
     } catch (error) {
       console.error('Error downloading payslip:', error);
-      alert('Failed to download the payslip. Please try again.');
+      toast.error('Failed to download the payslip. Please try again.');
     } finally {
       setIsProcessing(false);
     }
@@ -155,12 +157,12 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
             text: `Here is the payslip for ${data.workerName} for ${formattedMonth}.`,
           });
         } else {
-          alert('Sharing files is not supported on this browser. Please use the download button instead.');
+          toast.info('Browser file sharing unsupported — please use Download PDF instead.');
         }
       }
     } catch (error) {
       console.error('Error sharing payslip:', error);
-      alert('Failed to share the payslip. Please try again.');
+      toast.error('Failed to share the payslip. Please try again.');
     } finally {
       setIsProcessing(false);
     }
@@ -171,8 +173,7 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
       if (!Capacitor.isNativePlatform()) {
           window.print();
       } else {
-          // Alert user and open the native print/share spooler
-          alert("Preparing formal document. Please select 'Print' from the iOS/Android menu that appears.");
+          toast.info("Preparing PDF — choose 'Print' from the share sheet.");
           await handleShare();
       }
   };
@@ -225,7 +226,17 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                 {siteAddress && (
                     <p className="text-sm text-gray-500 mt-1">{siteAddress}</p>
                 )}
-                <h2 className="text-lg font-bold mt-4 bg-gray-100 py-1 uppercase">PAYSLIP - {formattedMonth}</h2>
+                <h2 className="text-lg font-bold mt-4 bg-gray-100 py-1 uppercase">
+                  {data.fnfSummary?.isFnF ? `FULL & FINAL SETTLEMENT PAYSLIP - ${formattedMonth}` : `PAYSLIP - ${formattedMonth}`}
+                </h2>
+                {data.fnfSummary?.isFnF && (
+                  <p className="text-xs text-gray-600 mt-1 font-mono">
+                    Exit Date: {data.fnfSummary.exitDate} · Reason: {data.fnfSummary.exitReason || 'RESIGNATION'}
+                    {data.fnfSummary.deathInService && data.fnfSummary.nomineeName
+                      ? ` · Payable to Nominee: ${data.fnfSummary.nomineeName} (${data.fnfSummary.nomineeRelation || 'Nominee'})`
+                      : ''}
+                  </p>
+                )}
             </div>
 
             {/* Worker Info */}
@@ -304,8 +315,87 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                              <td className="py-2 pl-2">GROSS EARNINGS</td>
                              <td className="text-right py-2 pr-2">{data.earnings.gross.toFixed(2)}</td>
                          </tr>
+                         {(() => {
+                           const notionalAdd =
+                             data.statutory?.notionalWageAddition ??
+                             data.notionalWageAddition ??
+                             data.wageComplianceAudit?.notionalWageAddition ??
+                             0;
+                           if (notionalAdd <= 0) return null;
+                           return (
+                             <tr className="bg-amber-50/90 border-t border-amber-200">
+                               <td className="py-2 pl-2 text-amber-950 font-semibold">
+                                 Notional Wage Addition (50% Rule Excess Allowance Add-Back)
+                                 <span className="block text-[10px] font-normal text-amber-800">
+                                   Non-cash statutory base adjustment added to PF/ESI qualifying wages (Labour Codes eff. 21 Nov 2025)
+                                 </span>
+                               </td>
+                               <td className="text-right py-2 pr-2 font-mono font-bold text-amber-950">
+                                 +{notionalAdd.toFixed(2)}*
+                               </td>
+                             </tr>
+                           );
+                         })()}
+                         {(data.gratuitySettlement || data.fnfSummary?.gratuityPayable || 0) > 0 && (
+                           <tr className="bg-emerald-50/80 border-t border-emerald-200">
+                             <td className="py-2 pl-2 text-emerald-950 font-semibold">
+                               Gratuity Settlement (Full &amp; Final · Exempt under Sec 10(10))
+                               <span className="block text-[10px] font-normal text-emerald-800 font-mono">
+                                 (Last Basic+DA ₹{(data.fnfSummary?.lastDrawnBasicPlusDa || 0).toLocaleString('en-IN')} × 15/26 × {data.fnfSummary?.roundedYears || 0} yrs)
+                                 {data.fnfSummary?.ceilingApplied ? ' · ₹20,00,000 Statutory Ceiling Applied' : ''}
+                               </span>
+                             </td>
+                             <td className="text-right py-2 pr-2 font-mono font-bold text-emerald-950">
+                               +{(data.gratuitySettlement ?? data.fnfSummary?.gratuityPayable ?? 0).toFixed(2)}
+                             </td>
+                           </tr>
+                         )}
                      </tbody>
                  </table>
+
+                 {(() => {
+                   const notionalAdd =
+                     data.statutory?.notionalWageAddition ??
+                     data.notionalWageAddition ??
+                     data.wageComplianceAudit?.notionalWageAddition ??
+                     0;
+                   if (notionalAdd <= 0) return null;
+                   const origBase =
+                     data.statutory?.originalWageBase ??
+                     data.wageComplianceAudit?.originalWageBase ??
+                     data.earnings.basic;
+                   const compBase =
+                     data.statutory?.compliantWageBase ??
+                     data.wageComplianceAudit?.recalculatedWageBase ??
+                     origBase + notionalAdd;
+                   const origPfBase = data.statutory?.originalPfWageBase ?? data.wageComplianceAudit?.originalPfWageBase ?? origBase;
+                   const recPfBase = data.statutory?.pfWageBase ?? data.wageComplianceAudit?.recalculatedPfWageBase ?? compBase;
+                   return (
+                     <div className="mt-2.5 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-950 space-y-1">
+                       <div className="font-bold flex flex-wrap justify-between gap-2">
+                         <span>*Statutory Wage Recalculation (Why PF/ESI Increased):</span>
+                         <span className="font-mono">
+                           Orig Base ₹{origBase.toLocaleString('en-IN')} + Notional ₹{notionalAdd.toLocaleString('en-IN')} = Compliant Base ₹{compBase.toLocaleString('en-IN')}
+                         </span>
+                       </div>
+                       <div className="text-amber-800 flex flex-wrap justify-between gap-2">
+                         <span>
+                           PF Qualifying Base: <strong>₹{origPfBase.toLocaleString('en-IN')} → ₹{recPfBase.toLocaleString('en-IN')}</strong>
+                           {data.statutory?.isEsiApplicable && (
+                             <> · ESI Base: <strong>₹{data.statutory.esiWageBase.toLocaleString('en-IN')}</strong></>
+                           )}
+                         </span>
+                         <span>*Notional addition does not increase cash Gross Earnings.</span>
+                       </div>
+                     </div>
+                   );
+                 })()}
+
+                 {data.statutory?.isRetrospectivePeriod && data.statutory?.retrospectiveWarning && (
+                   <div className="mt-2.5 p-2.5 bg-slate-100 border border-slate-300 rounded-lg text-[11px] text-slate-800">
+                     <strong>Retrospective Period Notice:</strong> {data.statutory.retrospectiveWarning}
+                   </div>
+                 )}
             </div>
 
             {/* ESI Dropped Note if Gross exceeded threshold */}
@@ -327,15 +417,48 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                      </thead>
                      <tbody className="divide-y divide-gray-100">
                          {data.deductions.details.map((d, i) => (
-                             <tr key={i}><td className="py-2">{d.description}</td><td className="text-right py-2">{d.amount.toFixed(2)}</td></tr>
+                             <tr key={i}><td className="py-2">{d.description}</td><td className="text-right py-2 font-mono tabular-nums">{d.amount.toFixed(2)}</td></tr>
                          ))}
                          {data.deductions.total === 0 && <tr><td className="py-2 text-gray-400 italic">No deductions</td><td className="text-right py-2">-</td></tr>}
                          <tr className="bg-red-50 font-bold">
                              <td className="py-2 pl-2">TOTAL DEDUCTIONS</td>
-                             <td className="text-right py-2 pr-2">{data.deductions.total.toFixed(2)}</td>
+                             <td className="text-right py-2 pr-2 font-mono tabular-nums">{data.deductions.total.toFixed(2)}</td>
                          </tr>
                      </tbody>
                  </table>
+                 {(data.statutory?.isPtExempt ||
+                   data.statutory?.ptProratedInfo ||
+                   data.statutory?.isContractorExcludedFromLwf ||
+                   data.statutory?.lwfTransferSplit ||
+                   data.statutory?.lwfSkippedReason === 'WAGE_CEILING_EXCEEDED' ||
+                   data.statutory?.lwfSkippedReason === 'BELOW_WAGE_THRESHOLD' ||
+                   data.statutory?.lwfSkippedReason === 'STATE_NO_LWF') && (
+                   <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-700 space-y-0.5">
+                     {data.statutory?.isPtExempt && (
+                       <div><strong>PT Exempt (PT_EXEMPT):</strong> {data.statutory.ptExemptionNote || 'Previous employer PT declaration verified.'}</div>
+                     )}
+                     {data.statutory?.ptProratedInfo && (
+                       <div>
+                         <strong>Mid-Month PT Pro-Rating:</strong> {data.statutory.ptProratedInfo.daysWorked}/{data.statutory.ptProratedInfo.totalDaysInMonth} days worked (Full-month slab ₹{data.statutory.ptProratedInfo.fullMonthPt} → Pro-rated ₹{data.statutory.ptProratedInfo.proratedPt})
+                       </div>
+                     )}
+                     {data.statutory?.isContractorExcludedFromLwf && (
+                       <div><strong>CONTRACTOR LWF Exemption:</strong> LWF excluded for contractor personnel under {data.statutory.state} state rules.</div>
+                     )}
+                     {data.statutory?.lwfTransferSplit && (
+                       <div><strong>Mid-Year State Transfer LWF Split:</strong> {data.statutory.lwfTransferSplit.splitSummary}</div>
+                     )}
+                     {data.statutory?.lwfSkippedReason === 'WAGE_CEILING_EXCEEDED' && (
+                       <div><strong>LWF Wage Ceiling Exempt:</strong> Salary exceeds {data.statutory.state} LWF ceiling (₹{(data.statutory.lwfWageCeilingApplied || 0).toLocaleString('en-IN')}/mo).</div>
+                     )}
+                     {data.statutory?.lwfSkippedReason === 'BELOW_WAGE_THRESHOLD' && (
+                       <div><strong>LWF Wage Threshold Exempt:</strong> Salary is below {data.statutory.state} LWF minimum wage threshold (₹{(data.statutory.lwfWageCeilingApplied || 0).toLocaleString('en-IN')}/mo).</div>
+                     )}
+                     {data.statutory?.lwfSkippedReason === 'STATE_NO_LWF' && (
+                       <div><strong>No Active State LWF:</strong> Work location state ({data.statutory.state}) has no active LWF levy (₹0).</div>
+                     )}
+                   </div>
+                 )}
             </div>
 
             {/* Employer Statutory Contributions & CTC Breakdown */}
@@ -343,19 +466,20 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
               <div className="mb-6 border border-gray-200 rounded-lg p-3 bg-gray-50/80">
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-xs uppercase text-gray-600">Employer Contributions (Company Liability)</span>
-                  <span className="font-bold text-xs text-gray-800">Total: ₹{data.statutory.totalEmployerStatutory.toFixed(2)}</span>
+                  <span className="font-bold text-xs font-mono tabular-nums text-gray-800">Total: ₹{data.statutory.totalEmployerStatutory.toFixed(2)}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
-                  <div>EPF (3.67%): <span className="font-mono font-semibold">₹{data.statutory.employerEpf.toFixed(2)}</span></div>
-                  <div>EPS (8.33% Capped): <span className="font-mono font-semibold">₹{data.statutory.employerEps.toFixed(2)}</span></div>
-                  <div>EDLI (0.5%): <span className="font-mono font-semibold">₹{data.statutory.employerEdli.toFixed(2)}</span></div>
-                  <div>Admin (0.5%): <span className="font-mono font-semibold">₹{data.statutory.employerAdminCharges.toFixed(2)}</span></div>
-                  <div>Employer ESI (3.25%): <span className="font-mono font-semibold">₹{data.statutory.employerEsi.toFixed(2)}</span></div>
-                  <div>Jurisdiction State: <span className="font-semibold text-gray-900">{data.statutory.state}</span></div>
+                  <div>EPF (3.67%): <span className="font-mono tabular-nums font-semibold">₹{data.statutory.employerEpf.toFixed(2)}</span></div>
+                  <div>EPS (8.33% Capped): <span className="font-mono tabular-nums font-semibold">₹{data.statutory.employerEps.toFixed(2)}</span></div>
+                  <div>EDLI (0.5%): <span className="font-mono tabular-nums font-semibold">₹{data.statutory.employerEdli.toFixed(2)}</span></div>
+                  <div>Admin (0.5%): <span className="font-mono tabular-nums font-semibold">₹{data.statutory.employerAdminCharges.toFixed(2)}</span></div>
+                  <div>Employer ESI (3.25%): <span className="font-mono tabular-nums font-semibold">₹{data.statutory.employerEsi.toFixed(2)}</span></div>
+                  <div>Employer LWF ({data.statutory.state}{data.statutory.lwfCycleLabel ? ` · ${data.statutory.lwfCycleLabel}` : ''}): <span className="font-mono tabular-nums font-semibold">₹{(data.statutory.employerLwf || 0).toFixed(2)}</span></div>
+                  <div>Work Location State: <span className="font-semibold text-gray-900">{data.statutory.state}</span></div>
                 </div>
                 <div className="mt-2 pt-2 border-t border-gray-200 flex justify-between text-xs font-bold text-gray-800">
                   <span>Gross Cost To Company (CTC):</span>
-                  <span className="font-mono text-sm text-indigo-700">₹{(data.employerCostToCompany || (data.earnings.gross + data.statutory.totalEmployerStatutory)).toLocaleString('en-IN', {minimumFractionDigits: 2})}</span>
+                  <span className="font-mono tabular-nums text-sm text-indigo-700">₹{(data.employerCostToCompany || (data.earnings.gross + data.statutory.totalEmployerStatutory)).toLocaleString('en-IN', {minimumFractionDigits: 2})}</span>
                 </div>
               </div>
             )}

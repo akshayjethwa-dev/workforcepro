@@ -4,7 +4,7 @@ import {
   Search, Users, CalendarCheck, IndianRupee, Settings, Shield, 
   Building2, CreditCard, PieChart, IdCard, UserPlus, Camera, 
   HelpCircle, ArrowRight, CornerDownLeft, Sparkles, X, History,
-  Layers, BookOpen, FileSpreadsheet, Inbox, Sun, ShieldCheck
+  Layers, BookOpen, FileSpreadsheet, Inbox, Sun, ShieldCheck, Calculator, Award, Landmark
 } from 'lucide-react';
 import { ScreenName, Role } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
@@ -166,6 +166,38 @@ export const CommandPalette: React.FC<Props> = ({
       shortcut: 'G P',
       action: () => { onNavigate('PAYROLL'); onClose(); },
       keywords: ['salary', 'wages', 'payout', 'advances', 'kharchi', 'slips']
+    },
+    {
+      id: 'nav-ctc-simulator',
+      title: 'What-If CTC Simulator (50% Rule Restructuring)',
+      category: 'Actions',
+      icon: Calculator,
+      action: () => { onNavigate('CTC_SIMULATOR'); onClose(); },
+      keywords: ['ctc', 'simulator', 'restructure', '50%', 'basic', 'gratuity', 'pf', 'revision letter']
+    },
+    {
+      id: 'nav-gratuity-fnf',
+      title: 'Gratuity Accrual & FnF Settlement Calculator',
+      category: 'Actions',
+      icon: Award,
+      action: () => { onNavigate('GRATUITY'); onClose(); },
+      keywords: ['gratuity', 'fnf', 'full and final', 'settlement', '20 lakh', 'nominee', 'subsidiary', 'resignation']
+    },
+    {
+      id: 'nav-annual-bonus',
+      title: 'Annual Statutory Bonus & Forms A/B/C/D',
+      category: 'Actions',
+      icon: Landmark,
+      action: () => { onNavigate('ANNUAL_BONUS'); onClose(); },
+      keywords: ['bonus', 'statutory bonus', 'form a', 'form b', 'form c', 'form d', '8.33', 'ex gratia', 'off-cycle', 'tds']
+    },
+    {
+      id: 'nav-posh-icc',
+      title: 'Digital ICC & POSH Complaint Portal',
+      category: 'Navigation',
+      icon: ShieldCheck,
+      action: () => { onNavigate('POSH_ICC'); onClose(); },
+      keywords: ['posh', 'icc', 'harassment', 'complaint', 'confidential', 'external member', 'district officer', 'annual report', '90 days']
     },
     {
       id: 'nav-daily-logs',

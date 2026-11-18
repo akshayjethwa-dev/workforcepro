@@ -5,8 +5,21 @@ import {
   StatutoryBreakdown, 
   StatutoryCalculationTrace, 
   EmployeeTaxDeclaration, 
-  Form16Data 
+  Form16Data,
+  WageComplianceAudit,
+  GratuityImpactProjection
 } from '../types/index';
+import {
+  resolveWorkerWorkLocation,
+  validateWorkerWageStructure,
+} from './wageStructureValidationService';
+import {
+  calculateStateLwf,
+  isWorkerContractor,
+  isWorkerPtExempt,
+  LwfCalculationResult,
+} from './ptLwfDatabase';
+import { ecrValidatorService } from './ecrValidatorService';
 
 export const INDIAN_STATES = [
   'Maharashtra', 'Karnataka', 'Gujarat', 'Tamil Nadu', 'Andhra Pradesh', 
@@ -24,165 +37,438 @@ export class StatutoryEngine {
   public static readonly PF_STATUTORY_CEILING = 15000;
   public static readonly ESI_STATUTORY_CEILING = 21000;
   public static readonly ESI_DISABILITY_CEILING = 25000;
+  public static readonly LABOUR_CODE_EFFECTIVE_DATE = '2025-11-21';
+  public static readonly LABOUR_CODE_EFFECTIVE_MONTH = '2025-11';
 
   /**
-   * Determine active state taking mid-year state transfer effective dates into account
+   * Checks whether the New Labour Codes (effective 21 November 2025) govern the payroll month.
+   * Retrospective payroll runs (pre-Nov 2025) default to old rules and emit a warning.
    */
-  public resolveActiveState(worker: Worker, currentMonthStr: string, defaultState = 'Maharashtra'): string {
-    const assignedState = worker.state || defaultState;
+  public isLabourCodeEffective(
+    monthStr: string,
+    payrollRunDate?: string
+  ): { isEffective: boolean; isRetrospective: boolean; warning?: string } {
+    const cleanMonth = (monthStr || '').slice(0, 7);
+    if (cleanMonth && cleanMonth < StatutoryEngine.LABOUR_CODE_EFFECTIVE_MONTH) {
+      return {
+        isEffective: false,
+        isRetrospective: true,
+        warning: `Retrospective Payroll (${cleanMonth} — pre-21 Nov 2025): Defaulting to legacy EPF/ESIC rules without 50% Rule excess allowance add-back. The new Labour Code 50% Rule automatically applies to current and future payroll periods.`
+      };
+    }
+    if (
+      cleanMonth === StatutoryEngine.LABOUR_CODE_EFFECTIVE_MONTH &&
+      payrollRunDate &&
+      payrollRunDate < StatutoryEngine.LABOUR_CODE_EFFECTIVE_DATE
+    ) {
+      return {
+        isEffective: false,
+        isRetrospective: true,
+        warning: `Retrospective Payroll (${payrollRunDate} — pre-21 Nov 2025): Defaulting to legacy EPF/ESIC rules. New Labour Code 50% Rule applies from 21 Nov 2025 onwards.`
+      };
+    }
+    return { isEffective: true, isRetrospective: false };
+  }
+
+  /**
+   * Determine active state taking mid-year state transfer effective dates AND multi-state branches into account
+   */
+  public resolveActiveState(
+    worker: Worker,
+    currentMonthStr: string,
+    defaultState = 'Maharashtra',
+    orgSettings?: OrgSettings
+  ): string {
     if (worker.stateEffectiveDate && worker.previousState) {
       const effectiveMonth = worker.stateEffectiveDate.slice(0, 7);
       if (currentMonthStr < effectiveMonth) {
         return worker.previousState;
       }
     }
-    return assignedState;
+    if (orgSettings) {
+      return resolveWorkerWorkLocation(worker, orgSettings, currentMonthStr).state;
+    }
+    return worker.state || defaultState;
   }
 
   /**
-   * Calculate Professional Tax (PT) across all 28 states & 8 UTs
-   * Includes gender exemptions (Maharashtra female <= 25,000 exempt) and February adjustments
+   * Calculate Professional Tax (PT) across Indian states & UTs.
+   * Supports:
+   * - PT_EXEMPT (Multiple employers / previous employer PT-paid declaration)
+   * - Gujarat PT: Nil up to ₹12,000/mo; ₹200/mo above ₹12,000 (₹300 in February if annual state cap is ₹2,500)
+   * - Mid-month joining pro-ration based on days worked
+   * - Mid-year threshold crossing (evaluates current month wages; no retrospective catch-up)
    */
   public calculateProfessionalTax(
-    grossMonthly: number, 
-    state: string, 
-    gender: string = 'Male', 
-    monthNumber: number = new Date().getMonth() + 1
-  ): { ptAmount: number; ruleApplied: string } {
+    grossMonthly: number,
+    state: string,
+    gender: string = 'Male',
+    monthNumber: number = new Date().getMonth() + 1,
+    options: {
+      ptExempt?: boolean;
+      previousEmployerDeclaration?: Worker['ptPreviousEmployerDeclaration'];
+      joinedDate?: string;
+      currentMonthStr?: string;
+      daysWorked?: number;
+      totalDaysInMonth?: number;
+      contractualMonthlyGross?: number;
+      gujaratFeb300Adjustment?: boolean;
+      maharashtraFeb300Adjustment?: boolean;
+      ptMidMonthProrationEnabled?: boolean;
+    } = {}
+  ): {
+    ptAmount: number;
+    fullMonthPt: number;
+    isPtExempt: boolean;
+    exemptionNote?: string;
+    februaryAdjustmentApplied: boolean;
+    ptProratedInfo?: {
+      isProrated: boolean;
+      fullMonthPt: number;
+      proratedPt: number;
+      daysWorked: number;
+      totalDaysInMonth: number;
+      joiningDate?: string;
+    };
+    ruleApplied: string;
+  } {
     const cleanState = (state || 'Maharashtra').trim();
     const isFemale = gender.toLowerCase() === 'female';
     const isFebruary = monthNumber === 2;
 
+    if (options.ptExempt || options.previousEmployerDeclaration?.declared) {
+      const prevEmp = options.previousEmployerDeclaration?.previousEmployerName;
+      const certRef = options.previousEmployerDeclaration?.certificateRef;
+      const detail = prevEmp
+        ? `Previous employer declaration (${prevEmp}${certRef ? ` · Ref: ${certRef}` : ''})`
+        : 'Admin marked employee as PT_EXEMPT (multiple employers declaration)';
+      return {
+        ptAmount: 0,
+        fullMonthPt: 0,
+        isPtExempt: true,
+        exemptionNote: `PT_EXEMPT: ${detail}. PT not enforced.`,
+        februaryAdjustmentApplied: false,
+        ruleApplied: `PT_EXEMPT (${cleanState}): ${detail} — ₹0 deducted.`,
+      };
+    }
+
+    // Determine mid-month joining context & pro-ration denominator
+    const joinDateClean = (options.joinedDate || '').slice(0, 10);
+    const monthPrefix = (options.currentMonthStr || '').slice(0, 7);
+    const joinDay =
+      joinDateClean && monthPrefix && joinDateClean.startsWith(monthPrefix)
+        ? parseInt(joinDateClean.slice(8, 10), 10)
+        : 1;
+    const joinedMidMonth = Boolean(
+      joinDateClean && monthPrefix && joinDateClean.startsWith(monthPrefix) && joinDay > 1
+    );
+
+    const parsedYear = monthPrefix ? parseInt(monthPrefix.split('-')[0], 10) : new Date().getFullYear();
+    const inferredMonthDays =
+      monthNumber >= 1 && monthNumber <= 12
+        ? new Date(parsedYear, monthNumber, 0).getDate()
+        : 30;
+    const totalDaysInMonth =
+      options.totalDaysInMonth && options.totalDaysInMonth > 0
+        ? options.totalDaysInMonth
+        : inferredMonthDays;
+
+    const rawDaysWorked =
+      typeof options.daysWorked === 'number'
+        ? options.daysWorked
+        : joinedMidMonth
+        ? Math.max(0, totalDaysInMonth - joinDay + 1)
+        : totalDaysInMonth;
+    const daysWorked = Math.min(totalDaysInMonth, Math.max(0, rawDaysWorked));
+
+    const shouldProrate =
+      options.ptMidMonthProrationEnabled !== false &&
+      totalDaysInMonth > 0 &&
+      (joinedMidMonth ||
+        (typeof options.daysWorked === 'number' && daysWorked < totalDaysInMonth)) &&
+      daysWorked < totalDaysInMonth;
+
+    // For mid-month joiners, evaluate slab against full-month contractual rate if available,
+    // then pro-rate the slab amount by (daysWorked / totalDaysInMonth).
+    const slabEvaluationWage =
+      joinedMidMonth &&
+      options.contractualMonthlyGross &&
+      options.contractualMonthlyGross > grossMonthly
+        ? options.contractualMonthlyGross
+        : grossMonthly;
+
+    let basePt = 0;
+    let februaryAdjustmentApplied = false;
+    let baseRule = '';
+
+    if (grossMonthly <= 0 && !joinedMidMonth) {
+      return {
+        ptAmount: 0,
+        fullMonthPt: 0,
+        isPtExempt: false,
+        februaryAdjustmentApplied: false,
+        ruleApplied: `${cleanState} PT: ₹0 earned gross in period (Nil).`,
+      };
+    }
+
     switch (cleanState) {
       case 'Maharashtra': {
-        // Maharashtra State Tax on Professions, Trades, Callings and Employments Act
-        // Women earning <= 25,000 per month are exempt under Govt Resolution
-        if (isFemale && grossMonthly <= 25000) {
-          return { ptAmount: 0, ruleApplied: 'Maharashtra PT: Female employee earning ≤ ₹25,000 is 100% exempt from PT.' };
+        if (isFemale && slabEvaluationWage <= 25000) {
+          basePt = 0;
+          baseRule = 'Maharashtra PT: Female employee earning ≤ ₹25,000 is 100% exempt from PT.';
+        } else if (slabEvaluationWage <= 7500) {
+          basePt = 0;
+          baseRule = 'Maharashtra PT: Gross ≤ ₹7,500 (Nil)';
+        } else if (slabEvaluationWage <= 10000) {
+          basePt = 175;
+          baseRule = 'Maharashtra PT: ₹7,501 to ₹10,000 = ₹175/mo';
+        } else {
+          const applyFeb300 = isFebruary && options.maharashtraFeb300Adjustment !== false;
+          basePt = applyFeb300 ? 300 : 200;
+          februaryAdjustmentApplied = applyFeb300;
+          baseRule = applyFeb300
+            ? 'Maharashtra PT: Gross > ₹10,000 (February statutory escalation = ₹300 for ₹2,500/yr cap)'
+            : 'Maharashtra PT: Gross > ₹10,000 = ₹200/mo';
         }
-        if (grossMonthly <= 7500) {
-          return { ptAmount: 0, ruleApplied: 'Maharashtra PT: Gross ≤ ₹7,500 (Nil)' };
-        }
-        if (grossMonthly <= 10000) {
-          return { ptAmount: 175, ruleApplied: 'Maharashtra PT: ₹7,501 to ₹10,000 = ₹175/mo' };
-        }
-        // Gross > 10,000: ₹200 for 11 months, ₹300 in February to total ₹2,500/year
-        const amt = isFebruary ? 300 : 200;
-        const note = isFebruary 
-          ? 'Maharashtra PT: Gross > ₹10,000 (February statutory escalation = ₹300)'
-          : 'Maharashtra PT: Gross > ₹10,000 = ₹200/mo (March-January)';
-        return { ptAmount: amt, ruleApplied: note };
+        break;
       }
 
       case 'Karnataka': {
-        // Karnataka Tax on Professions Act: Slabs updated (Nil up to 15,000; 200 above 15,000)
-        if (grossMonthly <= 15000) {
-          return { ptAmount: 0, ruleApplied: 'Karnataka PT: Gross ≤ ₹15,000 (Nil)' };
+        if (slabEvaluationWage <= 15000) {
+          basePt = 0;
+          baseRule = 'Karnataka PT: Gross ≤ ₹15,000 (Nil)';
+        } else {
+          basePt = 200;
+          baseRule = 'Karnataka PT: Gross > ₹15,000 = ₹200/mo';
         }
-        return { ptAmount: 200, ruleApplied: 'Karnataka PT: Gross > ₹15,000 = ₹200/mo' };
+        break;
       }
 
       case 'Gujarat': {
-        // Gujarat Panchayats, Municipalities & State Tax on Professions Act
-        if (grossMonthly < 6000) {
-          return { ptAmount: 0, ruleApplied: 'Gujarat PT: Gross < ₹6,000 (Nil)' };
+        // Gujarat PT Slabs: Nil up to ₹12,000/month; ₹200/month above ₹12,000
+        // Handles ₹300 February deduction when annual state cap is ₹2,500
+        if (slabEvaluationWage <= 12000) {
+          basePt = 0;
+          baseRule = 'Gujarat PT: Monthly salary ≤ ₹12,000 (Nil)';
+        } else {
+          const applyFeb300 = isFebruary && options.gujaratFeb300Adjustment !== false;
+          basePt = applyFeb300 ? 300 : 200;
+          februaryAdjustmentApplied = applyFeb300;
+          baseRule = applyFeb300
+            ? 'Gujarat PT: Monthly salary > ₹12,000 — February adjustment ₹300 (annual ₹2,500 cap)'
+            : 'Gujarat PT: Monthly salary > ₹12,000 = ₹200/mo';
         }
-        if (grossMonthly < 9000) {
-          return { ptAmount: 80, ruleApplied: 'Gujarat PT: ₹6,000 to ₹8,999 = ₹80/mo' };
-        }
-        if (grossMonthly < 12000) {
-          return { ptAmount: 150, ruleApplied: 'Gujarat PT: ₹9,000 to ₹11,999 = ₹150/mo' };
-        }
-        return { ptAmount: 200, ruleApplied: 'Gujarat PT: Gross ≥ ₹12,000 = ₹200/mo' };
+        break;
       }
 
       case 'Tamil Nadu': {
-        // Tamil Nadu Municipal Laws: Prorated monthly from half-yearly slabs
-        if (grossMonthly <= 3500) return { ptAmount: 0, ruleApplied: 'Tamil Nadu PT: Gross ≤ ₹3,500 (Nil)' };
-        if (grossMonthly <= 5000) return { ptAmount: 23, ruleApplied: 'Tamil Nadu PT: ₹3,501 to ₹5,000 (~₹23/mo)' };
-        if (grossMonthly <= 7500) return { ptAmount: 53, ruleApplied: 'Tamil Nadu PT: ₹5,001 to ₹7,500 (~₹53/mo)' };
-        if (grossMonthly <= 10000) return { ptAmount: 115, ruleApplied: 'Tamil Nadu PT: ₹7,501 to ₹10,000 (~₹115/mo)' };
-        if (grossMonthly <= 12500) return { ptAmount: 171, ruleApplied: 'Tamil Nadu PT: ₹10,001 to ₹12,500 (~₹171/mo)' };
-        return { ptAmount: 208, ruleApplied: 'Tamil Nadu PT: Gross > ₹12,500 (~₹208/mo, ₹1,250 half-yearly)' };
+        if (slabEvaluationWage <= 3500) {
+          basePt = 0;
+          baseRule = 'Tamil Nadu PT: Gross ≤ ₹3,500 (Nil)';
+        } else if (slabEvaluationWage <= 5000) {
+          basePt = 23;
+          baseRule = 'Tamil Nadu PT: ₹3,501 to ₹5,000 (~₹23/mo)';
+        } else if (slabEvaluationWage <= 7500) {
+          basePt = 53;
+          baseRule = 'Tamil Nadu PT: ₹5,001 to ₹7,500 (~₹53/mo)';
+        } else if (slabEvaluationWage <= 10000) {
+          basePt = 115;
+          baseRule = 'Tamil Nadu PT: ₹7,501 to ₹10,000 (~₹115/mo)';
+        } else if (slabEvaluationWage <= 12500) {
+          basePt = 171;
+          baseRule = 'Tamil Nadu PT: ₹10,001 to ₹12,500 (~₹171/mo)';
+        } else {
+          basePt = 208;
+          baseRule = 'Tamil Nadu PT: Gross > ₹12,500 (~₹208/mo, ₹1,250 half-yearly)';
+        }
+        break;
       }
 
       case 'Andhra Pradesh':
       case 'Telangana': {
-        if (grossMonthly <= 15000) return { ptAmount: 0, ruleApplied: `${cleanState} PT: Gross ≤ ₹15,000 (Nil)` };
-        if (grossMonthly <= 20000) return { ptAmount: 150, ruleApplied: `${cleanState} PT: ₹15,001 to ₹20,000 = ₹150/mo` };
-        return { ptAmount: 200, ruleApplied: `${cleanState} PT: Gross > ₹20,000 = ₹200/mo` };
+        if (slabEvaluationWage <= 15000) {
+          basePt = 0;
+          baseRule = `${cleanState} PT: Gross ≤ ₹15,000 (Nil)`;
+        } else if (slabEvaluationWage <= 20000) {
+          basePt = 150;
+          baseRule = `${cleanState} PT: ₹15,001 to ₹20,000 = ₹150/mo`;
+        } else {
+          basePt = 200;
+          baseRule = `${cleanState} PT: Gross > ₹20,000 = ₹200/mo`;
+        }
+        break;
       }
 
       case 'West Bengal': {
-        if (grossMonthly <= 10000) return { ptAmount: 0, ruleApplied: 'West Bengal PT: Gross ≤ ₹10,000 (Nil)' };
-        if (grossMonthly <= 15000) return { ptAmount: 110, ruleApplied: 'West Bengal PT: ₹10,001 to ₹15,000 = ₹110/mo' };
-        if (grossMonthly <= 25000) return { ptAmount: 130, ruleApplied: 'West Bengal PT: ₹15,001 to ₹25,000 = ₹130/mo' };
-        if (grossMonthly <= 40000) return { ptAmount: 150, ruleApplied: 'West Bengal PT: ₹25,001 to ₹40,000 = ₹150/mo' };
-        return { ptAmount: 200, ruleApplied: 'West Bengal PT: Gross > ₹40,000 = ₹200/mo' };
+        if (slabEvaluationWage <= 10000) {
+          basePt = 0;
+          baseRule = 'West Bengal PT: Gross ≤ ₹10,000 (Nil)';
+        } else if (slabEvaluationWage <= 15000) {
+          basePt = 110;
+          baseRule = 'West Bengal PT: ₹10,001 to ₹15,000 = ₹110/mo';
+        } else if (slabEvaluationWage <= 25000) {
+          basePt = 130;
+          baseRule = 'West Bengal PT: ₹15,001 to ₹25,000 = ₹130/mo';
+        } else if (slabEvaluationWage <= 40000) {
+          basePt = 150;
+          baseRule = 'West Bengal PT: ₹25,001 to ₹40,000 = ₹150/mo';
+        } else {
+          basePt = 200;
+          baseRule = 'West Bengal PT: Gross > ₹40,000 = ₹200/mo';
+        }
+        break;
       }
 
       case 'Kerala': {
-        if (grossMonthly < 2000) return { ptAmount: 0, ruleApplied: 'Kerala PT: Gross < ₹2,000 (Nil)' };
-        if (grossMonthly < 3000) return { ptAmount: 20, ruleApplied: 'Kerala PT: ₹2,000 to ₹2,999 (~₹20/mo)' };
-        if (grossMonthly < 5000) return { ptAmount: 30, ruleApplied: 'Kerala PT: ₹3,000 to ₹4,999 (~₹30/mo)' };
-        if (grossMonthly < 7500) return { ptAmount: 50, ruleApplied: 'Kerala PT: ₹5,000 to ₹7,499 (~₹50/mo)' };
-        if (grossMonthly < 10000) return { ptAmount: 75, ruleApplied: 'Kerala PT: ₹7,500 to ₹9,999 (~₹75/mo)' };
-        if (grossMonthly < 12500) return { ptAmount: 100, ruleApplied: 'Kerala PT: ₹10,000 to ₹12,499 (~₹100/mo)' };
-        return { ptAmount: 208, ruleApplied: 'Kerala PT: Gross ≥ ₹12,500 (~₹208/mo)' };
+        if (slabEvaluationWage < 2000) {
+          basePt = 0;
+          baseRule = 'Kerala PT: Gross < ₹2,000 (Nil)';
+        } else if (slabEvaluationWage < 3000) {
+          basePt = 20;
+          baseRule = 'Kerala PT: ₹2,000 to ₹2,999 (~₹20/mo)';
+        } else if (slabEvaluationWage < 5000) {
+          basePt = 30;
+          baseRule = 'Kerala PT: ₹3,000 to ₹4,999 (~₹30/mo)';
+        } else if (slabEvaluationWage < 7500) {
+          basePt = 50;
+          baseRule = 'Kerala PT: ₹5,000 to ₹7,499 (~₹50/mo)';
+        } else if (slabEvaluationWage < 10000) {
+          basePt = 75;
+          baseRule = 'Kerala PT: ₹7,500 to ₹9,999 (~₹75/mo)';
+        } else if (slabEvaluationWage < 12500) {
+          basePt = 100;
+          baseRule = 'Kerala PT: ₹10,000 to ₹12,499 (~₹100/mo)';
+        } else {
+          basePt = 208;
+          baseRule = 'Kerala PT: Gross ≥ ₹12,500 (~₹208/mo)';
+        }
+        break;
       }
 
       case 'Madhya Pradesh': {
-        if (grossMonthly <= 18750) return { ptAmount: 0, ruleApplied: 'Madhya Pradesh PT: Gross ≤ ₹18,750 (Nil)' };
-        const amt = isFebruary ? 212 : 208;
-        return { ptAmount: amt, ruleApplied: 'Madhya Pradesh PT: Gross > ₹18,750 = ₹208/mo (₹2,500/year cap)' };
+        if (slabEvaluationWage <= 18750) {
+          basePt = 0;
+          baseRule = 'Madhya Pradesh PT: Gross ≤ ₹18,750 (Nil)';
+        } else {
+          basePt = isFebruary ? 212 : 208;
+          februaryAdjustmentApplied = isFebruary;
+          baseRule = 'Madhya Pradesh PT: Gross > ₹18,750 = ₹208/mo (₹2,500/year cap)';
+        }
+        break;
       }
 
       case 'Odisha': {
-        if (grossMonthly <= 13333) return { ptAmount: 0, ruleApplied: 'Odisha PT: Gross ≤ ₹13,333 (Nil)' };
-        if (grossMonthly <= 25000) return { ptAmount: 160, ruleApplied: 'Odisha PT: ₹13,334 to ₹25,000 = ₹160/mo' };
-        const amt = isFebruary ? 300 : 200;
-        return { ptAmount: amt, ruleApplied: 'Odisha PT: Gross > ₹25,000 = ₹200/mo' };
+        if (slabEvaluationWage <= 13333) {
+          basePt = 0;
+          baseRule = 'Odisha PT: Gross ≤ ₹13,333 (Nil)';
+        } else if (slabEvaluationWage <= 25000) {
+          basePt = 160;
+          baseRule = 'Odisha PT: ₹13,334 to ₹25,000 = ₹160/mo';
+        } else {
+          basePt = isFebruary ? 300 : 200;
+          februaryAdjustmentApplied = isFebruary;
+          baseRule = isFebruary
+            ? 'Odisha PT: Gross > ₹25,000 (February ₹300 adjustment for ₹2,500/yr cap)'
+            : 'Odisha PT: Gross > ₹25,000 = ₹200/mo';
+        }
+        break;
       }
 
       case 'Assam': {
-        if (grossMonthly <= 10000) return { ptAmount: 0, ruleApplied: 'Assam PT: Gross ≤ ₹10,000 (Nil)' };
-        if (grossMonthly <= 15000) return { ptAmount: 150, ruleApplied: 'Assam PT: ₹10,001 to ₹15,000 = ₹150/mo' };
-        if (grossMonthly <= 25000) return { ptAmount: 180, ruleApplied: 'Assam PT: ₹15,001 to ₹25,000 = ₹180/mo' };
-        return { ptAmount: 208, ruleApplied: 'Assam PT: Gross > ₹25,000 = ₹208/mo' };
+        if (slabEvaluationWage <= 10000) {
+          basePt = 0;
+          baseRule = 'Assam PT: Gross ≤ ₹10,000 (Nil)';
+        } else if (slabEvaluationWage <= 15000) {
+          basePt = 150;
+          baseRule = 'Assam PT: ₹10,001 to ₹15,000 = ₹150/mo';
+        } else if (slabEvaluationWage <= 25000) {
+          basePt = 180;
+          baseRule = 'Assam PT: ₹15,001 to ₹25,000 = ₹180/mo';
+        } else {
+          basePt = 208;
+          baseRule = 'Assam PT: Gross > ₹25,000 = ₹208/mo';
+        }
+        break;
       }
 
       case 'Bihar': {
-        if (grossMonthly <= 25000) return { ptAmount: 0, ruleApplied: 'Bihar PT: Gross ≤ ₹25,000 (Nil)' };
-        if (grossMonthly <= 41666) return { ptAmount: 83, ruleApplied: 'Bihar PT: ₹25,001 to ₹41,666 (~₹83/mo)' };
-        if (grossMonthly <= 83333) return { ptAmount: 167, ruleApplied: 'Bihar PT: ₹41,667 to ₹83,333 (~₹167/mo)' };
-        return { ptAmount: 208, ruleApplied: 'Bihar PT: Gross > ₹83,333 (~₹208/mo)' };
+        if (slabEvaluationWage <= 25000) {
+          basePt = 0;
+          baseRule = 'Bihar PT: Gross ≤ ₹25,000 (Nil)';
+        } else if (slabEvaluationWage <= 41666) {
+          basePt = 83;
+          baseRule = 'Bihar PT: ₹25,001 to ₹41,666 (~₹83/mo)';
+        } else if (slabEvaluationWage <= 83333) {
+          basePt = 167;
+          baseRule = 'Bihar PT: ₹41,667 to ₹83,333 (~₹167/mo)';
+        } else {
+          basePt = 208;
+          baseRule = 'Bihar PT: Gross > ₹83,333 (~₹208/mo)';
+        }
+        break;
       }
 
       case 'Chhattisgarh': {
-        if (grossMonthly <= 20833) return { ptAmount: 0, ruleApplied: 'Chhattisgarh PT: Gross ≤ ₹20,833 (Nil)' };
-        if (grossMonthly <= 25000) return { ptAmount: 150, ruleApplied: 'Chhattisgarh PT: ₹20,834 to ₹25,000 = ₹150/mo' };
-        return { ptAmount: 200, ruleApplied: 'Chhattisgarh PT: Gross > ₹25,000 = ₹200/mo' };
+        if (slabEvaluationWage <= 20833) {
+          basePt = 0;
+          baseRule = 'Chhattisgarh PT: Gross ≤ ₹20,833 (Nil)';
+        } else if (slabEvaluationWage <= 25000) {
+          basePt = 150;
+          baseRule = 'Chhattisgarh PT: ₹20,834 to ₹25,000 = ₹150/mo';
+        } else {
+          basePt = 200;
+          baseRule = 'Chhattisgarh PT: Gross > ₹25,000 = ₹200/mo';
+        }
+        break;
       }
 
       case 'Goa': {
-        if (grossMonthly <= 15000) return { ptAmount: 0, ruleApplied: 'Goa PT: Gross ≤ ₹15,000 (Nil)' };
-        if (grossMonthly <= 25000) return { ptAmount: 150, ruleApplied: 'Goa PT: ₹15,001 to ₹25,000 = ₹150/mo' };
-        return { ptAmount: 200, ruleApplied: 'Goa PT: Gross > ₹25,000 = ₹200/mo' };
+        if (slabEvaluationWage <= 15000) {
+          basePt = 0;
+          baseRule = 'Goa PT: Gross ≤ ₹15,000 (Nil)';
+        } else if (slabEvaluationWage <= 25000) {
+          basePt = 150;
+          baseRule = 'Goa PT: ₹15,001 to ₹25,000 = ₹150/mo';
+        } else {
+          basePt = 200;
+          baseRule = 'Goa PT: Gross > ₹25,000 = ₹200/mo';
+        }
+        break;
       }
 
       case 'Jharkhand': {
-        if (grossMonthly <= 25000) return { ptAmount: 0, ruleApplied: 'Jharkhand PT: Gross ≤ ₹25,000 (Nil)' };
-        if (grossMonthly <= 41666) return { ptAmount: 100, ruleApplied: 'Jharkhand PT: ₹25,001 to ₹41,666 = ₹100/mo' };
-        if (grossMonthly <= 66666) return { ptAmount: 150, ruleApplied: 'Jharkhand PT: ₹41,667 to ₹66,666 = ₹150/mo' };
-        if (grossMonthly <= 83333) return { ptAmount: 175, ruleApplied: 'Jharkhand PT: ₹66,667 to ₹83,333 = ₹175/mo' };
-        return { ptAmount: 208, ruleApplied: 'Jharkhand PT: Gross > ₹83,333 = ₹208/mo' };
+        if (slabEvaluationWage <= 25000) {
+          basePt = 0;
+          baseRule = 'Jharkhand PT: Gross ≤ ₹25,000 (Nil)';
+        } else if (slabEvaluationWage <= 41666) {
+          basePt = 100;
+          baseRule = 'Jharkhand PT: ₹25,001 to ₹41,666 = ₹100/mo';
+        } else if (slabEvaluationWage <= 66666) {
+          basePt = 150;
+          baseRule = 'Jharkhand PT: ₹41,667 to ₹66,666 = ₹150/mo';
+        } else if (slabEvaluationWage <= 83333) {
+          basePt = 175;
+          baseRule = 'Jharkhand PT: ₹66,667 to ₹83,333 = ₹175/mo';
+        } else {
+          basePt = 208;
+          baseRule = 'Jharkhand PT: Gross > ₹83,333 = ₹208/mo';
+        }
+        break;
       }
 
       case 'Meghalaya':
       case 'Tripura': {
-        if (grossMonthly <= 10000) return { ptAmount: 0, ruleApplied: `${cleanState} PT: Gross ≤ ₹10,000 (Nil)` };
-        if (grossMonthly <= 20000) return { ptAmount: 150, ruleApplied: `${cleanState} PT: ₹10,001 to ₹20,000 = ₹150/mo` };
-        return { ptAmount: 208, ruleApplied: `${cleanState} PT: Gross > ₹20,000 = ₹208/mo` };
+        if (slabEvaluationWage <= 10000) {
+          basePt = 0;
+          baseRule = `${cleanState} PT: Gross ≤ ₹10,000 (Nil)`;
+        } else if (slabEvaluationWage <= 20000) {
+          basePt = 150;
+          baseRule = `${cleanState} PT: ₹10,001 to ₹20,000 = ₹150/mo`;
+        } else {
+          basePt = 208;
+          baseRule = `${cleanState} PT: Gross > ₹20,000 = ₹208/mo`;
+        }
+        break;
       }
 
       // States and UTs with NO Professional Tax legislation
@@ -201,12 +487,73 @@ export class StatutoryEngine {
       case 'Lakshadweep':
       case 'Puducherry':
       default: {
-        return { 
-          ptAmount: 0, 
-          ruleApplied: `${cleanState}: No Professional Tax levy under state/UT statutory code (Nil).` 
-        };
+        basePt = 0;
+        baseRule = `${cleanState}: No Professional Tax levy under state/UT statutory code (Nil).`;
+        break;
       }
     }
+
+    if (shouldProrate && basePt > 0) {
+      const proratedPt = Math.round(basePt * (daysWorked / totalDaysInMonth));
+      return {
+        ptAmount: proratedPt,
+        fullMonthPt: basePt,
+        isPtExempt: false,
+        februaryAdjustmentApplied,
+        ptProratedInfo: {
+          isProrated: true,
+          fullMonthPt: basePt,
+          proratedPt,
+          daysWorked,
+          totalDaysInMonth,
+          joiningDate: joinDateClean || undefined,
+        },
+        ruleApplied: `${baseRule} · Pro-rated for mid-month joining (${daysWorked}/${totalDaysInMonth} days worked → ₹${proratedPt}).`,
+      };
+    }
+
+    return {
+      ptAmount: basePt,
+      fullMonthPt: basePt,
+      isPtExempt: false,
+      februaryAdjustmentApplied,
+      ruleApplied: baseRule,
+    };
+  }
+
+  /**
+   * Calculate State Labour Welfare Fund (LWF) deduction & employer contribution
+   */
+  public calculateLWF(
+    state: string,
+    monthNumber: number = new Date().getMonth() + 1,
+    options: {
+      isContractor?: boolean;
+      ptLwfConfig?: OrgSettings['compliance'] extends infer C
+        ? C extends { ptLwfConfig?: infer P }
+          ? P
+          : never
+        : never;
+      hasEarnedWages?: boolean;
+      grossSalary?: number;
+      monthlySalary?: number;
+      previousState?: string;
+      stateEffectiveDate?: string;
+      currentMonthStr?: string;
+      joinedDate?: string;
+    } = {}
+  ): LwfCalculationResult {
+    return calculateStateLwf(state, monthNumber, {
+      isContractor: options.isContractor,
+      ptLwfConfig: options.ptLwfConfig as any,
+      hasEarnedWages: options.hasEarnedWages,
+      grossSalary: options.grossSalary,
+      monthlySalary: options.monthlySalary,
+      previousState: options.previousState,
+      stateEffectiveDate: options.stateEffectiveDate,
+      currentMonthStr: options.currentMonthStr,
+      joinedDate: options.joinedDate,
+    });
   }
 
   /**
@@ -548,7 +895,8 @@ export class StatutoryEngine {
   }
 
   /**
-   * Master Statutory Engine: Combines PF, ESI, PT, and TDS into a unified audited breakdown
+   * Master Statutory Engine: Combines PF, ESI, PT, and TDS into a unified audited breakdown,
+   * automatically applying the New Labour Code 50% Rule Excess Allowance Add-Back from 21 Nov 2025.
    */
   public computeStatutoryDeductions(
     worker: Worker,
@@ -557,35 +905,158 @@ export class StatutoryEngine {
     overtimePay: number,
     allowances: number,
     currentMonthStr: string,
-    orgSettings?: OrgSettings
+    orgSettings?: OrgSettings,
+    payrollRunDate?: string,
+    ptContext?: {
+      midMonthJoiningDaysWorked?: number;
+      totalDaysInMonth?: number;
+      contractualMonthlyGross?: number;
+    }
   ): {
     statutory: StatutoryBreakdown;
     employerCostToCompany: number;
     totalEmployeeDeductions: number;
+    wageComplianceAudit: WageComplianceAudit;
   } {
-    const activeState = this.resolveActiveState(
-      worker, 
-      currentMonthStr, 
-      orgSettings?.baseLocation?.address?.includes('Gujarat') ? 'Gujarat' : 'Maharashtra'
+    const round2 = (v: number) => Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
+
+    const resolvedWorkLocation = resolveWorkerWorkLocation(
+      worker,
+      orgSettings,
+      currentMonthStr
     );
+    const activeState = this.resolveActiveState(
+      worker,
+      currentMonthStr,
+      orgSettings?.baseLocation?.address?.includes('Gujarat') ? 'Gujarat' : 'Maharashtra',
+      orgSettings
+    );
+    const lwfWorkLocationSource = resolvedWorkLocation.source;
     const monthNum = parseInt(currentMonthStr.split('-')[1] || '1', 10);
+    const [yStr, mStr] = (currentMonthStr || new Date().toISOString().slice(0, 7)).split('-');
+    const lastDay = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate() || 28;
+    const evalDate = `${currentMonthStr}-${String(lastDay).padStart(2, '0')}`;
     const capPf = orgSettings?.compliance?.capPfDeduction !== false;
 
-    // 1. Professional Tax
+    // 0. Evaluate Labour Code Effective Date & 50% Rule Excess Allowance Add-Back
+    const effectiveCheck = this.isLabourCodeEffective(currentMonthStr, payrollRunDate);
+    const structAudit = validateWorkerWageStructure(worker, {
+      evaluationDate: evalDate,
+      orgSettings
+    });
+
+    const earnedExclOvertime = Math.max(0, round2(grossWages - overtimePay));
+    let originalBasicPay = basicWages;
+    let originalDa = 0;
+    let originalRetaining = 0;
+    let originalWageBase = basicWages;
+    let excludedComponents = allowances;
+
+    // Derive proportional split from worker's salary structure when caller passes lumped basicWages
+    const callerAlreadySplit = allowances > 0 || (earnedExclOvertime > 0 && basicWages < earnedExclOvertime - 0.01);
+    if (callerAlreadySplit) {
+      originalWageBase = round2(basicWages);
+      excludedComponents = allowances > 0 ? round2(allowances) : round2(Math.max(0, earnedExclOvertime - basicWages));
+      if (structAudit.wageBase > 0) {
+        originalBasicPay = round2(originalWageBase * (structAudit.basicPay / structAudit.wageBase));
+        originalDa = round2(originalWageBase * (structAudit.da / structAudit.wageBase));
+        originalRetaining = round2(originalWageBase - originalBasicPay - originalDa);
+      } else {
+        originalBasicPay = originalWageBase;
+      }
+    } else if (structAudit.totalRemuneration > 0 && structAudit.excludedComponents > 0) {
+      const ratio = earnedExclOvertime / structAudit.totalRemuneration;
+      originalBasicPay = round2(structAudit.basicPay * ratio);
+      originalDa = round2(structAudit.da * ratio);
+      originalRetaining = round2(structAudit.retainingAllowance * ratio);
+      originalWageBase = round2(originalBasicPay + originalDa + originalRetaining);
+      excludedComponents = round2(Math.max(0, earnedExclOvertime - originalWageBase));
+    }
+
+    const totalRemunerationForRule = round2(originalWageBase + excludedComponents);
+    const fiftyPercentThreshold = round2(totalRemunerationForRule * 0.50);
+    const rawExcessAllowance = round2(excludedComponents - fiftyPercentThreshold);
+    // Edge Case: Negative or zero excess allowance => add-back is 0 and structure is COMPLIANT
+    const notionalWageAddition = rawExcessAllowance > 0 ? rawExcessAllowance : 0;
+    const isStructureNonCompliant = totalRemunerationForRule > 0 && notionalWageAddition > 0;
+    const addBackApplied = effectiveCheck.isEffective && isStructureNonCompliant;
+
+    // AC2: CompliantWageBase = Basic + DA + Retaining Allowance + (Excluded Components - (Total CTC × 0.50))
+    const compliantWageBase = addBackApplied
+      ? round2(originalWageBase + notionalWageAddition)
+      : originalWageBase;
+
+    // 1. Professional Tax (supports Gujarat <= ₹12,000 Nil, Feb ₹300 cap adjustment, PT_EXEMPT & mid-month pro-rating)
+    const ptLwfCfg = orgSettings?.compliance?.ptLwfConfig;
+    const workerIsPtExempt = isWorkerPtExempt(worker);
+    const workerIsContractor = isWorkerContractor(worker);
+    const isMonthlyForContractual =
+      worker.wageType === 'MONTHLY' ||
+      worker.wageConfig?.type === 'MONTHLY' ||
+      worker.category === 'Monthly';
+    const activeMonthlyRate = isMonthlyForContractual
+      ? (worker.salaryRevisionDate &&
+          evalDate < worker.salaryRevisionDate &&
+          worker.previousWageAmount &&
+          worker.previousWageAmount > 0
+          ? worker.previousWageAmount
+          : worker.wageConfig?.amount || worker.monthlySalary || 0)
+      : (worker.wageConfig?.amount || worker.dailyWage || 0) *
+        (worker.wageConfig?.workingDaysPerMonth || 26);
+
     const ptResult = this.calculateProfessionalTax(
-      grossWages, 
-      activeState, 
-      worker.gender || 'Male', 
-      monthNum
+      grossWages,
+      activeState,
+      worker.gender || 'Male',
+      monthNum,
+      {
+        ptExempt: workerIsPtExempt,
+        previousEmployerDeclaration: worker.ptPreviousEmployerDeclaration,
+        joinedDate: worker.joinedDate || worker.dateOfJoining,
+        currentMonthStr,
+        daysWorked: ptContext?.midMonthJoiningDaysWorked,
+        totalDaysInMonth: ptContext?.totalDaysInMonth ?? lastDay,
+        contractualMonthlyGross: ptContext?.contractualMonthlyGross ?? activeMonthlyRate,
+        gujaratFeb300Adjustment: ptLwfCfg?.gujaratPtFeb300Adjustment,
+        maharashtraFeb300Adjustment: ptLwfCfg?.maharashtraPtFeb300Adjustment,
+        ptMidMonthProrationEnabled: ptLwfCfg?.ptMidMonthProrationEnabled,
+      }
     );
 
-    // 2. Provident Fund
-    const pfResult = this.calculateProvidentFund(basicWages, {
+    // 1b. State Labour Welfare Fund (LWF — work location state, cycle-aware, wage-ceiling & mid-year transfer split)
+    const lwfResult = this.calculateLWF(activeState, monthNum, {
+      isContractor: workerIsContractor,
+      ptLwfConfig: ptLwfCfg,
+      hasEarnedWages: grossWages > 0,
+      grossSalary: grossWages,
+      monthlySalary: activeMonthlyRate || grossWages,
+      previousState: worker.previousState,
+      stateEffectiveDate: worker.stateEffectiveDate,
+      currentMonthStr,
+      joinedDate: worker.joinedDate || worker.dateOfJoining,
+    });
+
+    // 2. Provident Fund (Original vs Recalculated CompliantWageBase)
+    const originalPfResult = this.calculateProvidentFund(originalWageBase, {
       capAtStatutoryCeiling: capPf,
       isOptedOut: worker.pfOptOut,
       salaryRevisionDate: worker.salaryRevisionDate,
       currentMonthStr
     });
+
+    const pfResult = addBackApplied
+      ? this.calculateProvidentFund(compliantWageBase, {
+          capAtStatutoryCeiling: capPf,
+          isOptedOut: worker.pfOptOut,
+          salaryRevisionDate: worker.salaryRevisionDate,
+          currentMonthStr
+        })
+      : originalPfResult;
+
+    if (addBackApplied && !worker.pfOptOut) {
+      pfResult.ruleApplied = `${pfResult.ruleApplied} [50% Rule Add-Back Applied: Original WageBase ₹${originalWageBase.toLocaleString('en-IN')} + Notional Wage Addition ₹${notionalWageAddition.toLocaleString('en-IN')} = CompliantWageBase ₹${compliantWageBase.toLocaleString('en-IN')}]`;
+      pfResult.calculationText = `Notional Add-Back +₹${notionalWageAddition.toLocaleString('en-IN')} → New Wage Base ₹${compliantWageBase.toLocaleString('en-IN')} | ${pfResult.calculationText}`;
+    }
 
     // 3. Employee State Insurance (ESIC Section 2(9) Contractual Wage Structure Check)
     const isMonthlyWorker = worker.wageType === 'MONTHLY' || 
@@ -607,19 +1078,114 @@ export class StatutoryEngine {
       contractualGross = dailyRate * (worker.wageConfig?.workingDaysPerMonth || 26);
     }
 
-    const esiResult = this.calculateESI(grossWages, {
+    const originalEsiResult = this.calculateESI(grossWages, {
       isOptedOut: worker.esiOptOut,
       contractualGrossSalary: contractualGross,
       averageDailyWage: !isMonthlyWorker ? averageDailyWage : undefined,
       esiEnabled: orgSettings?.compliance?.esiEnabled !== false
     });
 
+    const esiResult = addBackApplied
+      ? this.calculateESI(compliantWageBase, {
+          isOptedOut: worker.esiOptOut,
+          contractualGrossSalary: contractualGross,
+          averageDailyWage: !isMonthlyWorker ? averageDailyWage : undefined,
+          esiEnabled: orgSettings?.compliance?.esiEnabled !== false
+        })
+      : originalEsiResult;
+
+    if (addBackApplied && esiResult.isApplicable && !worker.esiOptOut) {
+      esiResult.ruleApplied = `${esiResult.ruleApplied} [50% Rule Recalculated ESI Wage Base: CompliantWageBase ₹${compliantWageBase.toLocaleString('en-IN')}]`;
+    }
+
     // 4. TDS
     const tdsResult = this.calculateTDS(grossWages, worker.taxDeclarations);
 
-    const totalEmployeeStatutory = pfResult.employeePf + esiResult.employeeEsi + ptResult.ptAmount + tdsResult.monthlyTds;
-    const totalEmployerStatutory = pfResult.totalEmployerPf + esiResult.employerEsi;
+    const totalEmployeeStatutory =
+      pfResult.employeePf +
+      esiResult.employeeEsi +
+      ptResult.ptAmount +
+      lwfResult.employeeLwf +
+      tdsResult.monthlyTds;
+    const totalEmployerStatutory =
+      pfResult.totalEmployerPf + esiResult.employerEsi + lwfResult.employerLwf;
     const employerCostToCompany = grossWages + totalEmployerStatutory;
+
+    // 5. Gratuity Liability Impact Projection (Payment of Gratuity Act: 15/26 × Wage per year)
+    const gratuityApplicable = totalRemunerationForRule > 0;
+    const originalGratuityMonthlyAccrual = gratuityApplicable
+      ? Math.round((originalWageBase * 15) / 26 / 12)
+      : 0;
+    const recalculatedGratuityMonthlyAccrual = gratuityApplicable
+      ? Math.round((compliantWageBase * 15) / 26 / 12)
+      : 0;
+    const gratuityIncreaseMonthly = Math.max(
+      0,
+      recalculatedGratuityMonthlyAccrual - originalGratuityMonthlyAccrual
+    );
+    const gratuityIncreaseAnnual = addBackApplied
+      ? Math.round((notionalWageAddition * 15) / 26)
+      : 0;
+
+    const gratuityImpact: GratuityImpactProjection = {
+      applicable: gratuityApplicable,
+      originalMonthlyAccrual: originalGratuityMonthlyAccrual,
+      recalculatedMonthlyAccrual: recalculatedGratuityMonthlyAccrual,
+      monthlyIncrease: gratuityIncreaseMonthly,
+      annualIncrease: gratuityIncreaseAnnual,
+      reason: gratuityApplicable
+        ? '15/26 days wages per completed year (Code on Social Security)'
+        : 'Zero qualifying remuneration in period'
+    };
+
+    const formulaText = addBackApplied
+      ? `CompliantWageBase = ₹${originalWageBase.toLocaleString('en-IN')} + (₹${excludedComponents.toLocaleString('en-IN')} - ₹${fiftyPercentThreshold.toLocaleString('en-IN')}) = ₹${compliantWageBase.toLocaleString('en-IN')}`
+      : isStructureNonCompliant && effectiveCheck.isRetrospective
+      ? `Retrospective Pre-Nov 2025 Run: Legacy WageBase ₹${originalWageBase.toLocaleString('en-IN')} retained (Add-back ₹${notionalWageAddition.toLocaleString('en-IN')} deferred to periods ≥ Nov 2025)`
+      : `Compliant Structure: WageBase ₹${originalWageBase.toLocaleString('en-IN')} ≥ 50% threshold (₹${fiftyPercentThreshold.toLocaleString('en-IN')}); Add-back = ₹0`;
+
+    const wageComplianceAudit: WageComplianceAudit = {
+      id: `wca_${worker.id}_${currentMonthStr}`,
+      tenantId: worker.tenantId || '',
+      workerId: worker.id,
+      workerName: worker.name,
+      payrollMonth: currentMonthStr,
+      auditedAt: new Date().toISOString(),
+      labourCodeEffectiveDate: StatutoryEngine.LABOUR_CODE_EFFECTIVE_DATE,
+      isLabourCodeEffective: effectiveCheck.isEffective,
+      isRetrospectivePeriod: effectiveCheck.isRetrospective,
+      retrospectiveWarning: effectiveCheck.warning,
+      complianceStatus: isStructureNonCompliant ? 'NON_COMPLIANT' : 'COMPLIANT',
+      addBackApplied,
+      basicPay: originalBasicPay,
+      da: originalDa,
+      retainingAllowance: originalRetaining,
+      originalWageBase,
+      excludedComponents,
+      totalRemunerationForRule,
+      fiftyPercentThreshold,
+      rawExcessAllowance,
+      notionalWageAddition: addBackApplied ? notionalWageAddition : 0,
+      recalculatedWageBase: compliantWageBase,
+      originalPfWageBase: originalPfResult.pfWageBase,
+      recalculatedPfWageBase: pfResult.pfWageBase,
+      originalEsiWageBase: originalEsiResult.esiWageBase,
+      recalculatedEsiWageBase: esiResult.esiWageBase,
+      originalEmployeePf: originalPfResult.employeePf,
+      recalculatedEmployeePf: pfResult.employeePf,
+      pfDeltaEmployee: pfResult.employeePf - originalPfResult.employeePf,
+      originalEmployerPf: originalPfResult.totalEmployerPf,
+      recalculatedEmployerPf: pfResult.totalEmployerPf,
+      pfDeltaEmployer: pfResult.totalEmployerPf - originalPfResult.totalEmployerPf,
+      originalEmployeeEsi: originalEsiResult.employeeEsi,
+      recalculatedEmployeeEsi: esiResult.employeeEsi,
+      esiDeltaEmployee: esiResult.employeeEsi - originalEsiResult.employeeEsi,
+      originalEmployerEsi: originalEsiResult.employerEsi,
+      recalculatedEmployerEsi: esiResult.employerEsi,
+      esiDeltaEmployer: esiResult.employerEsi - originalEsiResult.employerEsi,
+      gratuityImpact,
+      formulaText
+    };
 
     const calculationTrace: StatutoryCalculationTrace = {
       pfRuleApplied: pfResult.ruleApplied,
@@ -627,15 +1193,25 @@ export class StatutoryEngine {
       esiRuleApplied: esiResult.ruleApplied,
       esiCalculation: esiResult.calculationText,
       ptRuleApplied: ptResult.ruleApplied,
-      ptCalculation: `Gross ₹${grossWages.toLocaleString()} in ${activeState} → PT Deducted: ₹${ptResult.ptAmount}`,
+      ptCalculation: ptResult.isPtExempt
+        ? `PT_EXEMPT in ${activeState} → PT Deducted: ₹0`
+        : ptResult.ptProratedInfo?.isProrated
+        ? `Full-month PT ₹${ptResult.fullMonthPt} × (${ptResult.ptProratedInfo.daysWorked}/${ptResult.ptProratedInfo.totalDaysInMonth} days) → PT Deducted: ₹${ptResult.ptAmount}`
+        : `Gross ₹${grossWages.toLocaleString()} in ${activeState} (Month ${monthNum}) → PT Deducted: ₹${ptResult.ptAmount}`,
+      lwfRuleApplied: lwfResult.ruleApplied,
+      lwfCalculation: lwfResult.calculationText,
       tdsRuleApplied: tdsResult.ruleApplied,
       tdsCalculation: tdsResult.calculationText,
-      employerLiabilitySummary: `Employer PF (13.0%) ₹${pfResult.totalEmployerPf.toLocaleString()} + Employer ESI (3.25%) ₹${esiResult.employerEsi.toLocaleString()} = ₹${totalEmployerStatutory.toLocaleString()} Total Statutory Liability added to CTC.`,
+      employerLiabilitySummary: `Employer PF (13.0%) ₹${pfResult.totalEmployerPf.toLocaleString()} + Employer ESI (3.25%) ₹${esiResult.employerEsi.toLocaleString()}${lwfResult.employerLwf > 0 ? ` + Employer LWF ₹${lwfResult.employerLwf}` : ''} = ₹${totalEmployerStatutory.toLocaleString()} Total Statutory Liability added to CTC.`,
+      excessAllowanceAddBackSummary: formulaText,
       sourceValues: {
-        basic: basicWages,
+        basic: originalWageBase,
         gross: grossWages,
         overtime: overtimePay,
-        allowances,
+        allowances: excludedComponents,
+        originalWageBase,
+        notionalWageAddition: addBackApplied ? notionalWageAddition : 0,
+        compliantWageBase,
         pfQualifyingWages: pfResult.pfWageBase,
         esiQualifyingWages: esiResult.esiWageBase,
         state: activeState,
@@ -643,7 +1219,16 @@ export class StatutoryEngine {
         taxRegime: tdsResult.regime,
         annualProjectedGross: tdsResult.annualProjectedGross,
         totalExemptions: tdsResult.standardDeduction + tdsResult.chapterVIA,
-        taxableIncome: tdsResult.annualTaxableIncome
+        taxableIncome: tdsResult.annualTaxableIncome,
+        isPtExempt: ptResult.isPtExempt,
+        isPtProrated: Boolean(ptResult.ptProratedInfo?.isProrated),
+        ptDaysWorked: ptResult.ptProratedInfo?.daysWorked,
+        ptTotalDaysInMonth: ptResult.ptProratedInfo?.totalDaysInMonth,
+        isContractor: workerIsContractor,
+        lwfApplicableMonth: lwfResult.isLwfApplicableMonth,
+        lwfWorkLocationSource,
+        lwfWageCeiling: lwfResult.wageCeilingApplied,
+        monthNumber: monthNum
       }
     };
 
@@ -651,6 +1236,7 @@ export class StatutoryEngine {
       employeePf: pfResult.employeePf,
       employeeEsi: esiResult.employeeEsi,
       professionalTax: ptResult.ptAmount,
+      employeeLwf: lwfResult.employeeLwf,
       tds: tdsResult.monthlyTds,
       totalEmployeeStatutory,
       employerEpf: pfResult.employerEpf,
@@ -659,13 +1245,36 @@ export class StatutoryEngine {
       employerAdminCharges: pfResult.employerAdmin,
       totalEmployerPf: pfResult.totalEmployerPf,
       employerEsi: esiResult.employerEsi,
+      employerLwf: lwfResult.employerLwf,
       totalEmployerStatutory,
       pfWageBase: pfResult.pfWageBase,
       esiWageBase: esiResult.esiWageBase,
+      originalPfWageBase: originalPfResult.pfWageBase,
+      originalEsiWageBase: originalEsiResult.esiWageBase,
+      originalWageBase,
+      notionalWageAddition: addBackApplied ? notionalWageAddition : 0,
+      compliantWageBase,
+      isLabourCodeEffective: effectiveCheck.isEffective,
+      isRetrospectivePeriod: effectiveCheck.isRetrospective,
+      retrospectiveWarning: effectiveCheck.warning,
+      gratuityImpact,
       ptGrossBase: grossWages,
       annualTaxableIncome: tdsResult.annualTaxableIncome,
       taxRegime: tdsResult.regime,
       state: activeState,
+      isPtExempt: ptResult.isPtExempt,
+      ptExemptionStatus: ptResult.isPtExempt ? 'PT_EXEMPT' : 'NONE',
+      ptExemptionNote: ptResult.exemptionNote,
+      ptFebruaryAdjustmentApplied: ptResult.februaryAdjustmentApplied,
+      ptProratedInfo: ptResult.ptProratedInfo,
+      isLwfApplicableMonth: lwfResult.isLwfApplicableMonth,
+      lwfCycleLabel: lwfResult.cycleLabel,
+      lwfSkippedReason: lwfResult.skippedReason,
+      isContractorExcludedFromLwf: lwfResult.isContractorExcluded,
+      lwfWorkLocationSource,
+      lwfWageCeilingApplied: lwfResult.wageCeilingApplied,
+      lwfWageCeilingMode: lwfResult.wageCeilingMode,
+      lwfTransferSplit: lwfResult.transferSplit,
       esiDroppedNote: esiResult.droppedNote,
       isPfCapped: pfResult.isCapped,
       isEsiApplicable: esiResult.isApplicable,
@@ -675,38 +1284,43 @@ export class StatutoryEngine {
     return {
       statutory,
       employerCostToCompany,
-      totalEmployeeDeductions: totalEmployeeStatutory
+      totalEmployeeDeductions: totalEmployeeStatutory,
+      wageComplianceAudit
     };
   }
 
   /**
    * Generate official EPFO ECR Text File string (#~# delimited format)
+   * Enforces pre-upload validation checks, EPFO registered name preference,
+   * duplicate UAN blocking, and omission of failed/excluded employees.
    */
-  public generateECRFileContent(payrolls: MonthlyPayroll[], workers: Worker[]): string {
-    const lines: string[] = [];
-    const workerMap = new Map(workers.map(w => [w.id, w]));
-
-    for (const p of payrolls) {
-      const worker = workerMap.get(p.workerId);
-      const uan = (worker?.uan || '').replace(/[^0-9]/g, '');
-      if (!uan || uan.length !== 12) continue; // Skip workers without 12-digit UAN
-
-      const memberName = (p.workerName || '').toUpperCase().slice(0, 50);
-      const gross = Math.round(p.earnings.gross);
-      const epfWages = Math.round(p.statutory?.pfWageBase || p.earnings.basic);
-      const epsWages = Math.min(epfWages, StatutoryEngine.PF_STATUTORY_CEILING);
-      const edliWages = epsWages;
-      const eeEpfDue = Math.round(p.statutory?.employeePf || 0);
-      const epsDue = Math.round(p.statutory?.employerEps || 0);
-      const erEpfDue = Math.round(p.statutory?.employerEpf || 0);
-      const ncpDays = Math.max(0, p.attendanceSummary.absentDays);
-      const refund = 0;
-
-      // EPFO ECR 2.0 format: UAN#~#MEMBER_NAME#~#GROSS#~#EPF_WAGES#~#EPS_WAGES#~#EDLI_WAGES#~#EE_EPF#~#EPS_DUE#~#ER_EPF#~#NCP_DAYS#~#REFUND
-      lines.push(`${uan}#~#${memberName}#~#${gross}#~#${epfWages}#~#${epsWages}#~#${edliWages}#~#${eeEpfDue}#~#${epsDue}#~#${erEpfDue}#~#${ncpDays}#~#${refund}`);
+  public generateECRFileContent(
+    payrolls: MonthlyPayroll[],
+    workers: Worker[],
+    options?: {
+      month?: string;
+      orgSettings?: OrgSettings;
+      excludeWorkerIds?: string[];
+      includeOnlyWorkerIds?: string[];
+      capWageAtCeiling?: boolean;
+      statutoryEpfCeiling?: number;
     }
+  ): string {
+    const inferredMonth =
+      options?.month ||
+      payrolls[0]?.month ||
+      new Date().toISOString().slice(0, 7);
 
-    return lines.join('\r\n');
+    const report = ecrValidatorService.validateAndGenerateECR(workers, payrolls, [], {
+      month: inferredMonth,
+      orgSettings: options?.orgSettings,
+      excludeWorkerIds: options?.excludeWorkerIds,
+      includeOnlyWorkerIds: options?.includeOnlyWorkerIds,
+      capWageAtCeiling: options?.capWageAtCeiling,
+      statutoryEpfCeiling: options?.statutoryEpfCeiling,
+    });
+
+    return report.ecrContent;
   }
 
   /**

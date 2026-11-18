@@ -8,15 +8,26 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { statutoryEngine } from '../services/statutoryEngine';
-import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings } from '../types/index';
+import { statutoryEngine, StatutoryEngine } from '../services/statutoryEngine';
+import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings, WageComplianceAudit } from '../types/index';
 import { Payslip } from '../components/Payslip';
 import { StatutoryTraceModal } from '../components/StatutoryTraceModal';
 import { TaxDeclarationModal } from '../components/TaxDeclarationModal';
 import { Form16Modal } from '../components/Form16Modal';
 import { StatutoryExportModal } from '../components/StatutoryExportModal';
+import { EcrValidatorModal } from '../components/EcrValidatorModal';
+import { WageStructureEditorModal } from '../components/WageStructureEditorModal';
+import { MinimumWageSchedulePanel } from '../components/MinimumWageSchedulePanel';
+import { runServerPrePayrollValidation } from '../services/wageStructureValidationService';
+import { getBonusOffCycleRuns, evaluateEightMonthWindow } from '../services/annualBonusService';
+import { BonusOffCycleRun, MinimumWageRevisionRule, PayrollServerValidationResult, ScreenName, WageStructureAuditResult } from '../types/index';
+import { Scale, Edit3, Lock, Loader2, X, Cloud, Cpu, Calendar, History, Landmark, Award } from 'lucide-react';
 
-export const PayrollScreen: React.FC = () => {
+interface PayrollScreenProps {
+  onNavigate?: (screen: ScreenName) => void;
+}
+
+export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
   const { profile, limits } = useAuth();
   const { toast } = useToast();
   const [selectedPayroll, setSelectedPayroll] = useState<MonthlyPayroll | null>(null);
@@ -31,7 +42,7 @@ export const PayrollScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   
-  const currentMonthStr = new Date().toISOString().slice(0, 7);
+  const [currentMonthStr, setCurrentMonthStr] = useState<string>(() => new Date().toISOString().slice(0, 7));
   const [unresolvedConflicts, setUnresolvedConflicts] = useState<PunchConflict[]>([]);
   const [isConflictModalOpen, setIsConflictModalOpen] = useState(false); 
 
@@ -40,6 +51,22 @@ export const PayrollScreen: React.FC = () => {
   const [taxDeclarationWorker, setTaxDeclarationWorker] = useState<Worker | null>(null);
   const [form16Worker, setForm16Worker] = useState<Worker | null>(null);
   const [isExportPackOpen, setIsExportPackOpen] = useState(false);
+  const [isEcrValidatorOpen, setIsEcrValidatorOpen] = useState(false);
+
+  // 50% Rule & Minimum Wage Server Pre-Finalization Validation State
+  const [serverValidation, setServerValidation] = useState<PayrollServerValidationResult | null>(null);
+  const [validatingServer, setValidatingServer] = useState(false);
+  const [finalizingPayroll, setFinalizingPayroll] = useState(false);
+  const [isFinalizationModalOpen, setIsFinalizationModalOpen] = useState(false);
+  const [editingWageWorker, setEditingWageWorker] = useState<Worker | null>(null);
+  const [savedAudits, setSavedAudits] = useState<WageComplianceAudit[]>([]);
+  const [isAuditHistoryOpen, setIsAuditHistoryOpen] = useState(false);
+  const [savingAudits, setSavingAudits] = useState(false);
+  const [bonusRuns, setBonusRuns] = useState<BonusOffCycleRun[]>([]);
+  const [isMinWageModalOpen, setIsMinWageModalOpen] = useState(false);
+  const [savingMinWageRevisions, setSavingMinWageRevisions] = useState(false);
+
+  const isRetrospectivePeriod = currentMonthStr < StatutoryEngine.LABOUR_CODE_EFFECTIVE_MONTH;
 
   const loadData = async () => {
     const tenantId = profile?.tenantId;
@@ -59,14 +86,37 @@ export const PayrollScreen: React.FC = () => {
          console.warn("Could not load saved payrolls.", payrollErr);
       }
 
+      let fetchedAudits: WageComplianceAudit[] = [];
+      try {
+        fetchedAudits = await dbService.getWageComplianceAudits(tenantId, currentMonthStr);
+      } catch (auditErr) {
+        console.warn("Could not load wage compliance audits.", auditErr);
+      }
+
       setWorkers(fetchedWorkers);
       setAdvances(fetchedAdvances);
       setSettings(fetchedSettings);
       setSiteAddress(fetchedSettings?.baseLocation?.address || '');
       setSavedPayrolls(fetchedPayrolls);
+      setSavedAudits(fetchedAudits);
       setAttendanceHistory(fetchedAttendance);
       const conflicts = await conflictService.getUnresolvedPayrollConflicts(tenantId, currentMonthStr);
       setUnresolvedConflicts(conflicts);
+
+      const validation = await runServerPrePayrollValidation(
+        tenantId,
+        currentMonthStr,
+        fetchedWorkers,
+        fetchedSettings
+      );
+      setServerValidation(validation);
+
+      try {
+        const fetchedBonusRuns = await getBonusOffCycleRuns(tenantId);
+        setBonusRuns(fetchedBonusRuns);
+      } catch {
+        // ignore bonus run fetch failure
+      }
     } catch (err: any) {
       console.error("Failed to load payroll data", err);
       setFetchError(err.message || "Failed to load database records");
@@ -85,19 +135,7 @@ export const PayrollScreen: React.FC = () => {
       toast.warning('No payroll records found for this period.');
       return;
     }
-    const ecrContent = statutoryEngine.generateECRFileContent(payrolls, workers);
-    if (!ecrContent || !ecrContent.trim()) {
-      toast.warning('No workers with 12-digit EPFO UAN found. Please ensure workers have UAN in directory.');
-      return;
-    }
-    const blob = new Blob([ecrContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `EPFO_ECR_2.0_${currentMonthStr.replace('-', '')}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
-    toast.success(`Official EPFO ECR 2.0 text file downloaded for ${currentMonthStr}`);
+    setIsEcrValidatorOpen(true);
   };
 
   // Re-check blocking conflicts when resolution events fire
@@ -135,6 +173,18 @@ export const PayrollScreen: React.FC = () => {
     e.stopPropagation(); 
     if (!profile?.tenantId) return;
 
+    const workerAudit =
+      serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+      payroll.wageStructureAudit;
+    if (workerAudit?.isMinimumWageViolation) {
+      toast.error(
+        `MINIMUM_WAGE_VIOLATION: Payout blocked for ${payroll.workerName}. Shortfall ₹${workerAudit.minimumWageGap.toLocaleString('en-IN')}/mo below ${workerAudit.state} (${workerAudit.wageZone}) floor (Notif. ${workerAudit.minimumWageNotificationDate}).`
+      );
+      const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
+      if (workerObj) setEditingWageWorker(workerObj);
+      return;
+    }
+
     const updated = { ...payroll, status: 'PAID' as const, paymentDate: new Date().toISOString() };
     
     setSavedPayrolls(prev => {
@@ -149,10 +199,144 @@ export const PayrollScreen: React.FC = () => {
 
     try {
       await dbService.saveMonthlyPayroll(updated);
+      const refreshedAudits = await dbService.getWageComplianceAudits(profile.tenantId, currentMonthStr);
+      setSavedAudits(refreshedAudits);
       toast.success(`Marked ₹${payroll.netPayable.toLocaleString()} as paid for ${payroll.workerName}`);
     } catch (err) {
       console.error(err);
       toast.error("Failed to save payout status. Check Firestore permissions.");
+    }
+  };
+
+  const handleSaveMinWageRevisions = async (revisions: MinimumWageRevisionRule[]) => {
+    if (!profile?.tenantId || !settings) return;
+    setSavingMinWageRevisions(true);
+    try {
+      const nextSettings: OrgSettings = {
+        ...settings,
+        compliance: {
+          ...(settings.compliance || {}),
+          minimumWageRevisions: revisions,
+        },
+      };
+      await dbService.saveOrgSettings(profile.tenantId, nextSettings);
+      setSettings(nextSettings);
+      const validation = await runServerPrePayrollValidation(
+        profile.tenantId,
+        currentMonthStr,
+        workers,
+        nextSettings
+      );
+      setServerValidation(validation);
+      toast.success('Updated state minimum wage revision rules and re-validated payroll.');
+    } catch (err: any) {
+      toast.error(`Failed to update minimum wage revisions: ${err.message}`);
+    } finally {
+      setSavingMinWageRevisions(false);
+    }
+  };
+
+  const handlePersistAllMonthAudits = async () => {
+    if (!profile?.tenantId || payrolls.length === 0) return;
+    setSavingAudits(true);
+    try {
+      for (const p of payrolls) {
+        if (p.wageComplianceAudit) {
+          await dbService.saveWageComplianceAudit({
+            ...p.wageComplianceAudit,
+            tenantId: profile.tenantId,
+          });
+        }
+      }
+      const refreshedAudits = await dbService.getWageComplianceAudits(profile.tenantId, currentMonthStr);
+      setSavedAudits(refreshedAudits);
+      toast.success(`Saved ${refreshedAudits.length} WageComplianceAudit record(s) for ${currentMonthStr}.`);
+    } catch (err: any) {
+      toast.error(`Failed to persist compliance audits: ${err.message}`);
+    } finally {
+      setSavingAudits(false);
+    }
+  };
+
+  const handleRunServerPreFinalizationCheck = async () => {
+    if (!profile?.tenantId) return;
+    setValidatingServer(true);
+    try {
+      const validation = await runServerPrePayrollValidation(
+        profile.tenantId,
+        currentMonthStr,
+        workers,
+        settings || undefined
+      );
+      setServerValidation(validation);
+      setIsFinalizationModalOpen(true);
+    } catch (err: any) {
+      toast.error(`Server validation failed: ${err.message}`);
+    } finally {
+      setValidatingServer(false);
+    }
+  };
+
+  const handleFinalizePayrollRun = async () => {
+    if (!profile?.tenantId) return;
+    if (unresolvedConflicts.length > 0) {
+      toast.error("Resolve all attendance conflicts before finalizing payroll.");
+      return;
+    }
+    setFinalizingPayroll(true);
+    try {
+      // Re-run authoritative server validation right before finalizing
+      const validation = await runServerPrePayrollValidation(
+        profile.tenantId,
+        currentMonthStr,
+        workers,
+        settings || undefined
+      );
+      setServerValidation(validation);
+
+      if (validation.minimumWageViolationCount > 0 || validation.isPayrollBlocked) {
+        toast.error(
+          `MINIMUM_WAGE_VIOLATION: Payroll blocked for ${validation.minimumWageViolationCount} employee(s) below applicable state minimum wage. Increase Basic Pay and resubmit.`
+        );
+        setIsFinalizationModalOpen(true);
+        return;
+      }
+
+      const auditByWorker = new Map<string, WageStructureAuditResult>(
+        validation.allResults.map((r) => [r.workerId || '', r])
+      );
+
+      const updatedList: MonthlyPayroll[] = [];
+      for (const p of payrolls) {
+        const nextStatus = p.status === 'PAID' ? 'PAID' : ('LOCKED' as const);
+        const enriched: MonthlyPayroll = {
+          ...p,
+          status: nextStatus,
+          wageStructureAudit: auditByWorker.get(p.workerId) || p.wageStructureAudit,
+        };
+        await dbService.saveMonthlyPayroll(enriched);
+        updatedList.push(enriched);
+      }
+      setSavedPayrolls(updatedList);
+      const refreshedAudits = await dbService.getWageComplianceAudits(profile.tenantId, currentMonthStr);
+      setSavedAudits(refreshedAudits);
+      setIsFinalizationModalOpen(false);
+
+      if (isRetrospectivePeriod) {
+        toast.info(
+          `Retrospective payroll finalized for ${currentMonthStr} using legacy rules (pre-21 Nov 2025).`
+        );
+      } else if (validation.hasFlaggedWorkers) {
+        toast.warning(
+          `Payroll finalized with ${validation.nonCompliantCount} NON_COMPLIANT add-back recalculation(s) and ${validation.minimumWageViolationCount} minimum wage flag(s).`
+        );
+      } else {
+        toast.success(`Payroll finalized for ${currentMonthStr} — all workers compliant!`);
+      }
+    } catch (err: any) {
+      toast.error(`Failed to finalize payroll: ${err.message}`);
+    } finally {
+      setFinalizingPayroll(false);
     }
   };
 
@@ -178,16 +362,58 @@ export const PayrollScreen: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Monthly Payroll & Statutory Compliance</h1>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
             <span>Automated PF (12%), ESI (0.75%), State PT (all 28 states) & TDS</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
             <span className="font-mono tabular-nums text-slate-600 font-semibold">
-              {new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}
+              {new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}
             </span>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-xl px-2.5 h-10 shadow-xs">
+            <Calendar size={14} className="text-slate-500" />
+            <input
+              type="month"
+              value={currentMonthStr}
+              onChange={(e) => {
+                if (e.target.value) setCurrentMonthStr(e.target.value);
+              }}
+              aria-label="Payroll Month"
+              className="text-xs font-mono font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
+              title="Switch payroll month (pre-Nov 2025 triggers retrospective legacy rules)"
+            />
+          </div>
+
+          <button
+            onClick={() => setIsMinWageModalOpen(true)}
+            className="h-10 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="View state-wise minimum wage database by zone & skill level, and manage mid-month revisions"
+          >
+            <Scale size={14} className="text-slate-700" />
+            <span>State Min Wages</span>
+          </button>
+
+          <button
+            onClick={() => setIsAuditHistoryOpen(true)}
+            className="h-10 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Inspect saved WageComplianceAudit records & Gratuity Liability projections"
+          >
+            <History size={14} className="text-indigo-600" />
+            <span>Compliance Audits ({savedAudits.length})</span>
+          </button>
+
+          <button
+            onClick={handleRunServerPreFinalizationCheck}
+            disabled={validatingServer || payrolls.length === 0}
+            className="h-10 px-3.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Run server-side 50% Rule & Minimum Wage validation before finalizing payroll"
+          >
+            {validatingServer ? <Loader2 size={15} className="animate-spin" /> : <Lock size={14} className="text-emerald-400" />}
+            <span>Audit &amp; Finalize Payroll</span>
+          </button>
+
           <button
             onClick={() => setIsExportPackOpen(true)}
             className="h-10 px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -211,6 +437,29 @@ export const PayrollScreen: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* RETROSPECTIVE PAYROLL WARNING BANNER (PRE-21 NOV 2025) */}
+      {isRetrospectivePeriod && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-4 sm:p-5 shadow-xs animate-in fade-in flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0">
+            <AlertTriangle size={20} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-sm font-black text-amber-950">
+                Retrospective Payroll Period ({currentMonthStr} — Pre-21 Nov 2025)
+              </h3>
+              <span className="px-2 py-0.5 rounded-lg bg-amber-200 text-amber-950 font-mono font-bold text-[10px]">
+                LEGACY EPF/ESIC RULES ACTIVE
+              </span>
+            </div>
+            <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+              This period precedes the effective date of the New Labour Codes (<strong>21 November 2025</strong>). Statutory PF and ESI default to legacy rules without automatic 50% Rule excess allowance add-back.{' '}
+              <strong>Warning:</strong> New Labour Code excess allowance add-back recalculations automatically apply to all current and future payroll periods (Nov 2025 onwards).
+            </p>
+          </div>
+        </div>
+      )}
 
       {fetchError && (
         <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-2xl flex items-start gap-3">
@@ -265,6 +514,158 @@ export const PayrollScreen: React.FC = () => {
         </div>
       )}
 
+      {/* HARD BLOCKING BANNER FOR STATE MINIMUM WAGE VIOLATIONS */}
+      {serverValidation && serverValidation.minimumWageViolationCount > 0 && (
+        <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-xs space-y-3 animate-in fade-in">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-rose-700 text-white flex items-center justify-center shrink-0">
+                <Scale size={22} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm sm:text-base font-black text-rose-950 font-mono">
+                    Payroll Blocked: MINIMUM_WAGE_VIOLATION
+                  </h3>
+                  <span className="text-xs font-mono tabular-nums font-bold text-rose-800">
+                    {serverValidation.minimumWageViolationCount} Employee(s) Below State Floor
+                  </span>
+                </div>
+                <p className="text-xs text-rose-900 mt-1 leading-relaxed">
+                  Payroll finalization and payouts are blocked under the Code on Wages. Increase Basic Pay (or Daily Rate × 26) to match the applicable state, zone, and skill minimum wage floor and resubmit.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsMinWageModalOpen(true)}
+                className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-xs cursor-pointer"
+              >
+                Inspect State Floors
+              </button>
+              <button
+                type="button"
+                onClick={handleRunServerPreFinalizationCheck}
+                className="px-4 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs shadow-xs cursor-pointer"
+              >
+                Review Blocked Workers
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-2 border-t border-rose-200/80">
+            {(
+              serverValidation.blockingMinimumWageWorkers ||
+              serverValidation.allResults.filter((r) => r.isMinimumWageViolation)
+            ).map((mw) => {
+              const targetWorker = workers.find((w) => w.id === mw.workerId);
+              return (
+                <div
+                  key={mw.workerId || mw.workerName}
+                  className="bg-white border border-rose-200 rounded-2xl p-3.5 flex items-start justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-xs text-slate-900">{mw.workerName}</span>
+                      <span className="text-[11px] font-mono tabular-nums text-slate-600">
+                        {mw.state} · {mw.wageZone} · {mw.skillCategory.replace('_', '-')}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-mono tabular-nums text-slate-700">
+                      Basic ₹{mw.basicPay.toLocaleString('en-IN')}/mo vs Floor ₹{mw.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo ·{' '}
+                      <strong className="text-rose-700">
+                        Gap ₹{mw.minimumWageGap.toLocaleString('en-IN')}/mo
+                      </strong>
+                    </div>
+                    <div className="text-[10px] font-mono tabular-nums text-slate-500">
+                      {mw.scheduledEmployment} · Notif. Date: {mw.minimumWageNotificationDate}
+                      {mw.workLocationSource === 'BRANCH_LOCATION' && ' · Branch Location'}
+                      {mw.isOnProbation && ' · Probation Active (No Exemption)'}
+                    </div>
+                    {mw.midMonthRevisionInfo?.isRevisedInMonth && (
+                      <div className="text-[10px] font-mono tabular-nums text-amber-800">
+                        Mid-Month Pro-Rata ({mw.midMonthRevisionInfo.daysAtPreviousRate}d @ ₹{mw.midMonthRevisionInfo.previousMonthlyFloor.toLocaleString('en-IN')} + {mw.midMonthRevisionInfo.daysAtRevisedRate}d @ ₹{mw.midMonthRevisionInfo.revisedMonthlyFloor.toLocaleString('en-IN')})
+                      </div>
+                    )}
+                  </div>
+                  {targetWorker && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingWageWorker(targetWorker)}
+                      className="px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <Edit3 size={11} /> Fix Basic
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 50% WAGE RULE AUDIT ALERT BANNER */}
+      {serverValidation && serverValidation.nonCompliantCount > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-5 shadow-xs animate-in fade-in">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm sm:text-base font-black text-amber-950">
+                    Wage Structure Compliance Alert (50% Rule Audit)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white font-mono font-bold text-[10px]">
+                    {serverValidation.nonCompliantCount} NON_COMPLIANT
+                  </span>
+                </div>
+                <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+                  Your basic pay is less than 50% of CTC for <strong>{serverValidation.nonCompliantCount}</strong> worker(s). This will increase PF/Gratuity liabilities. Total monthly compliance gap:{' '}
+                  <strong className="font-mono tabular-nums text-rose-700">
+                    ₹{serverValidation.totalGapAmount.toLocaleString('en-IN')}
+                  </strong>
+                </p>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  {serverValidation.flaggedWorkers
+                    .filter((fw) => fw.isFiftyPercentNonCompliant)
+                    .map((fw) => {
+                      const targetWorker = workers.find((w) => w.id === fw.workerId);
+                      return (
+                        <button
+                          key={fw.workerId || fw.workerName}
+                          type="button"
+                          onClick={() => targetWorker && setEditingWageWorker(targetWorker)}
+                          className="px-2.5 py-1 rounded-xl bg-white hover:bg-amber-100 border border-amber-300 text-xs font-bold text-amber-950 flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <span>{fw.workerName}</span>
+                          {fw.gapAmount > 0 && (
+                            <span className="font-mono tabular-nums text-rose-700">
+                              (Gap ₹{fw.gapAmount.toLocaleString('en-IN')})
+                            </span>
+                          )}
+                          <Edit3 size={11} className="text-blue-600" />
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleRunServerPreFinalizationCheck}
+              className="px-4 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-xs shrink-0 cursor-pointer"
+            >
+              Review Before Finalizing
+            </button>
+          </div>
+        </div>
+      )}
+
       {!fetchError && (
         <>
           {/* STATUTORY DEPTH PAYROLL KPIS */}
@@ -298,7 +699,7 @@ export const PayrollScreen: React.FC = () => {
               <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-blue-600 mt-1">
                 +₹{totalEmployerStatutory.toLocaleString()}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">PF (13.0%) & ESI (3.25%)</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">PF (13%) + ESI (3.25%) + LWF</p>
             </div>
 
             <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-xs sm:col-span-2 lg:col-span-1">
@@ -308,6 +709,57 @@ export const PayrollScreen: React.FC = () => {
               </div>
               <p className="text-[10px] text-slate-400 mt-0.5">Gross + Employer Stat</p>
             </div>
+          </div>
+
+          {/* OFF-CYCLE ANNUAL STATUTORY BONUS BAR */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+                <Landmark size={18} />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-900">
+                  <span>Off-Cycle Annual Statutory Bonus (8.33%–20%)</span>
+                  <span aria-hidden="true" className="text-slate-300">·</span>
+                  <span className="font-mono tabular-nums text-amber-700">
+                    {evaluateEightMonthWindow('2025-26').daysRemaining}d left in 8-month window (Due 2026-11-30)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
+                  {bonusRuns.length > 0
+                    ? `${bonusRuns.length} Off-Cycle Bonus Run(s) recorded · Latest FY ${bonusRuns[0].financialYear}: Net ₹${bonusRuns[0].totalNetOffCycleDisbursed.toLocaleString('en-IN')} (${bonusRuns[0].status})`
+                    : 'No off-cycle bonus batch disbursed yet · Sec 192 TDS + Forms A, B, C, D'}
+                </p>
+              </div>
+            </div>
+            {onNavigate && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('CTC_SIMULATOR')}
+                  className="h-9 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Calculator size={14} className="text-slate-600" />
+                  <span>CTC Simulator</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('GRATUITY')}
+                  className="h-9 px-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Award size={14} className="text-emerald-700" />
+                  <span>Gratuity Projection</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('ANNUAL_BONUS')}
+                  className="h-9 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>Open Bonus Engine</span>
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* DUAL VIEWPORT PAYROLL ROSTER: 1 column mobile, 2 columns desktop */}
@@ -382,6 +834,22 @@ export const PayrollScreen: React.FC = () => {
                     </span>
                   </div>
 
+                  {payroll.fnfSummary?.isFnF && (
+                    <div className="mt-2 p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between gap-2 text-xs font-mono tabular-nums">
+                      <div className="text-emerald-950">
+                        <span className="font-bold">FnF Gratuity Settlement</span>
+                        <span className="block text-[10px] text-emerald-800">
+                          {payroll.fnfSummary.roundedYears} yrs · Exit {payroll.fnfSummary.exitDate}
+                          {payroll.fnfSummary.deathInService ? ' · DEATH_IN_SERVICE' : ''}
+                          {payroll.fnfSummary.ceilingApplied ? ' · ₹20L Cap' : ''}
+                        </span>
+                      </div>
+                      <span className="font-bold text-emerald-800">
+                        +₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  )}
+
                   {/* STATUTORY DEDUCTION PILLS & CTC LIABILITIES */}
                   {payroll.statutory && (
                     <div className="mt-2.5 p-2.5 bg-slate-50/70 rounded-xl border border-slate-200/90 space-y-1.5">
@@ -412,8 +880,38 @@ export const PayrollScreen: React.FC = () => {
                             ESI: Exempt (&gt; ₹21k)
                           </span>
                         )}
-                        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
+                        <span
+                          className={`px-2 py-0.5 rounded-md border ${
+                            payroll.statutory.isPtExempt
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
+                              : 'bg-white border-slate-200 text-slate-700'
+                          }`}
+                          title={payroll.statutory.ptExemptionNote}
+                        >
                           PT: <strong>₹{payroll.statutory.professionalTax}</strong>
+                          {payroll.statutory.isPtExempt ? ' (PT_EXEMPT)' : ''}
+                          {payroll.statutory.ptProratedInfo ? ' (Pro-rated)' : ''}
+                          {payroll.statutory.ptFebruaryAdjustmentApplied ? ' (Feb Adj.)' : ''}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md border ${
+                            payroll.statutory.isContractorExcludedFromLwf
+                              ? 'bg-slate-100 border-slate-300 text-slate-600'
+                              : (payroll.statutory.employeeLwf || 0) > 0
+                              ? 'bg-cyan-50 border-cyan-200 text-cyan-900 font-semibold'
+                              : 'bg-white border-slate-200 text-slate-500'
+                          }`}
+                          title={
+                            payroll.statutory.lwfTransferSplit?.splitSummary ||
+                            payroll.statutory.lwfSkippedReason ||
+                            `${payroll.statutory.state} · ${payroll.statutory.lwfCycleLabel || 'LWF'}`
+                          }
+                        >
+                          LWF ({payroll.statutory.state}): <strong>₹{payroll.statutory.employeeLwf || 0}</strong>
+                          {payroll.statutory.isContractorExcludedFromLwf ? ' · Contractor' : ''}
+                          {payroll.statutory.lwfTransferSplit ? ' · Split' : ''}
+                          {payroll.statutory.lwfSkippedReason === 'WAGE_CEILING_EXCEEDED' ? ' · Ceiling Exempt' : ''}
+                          {payroll.statutory.lwfSkippedReason === 'STATE_NO_LWF' ? ' · No LWF' : ''}
                         </span>
                         {payroll.statutory.tds > 0 ? (
                           <span className="px-2 py-0.5 rounded-md bg-violet-50 border border-violet-200 text-violet-800 font-bold">
@@ -426,12 +924,86 @@ export const PayrollScreen: React.FC = () => {
                         )}
                       </div>
 
+                      {(payroll.statutory.notionalWageAddition || 0) > 0 && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-mono space-y-0.5">
+                          <div className="flex items-center justify-between gap-2 flex-wrap text-amber-950 font-bold">
+                            <span>Notional Wage Addition (50% Rule):</span>
+                            <span>+₹{payroll.statutory.notionalWageAddition!.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="text-[10px] text-amber-900 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                            <span>
+                              PF Base: ₹{(payroll.statutory.originalPfWageBase ?? payroll.earnings.basic).toLocaleString('en-IN')} → <strong>₹{payroll.statutory.pfWageBase.toLocaleString('en-IN')}</strong>
+                            </span>
+                            {payroll.statutory.isEsiApplicable && (
+                              <span>
+                                ESI Base: ₹{(payroll.statutory.originalEsiWageBase ?? payroll.earnings.gross).toLocaleString('en-IN')} → <strong>₹{payroll.statutory.esiWageBase.toLocaleString('en-IN')}</strong>
+                              </span>
+                            )}
+                            {(payroll.statutory.gratuityImpact?.annualIncrease || 0) > 0 && (
+                              <span className="text-rose-700 font-bold">
+                                Gratuity: +₹{payroll.statutory.gratuityImpact!.monthlyIncrease}/mo (+₹{payroll.statutory.gratuityImpact!.annualIncrease}/yr)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500 font-mono">
-                        <span>Employer Stat (PF+ESI): +₹{payroll.statutory.totalEmployerStatutory.toLocaleString()}</span>
+                        <span>Employer Stat (PF+ESI+LWF): +₹{payroll.statutory.totalEmployerStatutory.toLocaleString()}</span>
                         <span className="font-bold text-slate-900">CTC: ₹{(payroll.employerCostToCompany || (payroll.earnings.gross + payroll.statutory.totalEmployerStatutory)).toLocaleString()}</span>
                       </div>
                     </div>
                   )}
+
+                  {/* 50% RULE & MINIMUM WAGE CARD FLAG */}
+                  {(() => {
+                    const cardAudit =
+                      serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+                      payroll.wageStructureAudit;
+                    if (!cardAudit || !cardAudit.hasAnyViolation) return null;
+                    const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
+                    return (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {cardAudit.isFiftyPercentNonCompliant && (
+                              <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-mono tabular-nums font-bold text-[10px]">
+                                NON_COMPLIANT · Gap ₹{cardAudit.gapAmount.toLocaleString('en-IN')}
+                              </span>
+                            )}
+                            {cardAudit.isMinimumWageViolation && (
+                              <span className="px-2 py-0.5 rounded-md bg-rose-800 text-white font-mono tabular-nums font-bold text-[10px]">
+                                MINIMUM_WAGE_VIOLATION · Gap ₹{cardAudit.minimumWageGap.toLocaleString('en-IN')}
+                              </span>
+                            )}
+                          </div>
+                          {workerObj && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingWageWorker(workerObj)}
+                              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 size={11} /> Fix Structure
+                            </button>
+                          )}
+                        </div>
+                        {cardAudit.warningMessage && (
+                          <p className="text-[11px] text-rose-800 font-medium">
+                            {cardAudit.warningMessage}
+                          </p>
+                        )}
+                        {cardAudit.isMinimumWageViolation && (
+                          <p className="text-[11px] text-rose-950 font-mono tabular-nums font-semibold">
+                            {cardAudit.state} ({cardAudit.wageZone}) · Floor ₹{cardAudit.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo · Notif. {cardAudit.minimumWageNotificationDate}
+                            {cardAudit.isOnProbation ? ' · Probation Active (No Exemption)' : ''}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* BOTTOM ACTION BUTTONS */}
@@ -499,6 +1071,9 @@ export const PayrollScreen: React.FC = () => {
                   <div>
                     {(() => {
                       const workerConflict = unresolvedConflicts.find(c => c.workerId === payroll.workerId);
+                      const workerMinWageAudit =
+                        serverValidation?.allResults.find(r => r.workerId === payroll.workerId) ||
+                        payroll.wageStructureAudit;
                       if (payroll.status === 'PAID') {
                         return (
                           <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1 px-2 py-1">
@@ -520,6 +1095,19 @@ export const PayrollScreen: React.FC = () => {
                           >
                             <AlertCircle size={13} />
                             <span>Resolve Conflict</span>
+                          </button>
+                        );
+                      }
+                      if (workerMinWageAudit?.isMinimumWageViolation) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={(e) => handleMarkAsPaid(payroll, e)}
+                            className="text-xs font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                            title="MINIMUM_WAGE_VIOLATION: Payout blocked until Basic Pay meets state minimum wage"
+                          >
+                            <Lock size={12} />
+                            <span>Blocked: Min Wage</span>
                           </button>
                         );
                       }
@@ -605,6 +1193,412 @@ export const PayrollScreen: React.FC = () => {
         orgSettings={settings || { shifts: [], enableBreakTracking: false }}
         tenantName={profile?.companyName || 'Factory Admin'}
         currentMonthStr={currentMonthStr}
+      />
+
+      {/* INLINE WAGE STRUCTURE FIX MODAL */}
+      <WageStructureEditorModal
+        isOpen={Boolean(editingWageWorker)}
+        worker={editingWageWorker}
+        orgSettings={settings}
+        onClose={() => setEditingWageWorker(null)}
+        onSaved={async () => {
+          await loadData();
+        }}
+      />
+
+      {/* PRE-FINALIZATION SERVER AUDIT & FINALIZE PAYROLL MODAL */}
+      {isFinalizationModalOpen && serverValidation && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-base font-bold">Pre-Finalization Wage Structure Audit</h2>
+                <p className="text-xs text-slate-300 mt-0.5 flex items-center gap-1.5">
+                  {serverValidation.verificationSource === 'CLOUD_FUNCTION' ? (
+                    <>
+                      <Cloud size={12} className="text-blue-400" /> Verified by Cloud Function (`validatePayrollFinalization`)
+                    </>
+                  ) : (
+                    <>
+                      <Cpu size={12} className="text-indigo-400" /> Verified by Statutory Validation Engine ({currentMonthStr})
+                    </>
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFinalizationModalOpen(false)}
+                className="p-2 rounded-xl hover:bg-white/10 text-slate-300 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              {isRetrospectivePeriod && (
+                <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 text-xs text-amber-950">
+                  <strong>Retrospective Payroll ({currentMonthStr} — Pre-21 Nov 2025):</strong> Legacy EPF/ESIC rules apply without 50% Rule excess allowance add-back. Future payroll runs (Nov 2025 onwards) enforce automatic recalculation.
+                </div>
+              )}
+
+              {serverValidation.hasFlaggedWorkers ? (
+                <>
+                  {serverValidation.minimumWageViolationCount > 0 && (
+                    <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-4">
+                      <h3 className="text-sm font-black text-rose-950 font-mono">
+                        BLOCKING ERROR: MINIMUM_WAGE_VIOLATION ({serverValidation.minimumWageViolationCount} Employee{serverValidation.minimumWageViolationCount > 1 ? 's' : ''})
+                      </h3>
+                      <p className="text-xs text-rose-900 mt-1">
+                        Payroll cannot be finalized while any employee&apos;s Basic Pay is below the applicable state minimum wage floor. Fix Basic Pay for each highlighted worker below and re-validate.
+                      </p>
+                    </div>
+                  )}
+
+                  {serverValidation.nonCompliantCount > 0 && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4">
+                      <h3 className="text-sm font-black text-amber-950">
+                        Your basic pay is less than 50% of CTC. This will increase PF/Gratuity liabilities.
+                      </h3>
+                      <p className="text-xs text-amber-900 mt-1">
+                        Found <strong>{serverValidation.nonCompliantCount}</strong> NON_COMPLIANT worker(s) · Total Gap:{' '}
+                        <strong className="font-mono tabular-nums">₹{serverValidation.totalGapAmount.toLocaleString('en-IN')}/mo</strong>.
+                        {!isRetrospectivePeriod && (
+                          <> Automatic 50% Rule excess allowance add-back &amp; WageComplianceAudit persistence will execute on finalization.</>
+                        )}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-2.5">
+                    {serverValidation.flaggedWorkers.map((fw) => {
+                      const targetWorker = workers.find((w) => w.id === fw.workerId);
+                      const gratYr = fw.estimatedAdditionalGratuityAnnual ?? Math.round((fw.deemedWageAddBack * 15) / 26);
+                      return (
+                        <div
+                          key={fw.workerId || fw.workerName}
+                          className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                            fw.isMinimumWageViolation
+                              ? 'border-rose-300 bg-rose-50/40'
+                              : 'border-slate-200 bg-slate-50'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-sm text-slate-900">{fw.workerName}</span>
+                              {fw.isFiftyPercentNonCompliant && (
+                                <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-mono font-bold">
+                                  NON_COMPLIANT
+                                </span>
+                              )}
+                              {fw.isMinimumWageViolation && (
+                                <span className="px-2 py-0.5 rounded bg-rose-800 text-white text-[10px] font-mono font-bold">
+                                  MINIMUM_WAGE_VIOLATION (BLOCKED)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs font-mono tabular-nums text-slate-600 mt-1">
+                              {fw.state} ({fw.wageZone}) · {fw.scheduledEmployment} · {fw.skillCategory.replace('_', '-')}
+                            </div>
+                            {fw.isMinimumWageViolation && (
+                              <div className="text-xs font-mono tabular-nums text-rose-900 mt-1">
+                                Basic: ₹{fw.basicPay.toLocaleString('en-IN')}/mo vs Floor ₹{fw.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo ·{' '}
+                                <strong>Gap ₹{fw.minimumWageGap.toLocaleString('en-IN')}/mo</strong> · Notif. Date: {fw.minimumWageNotificationDate}
+                                {fw.isOnProbation ? ' · Probation Active (No Exemption)' : ''}
+                              </div>
+                            )}
+                            {fw.midMonthRevisionInfo?.isRevisedInMonth && (
+                              <div className="text-[11px] font-mono tabular-nums text-amber-900 mt-0.5">
+                                Pro-rated mid-month revision eff. {fw.midMonthRevisionInfo.revisionDate}: {fw.midMonthRevisionInfo.daysAtPreviousRate}d @ ₹{fw.midMonthRevisionInfo.previousMonthlyFloor.toLocaleString('en-IN')} + {fw.midMonthRevisionInfo.daysAtRevisedRate}d @ ₹{fw.midMonthRevisionInfo.revisedMonthlyFloor.toLocaleString('en-IN')}
+                              </div>
+                            )}
+                            <div className="text-xs font-mono tabular-nums text-slate-600 mt-1">
+                              WageBase: ₹{fw.wageBase.toLocaleString('en-IN')} ({fw.wageBasePercentage}%) · Excluded: ₹{fw.excludedComponents.toLocaleString('en-IN')} ({fw.excludedPercentage}%)
+                              {fw.gapAmount > 0 && (
+                                <span className="text-rose-700 font-bold ml-2">
+                                  50% Gap: ₹{fw.gapAmount.toLocaleString('en-IN')}
+                                </span>
+                              )}
+                            </div>
+                            {fw.deemedWageAddBack > 0 && (
+                              <div className="text-[11px] font-mono text-amber-900 mt-1">
+                                {!isRetrospectivePeriod
+                                  ? `Auto Add-Back: +₹${fw.deemedWageAddBack.toLocaleString('en-IN')} → CompliantWageBase: ₹${(fw.compliantWageBase ?? (fw.wageBase + fw.deemedWageAddBack)).toLocaleString('en-IN')}`
+                                  : `Deferred Add-Back (Pre-Nov 2025): ₹${fw.deemedWageAddBack.toLocaleString('en-IN')}`}
+                                {' · '}
+                                <span className="text-rose-700 font-bold">
+                                  Gratuity Impact: +₹{fw.estimatedAdditionalGratuityMonthly}/mo (+₹{gratYr.toLocaleString('en-IN')}/yr)
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {targetWorker && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsFinalizationModalOpen(false);
+                                setEditingWageWorker(targetWorker);
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-xs font-bold text-slate-800 flex items-center gap-1 shrink-0 cursor-pointer"
+                            >
+                              <Edit3 size={12} className="text-blue-600" /> Fix Structure
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-center">
+                  <CheckCircle size={32} className="text-emerald-600 mx-auto mb-2" />
+                  <h3 className="text-sm font-bold text-emerald-950">
+                    All {serverValidation.allResults.length} Wage Structures Comply!
+                  </h3>
+                  <p className="text-xs text-emerald-700 mt-1">
+                    Every worker meets the 50% Basic Wage Rule and State Statutory Minimum Wage floor.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsFinalizationModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-bold hover:bg-slate-100 cursor-pointer"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFinalizePayrollRun}
+                disabled={
+                  finalizingPayroll ||
+                  unresolvedConflicts.length > 0 ||
+                  serverValidation.minimumWageViolationCount > 0
+                }
+                className={`px-5 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                  serverValidation.minimumWageViolationCount > 0
+                    ? 'bg-rose-700'
+                    : serverValidation.hasFlaggedWorkers
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {finalizingPayroll ? <Loader2 size={15} className="animate-spin" /> : <Lock size={14} />}
+                <span>
+                  {serverValidation.minimumWageViolationCount > 0
+                    ? 'Payroll Blocked (Fix MINIMUM_WAGE_VIOLATION)'
+                    : serverValidation.hasFlaggedWorkers
+                    ? 'Acknowledge 50% Add-Back & Finalize Payroll'
+                    : 'Finalize & Lock Payroll'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WAGE COMPLIANCE AUDIT RECORDS MODAL */}
+      {isAuditHistoryOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <History size={18} className="text-indigo-400" />
+                  <span>WageComplianceAudit Ledger ({currentMonthStr})</span>
+                </h2>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Original vs recalculated wage bases, Notional Wage Additions, and Gratuity liability projections (eff. 21 Nov 2025).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAuditHistoryOpen(false)}
+                className="p-2 rounded-xl hover:bg-white/10 text-slate-300 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-3 flex-1">
+              {(() => {
+                const displayAudits: WageComplianceAudit[] =
+                  savedAudits.length > 0
+                    ? savedAudits
+                    : payrolls
+                        .map((p) => p.wageComplianceAudit)
+                        .filter((a): a is WageComplianceAudit => Boolean(a));
+
+                if (displayAudits.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-xs text-slate-500">
+                      No payroll records available to audit for {currentMonthStr}.
+                    </div>
+                  );
+                }
+
+                return (
+                  <>
+                    <div className="flex items-center justify-between flex-wrap gap-2 text-xs bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                      <span>
+                        Status:{' '}
+                        {savedAudits.length > 0 ? (
+                          <strong className="text-emerald-700">{savedAudits.length} persisted audit record(s) loaded</strong>
+                        ) : (
+                          <strong className="text-amber-700">Live preview (not yet persisted for {currentMonthStr})</strong>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handlePersistAllMonthAudits}
+                        disabled={savingAudits}
+                        className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      >
+                        {savingAudits && <Loader2 size={13} className="animate-spin" />}
+                        <span>Save Month Audits</span>
+                      </button>
+                    </div>
+
+                    {displayAudits.map((audit) => (
+                      <div
+                        key={audit.id}
+                        className={`rounded-2xl border p-4 space-y-2 ${
+                          audit.addBackApplied
+                            ? 'bg-amber-50/50 border-amber-200'
+                            : audit.isRetrospectivePeriod
+                            ? 'bg-slate-50 border-amber-300'
+                            : 'bg-slate-50/60 border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-slate-900">{audit.workerName}</span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                                audit.complianceStatus === 'NON_COMPLIANT'
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-emerald-600 text-white'
+                              }`}
+                            >
+                              {audit.complianceStatus}
+                            </span>
+                            {audit.addBackApplied && (
+                              <span className="px-2 py-0.5 rounded bg-amber-600 text-white text-[10px] font-mono font-bold">
+                                ADD-BACK +₹{audit.notionalWageAddition.toLocaleString('en-IN')}
+                              </span>
+                            )}
+                            {audit.isRetrospectivePeriod && (
+                              <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-950 text-[10px] font-mono font-bold">
+                                RETROSPECTIVE (LEGACY RULES)
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-500">
+                            {audit.payrollMonth}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono bg-white p-2.5 rounded-xl border border-slate-200/80">
+                          <div>
+                            <span className="block text-[10px] font-sans font-bold text-slate-400 uppercase">Original WageBase</span>
+                            <span className="font-bold text-slate-900">₹{audit.originalWageBase.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-sans font-bold text-slate-400 uppercase">Recalculated Base</span>
+                            <span className="font-black text-slate-900">₹{audit.recalculatedWageBase.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-sans font-bold text-slate-400 uppercase">PF Base (Orig → Rec)</span>
+                            <span className="font-bold text-blue-800">
+                              ₹{audit.originalPfWageBase.toLocaleString('en-IN')} → ₹{audit.recalculatedPfWageBase.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-sans font-bold text-slate-400 uppercase">ESI Base (Orig → Rec)</span>
+                            <span className="font-bold text-teal-800">
+                              ₹{audit.originalEsiWageBase.toLocaleString('en-IN')} → ₹{audit.recalculatedEsiWageBase.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <span className="font-mono text-slate-600">{audit.formulaText}</span>
+                          {audit.gratuityImpact?.annualIncrease > 0 && (
+                            <span className="font-mono font-bold text-rose-700">
+                              Gratuity Delta: +₹{audit.gratuityImpact.monthlyIncrease}/mo (+₹{audit.gratuityImpact.annualIncrease.toLocaleString('en-IN')}/yr)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsAuditHistoryOpen(false)}
+                className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STATE MINIMUM WAGE SCHEDULE & MID-MONTH REVISIONS MODAL */}
+      {isMinWageModalOpen && settings && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <Scale size={18} className="text-emerald-400" />
+                  <span>State-Wise Minimum Wage Database &amp; Revisions</span>
+                </h2>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Categorized by State, Scheduled Employment, Zone, Skill Level, and Notification Date.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMinWageModalOpen(false)}
+                className="p-2 rounded-xl hover:bg-white/10 text-slate-300 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <MinimumWageSchedulePanel
+                orgSettings={settings}
+                onUpdateRevisions={handleSaveMinWageRevisions}
+                saving={savingMinWageRevisions}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRE-UPLOAD EPFO ECR 2.0 VALIDATOR MODAL */}
+      <EcrValidatorModal
+        isOpen={isEcrValidatorOpen}
+        onClose={() => setIsEcrValidatorOpen(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        month={currentMonthStr}
+        workers={workers}
+        payrolls={payrolls}
+        attendance={attendanceHistory}
+        orgSettings={settings}
+        onWorkerUpdated={(updated: Worker) => {
+          setWorkers(prev => prev.map(w => (w.id === updated.id ? updated : w)));
+        }}
       />
     </div>
   );
