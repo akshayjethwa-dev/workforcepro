@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditWorkerWageStructureServer = void 0;
+exports.auditWorkerWageStructureServer = auditWorkerWageStructureServer;
 const SERVER_STATE_ZONE_TABLES = {
     Gujarat: {
         defaultZone: 'Anand',
@@ -447,5 +447,4 @@ function auditWorkerWageStructureServer(worker, evaluationDate, defaultState = '
         verificationSource: 'CLOUD_FUNCTION',
     };
 }
-exports.auditWorkerWageStructureServer = auditWorkerWageStructureServer;
 //# sourceMappingURL=wageValidation.js.map

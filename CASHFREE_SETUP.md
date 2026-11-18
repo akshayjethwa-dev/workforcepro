@@ -5,6 +5,10 @@ versions. Order creation, price calculation, payment verification, and plan
 activation run in Firebase Functions. Renewals are manual; this does not create
 a recurring mandate.
 
+The Firebase Functions source is the existing `codebase/` directory, as
+configured in `firebase.json`; a second root-level `functions/` directory is
+not needed.
+
 ## Configure sandbox
 
 1. In the Cashfree Merchant Dashboard, switch to Test mode and copy the sandbox
@@ -24,7 +28,7 @@ a recurring mandate.
    public HTTPS URL (the default is
    `https://workforcepro-saas.web.app/`). The URL must be hosted and reachable;
    localhost is not supported.
-4. Deploy the `workforce` Functions codebase. Register the deployed
+4. Deploy the `default` Functions codebase from `codebase/`. Register the deployed
    `cashfreeWebhook` HTTPS URL in Cashfree and subscribe to
    `PAYMENT_SUCCESS_WEBHOOK`.
 5. Add the public checkout domain to Cashfree's allowed domains. For native

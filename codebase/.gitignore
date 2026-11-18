@@ -1,30 +1,10 @@
-{
-  "name": "functions",
-  "engines": {
-    "node": "20"
-  },
-  "main": "lib/index.js",
-  "scripts": {
-    "lint": "eslint --ext .js,.ts .",
-    "build": "tsc",
-    "serve": "npm run build && firebase emulators:start --only functions",
-    "shell": "npm run build && firebase functions:shell",
-    "start": "npm run shell",
-    "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
-  },
-  "dependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "firebase-admin": "^13.0.1",
-    "firebase-functions": "^6.1.1"
-  },
-  "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^5.12.0",
-    "@typescript-eslint/parser": "^5.12.0",
-    "eslint": "^8.9.0",
-    "eslint-plugin-import": "^2.25.4",
-    "typescript": "^4.9.0"
-  },
-  "private": true
-}
-cd
+# Compiled JavaScript files
+lib/**/*.js
+lib/**/*.js.map
+
+# TypeScript v1 declaration files
+typings/
+
+# Node.js dependency directory
+node_modules/
+*.local
