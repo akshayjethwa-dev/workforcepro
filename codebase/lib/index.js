@@ -10,13 +10,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.verifyRazorpayPayment = exports.createRazorpayOrder = exports.cashfreeWebhook = exports.verifyCashfreePayment = exports.createCashfreeOrder = void 0;
 const firebase_functions_1 = require("firebase-functions");
-// Keep your Cashfree functions exported exactly as before
+// Cashfree functions
 var cashfree_1 = require("./cashfree");
 Object.defineProperty(exports, "createCashfreeOrder", { enumerable: true, get: function () { return cashfree_1.createCashfreeOrder; } });
 var cashfree_2 = require("./cashfree");
 Object.defineProperty(exports, "verifyCashfreePayment", { enumerable: true, get: function () { return cashfree_2.verifyCashfreePayment; } });
 var cashfree_3 = require("./cashfree");
 Object.defineProperty(exports, "cashfreeWebhook", { enumerable: true, get: function () { return cashfree_3.cashfreeWebhook; } });
+// Razorpay functions
 var razorpay_1 = require("./razorpay");
 Object.defineProperty(exports, "createRazorpayOrder", { enumerable: true, get: function () { return razorpay_1.createRazorpayOrder; } });
 Object.defineProperty(exports, "verifyRazorpayPayment", { enumerable: true, get: function () { return razorpay_1.verifyRazorpayPayment; } });
@@ -24,8 +25,7 @@ Object.defineProperty(exports, "verifyRazorpayPayment", { enumerable: true, get:
 // running at the same time.
 (0, firebase_functions_1.setGlobalOptions)({
     maxInstances: 10,
-    // 👇 Add this so every v2 function defaults to your region.
-    // You can still override per-function inside cashfree.ts if needed.
+    // All v2 functions default to this region.
     region: "asia-south1",
 });
 //# sourceMappingURL=index.js.map
