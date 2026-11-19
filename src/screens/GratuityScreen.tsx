@@ -56,6 +56,8 @@ import {
 import { Payslip } from '../components/Payslip';
 import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
 import { FnfLegalHoldModal } from '../components/FnfLegalHoldModal';
+import { TruncatedText } from '../components/TruncatedText';
+import { ResponsiveDataTable } from '../components/ResponsiveDataTable';
 
 interface Props {
   onNavigate?: (screen: ScreenName) => void;
@@ -638,33 +640,34 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 min-w-0">
       {/* HEADER */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">
             Gratuity Accrual &amp; FnF Settlement
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-fluid-xs text-slate-500 mt-0.5 break-words">
             Statutory formula <span className="font-mono text-slate-700">(Last Basic + DA) × 15 / 26 × Rounded Years</span> · ₹20,00,000 ceiling · Nov 2025 Fixed-Term 1-Year rule
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5">
-            <span className="text-[11px] font-semibold text-slate-500">Valuation Date</span>
+        <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
+          <div className="flex items-center flex-wrap gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5">
+            <span className="text-fluid-2xs font-semibold text-slate-500">Valuation Date</span>
             <input
               type="date"
               value={asOfDate}
               onChange={(e) => setAsOfDate(e.target.value)}
-              className="text-xs font-mono font-semibold text-slate-900 outline-none bg-transparent"
+              className="text-fluid-xs font-mono font-semibold text-slate-900 outline-none bg-transparent"
             />
           </div>
           <button
             type="button"
             onClick={loadData}
-            className="p-2.5 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer"
+            className="p-2.5 min-w-[2.5rem] min-h-[2.5rem] flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer shrink-0"
             title="Recalculate liability"
+            aria-label="Recalculate liability"
           >
             <RefreshCw size={15} className={loading ? 'animate-spin text-blue-600' : ''} />
           </button>
@@ -672,64 +675,64 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
       </div>
 
       {/* KPI PROJECTION STRIP */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+      <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-fluid-2xs font-semibold uppercase tracking-wider text-slate-500 break-words min-w-0">
               Vested Payable Liability
             </span>
-            <IndianRupee size={16} className="text-emerald-600" />
+            <IndianRupee size={16} className="text-emerald-600 shrink-0" />
           </div>
-          <div className="text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+          <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2 break-words">
             {formatInr(orgProjection.vestedPayableLiability)}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+          <div className="text-fluid-2xs text-slate-500 mt-1 font-mono tabular-nums break-words">
             {orgProjection.eligibleEmployeesCount} eligible · capped at ₹20L
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-fluid-2xs font-semibold uppercase tracking-wider text-slate-500 break-words min-w-0">
               Total Accrued Provision
             </span>
-            <Building2 size={16} className="text-blue-600" />
+            <Building2 size={16} className="text-blue-600 shrink-0" />
           </div>
-          <div className="text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+          <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2 break-words">
             {formatInr(orgProjection.totalProvisionalAccruedLiability)}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+          <div className="text-fluid-2xs text-slate-500 mt-1 font-mono tabular-nums break-words">
             Unvested reserve: {formatInr(orgProjection.unvestedAccruedReserve)}
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-fluid-2xs font-semibold uppercase tracking-wider text-slate-500 break-words min-w-0">
               Eligible Headcount
             </span>
-            <UserCheck size={16} className="text-indigo-600" />
+            <UserCheck size={16} className="text-indigo-600 shrink-0" />
           </div>
-          <div className="text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+          <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2 break-words">
             {orgProjection.eligibleEmployeesCount} / {orgProjection.totalWorkersAnalyzed}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+          <div className="text-fluid-2xs text-slate-500 mt-1 font-mono tabular-nums break-words">
             {orgProjection.standardFiveYearEligibleCount} Std 5Y · {orgProjection.fixedTermOneYearEligibleCount} FTE 1Y
             {orgProjection.deathInServiceCount > 0 ? ` · ${orgProjection.deathInServiceCount} Nominee` : ''}
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-fluid-2xs font-semibold uppercase tracking-wider text-slate-500 break-words min-w-0">
               Cash-Flow Run-Rate
             </span>
-            <Award size={16} className="text-amber-600" />
+            <Award size={16} className="text-amber-600 shrink-0" />
           </div>
-          <div className="text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
-            {formatInr(orgProjection.monthlyAccrualRunRate)}<span className="text-xs font-normal text-slate-500">/mo</span>
+          <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-2 break-words">
+            {formatInr(orgProjection.monthlyAccrualRunRate)}<span className="text-fluid-xs font-normal text-slate-500">/mo</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+          <div className="text-fluid-2xs text-slate-500 mt-1 font-mono tabular-nums break-words">
             {formatInr(orgProjection.annualAccrualRunRate)} / year accrued
           </div>
         </div>
@@ -818,155 +821,236 @@ export const GratuityScreen: React.FC<Props> = ({ onNavigate }) => {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500">
-                  <th className="py-3 px-4 font-semibold">Employee</th>
-                  <th className="py-3 px-4 font-semibold">Service &amp; Round-Up</th>
-                  <th className="py-3 px-4 font-semibold text-right">Last Basic + DA</th>
-                  <th className="py-3 px-4 font-semibold">Eligibility Rule</th>
-                  <th className="py-3 px-4 font-semibold text-right">Provisional Reserve</th>
-                  <th className="py-3 px-4 font-semibold text-right">Vested Payable</th>
-                  <th className="py-3 px-4 font-semibold text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredLedger.map((row) => {
-                  const workerObj = workers.find((w) => w.id === row.workerId);
-                  return (
-                    <tr key={row.workerId} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900">{row.workerName}</div>
-                        <div className="text-[11px] text-slate-500">
-                          {row.designation} · {row.department}
+          <div className="p-3 sm:p-4">
+            <ResponsiveDataTable
+              data={filteredLedger}
+              keyExtractor={(row) => row.workerId}
+              stickyHeader={true}
+              maxHeightClassName="max-h-[65vh]"
+              tableMinWidthClassName="min-w-[960px]"
+              paginationMode="pages"
+              initialPageSize={20}
+              pageSizeOptions={[10, 20, 50, 100]}
+              itemLabel="employees"
+              ariaLabel="Organization gratuity liability ledger"
+              emptyState={{
+                icon: <Award size={24} className="text-slate-400" />,
+                title: 'No workers match the active filter criteria',
+                description: 'Try clearing the search term or switching the eligibility filter above.',
+              }}
+              columns={[
+                {
+                  key: 'employee',
+                  header: 'Employee',
+                  stickyLeft: true,
+                  isPrimary: true,
+                  mobilePriority: true,
+                  minWidth: 'min-w-[190px]',
+                  render: (row) => (
+                    <div className="min-w-0">
+                      <TruncatedText
+                        text={row.workerName}
+                        modalTitle="Gratuity Liability Profile"
+                        subtitle={`${row.designation} · ${row.department}`}
+                        details={[
+                          { label: 'Tenure', value: `${row.tenure.formattedTenure} (${row.effectiveYearsForFormula} yrs)`, mono: true },
+                          { label: 'Last Basic + DA', value: formatInr(row.lastDrawnBasicPlusDa), mono: true },
+                          { label: 'Vested Payable', value: formatInr(row.payableGratuityAmount), mono: true },
+                        ]}
+                        className="font-bold text-slate-900 text-xs"
+                      />
+                      <div className="text-[11px] text-slate-500 truncate">
+                        {row.designation} · {row.department}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                        {row.employmentType === 'FIXED_TERM' ? 'Fixed-Term (1Y Rule)' : 'Permanent (5Y Rule)'}
+                        {row.nomineeName ? ` · Nominee: ${row.nomineeName}` : ''}
+                      </div>
+                    </div>
+                  ),
+                  renderPriority: (row) => (
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900 text-xs truncate">{row.workerName}</div>
+                      <div className="text-[10px] text-slate-500 font-mono truncate">{row.tenure.formattedTenure}</div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'service',
+                  header: 'Service & Round-Up',
+                  mobileLabel: 'Service',
+                  numeric: true,
+                  minWidth: 'min-w-[165px]',
+                  render: (row) => (
+                    <div>
+                      <div className="font-semibold text-slate-900">
+                        {row.tenure.formattedTenure} →{' '}
+                        <span className="text-blue-700">{row.effectiveYearsForFormula} yrs</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        Start: {row.tenure.effectiveStartDate}
+                        {row.tenure.exceedsSixMonthsInFinalYear && ' · >6m rounded up'}
+                      </div>
+                      {row.tenure.continuousServiceAggregated && (
+                        <div className="text-[10px] text-indigo-700 font-sans font-semibold mt-0.5">
+                          Aggregated Subsidiary ({row.tenure.subsidiaryName || 'Prior Entity'})
                         </div>
-                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                          {row.employmentType === 'FIXED_TERM' ? 'Fixed-Term (1Y Rule)' : 'Permanent (5Y Rule)'}
-                          {row.nomineeName ? ` · Nominee: ${row.nomineeName}` : ''}
+                      )}
+                      {row.tenure.breakInServiceDetected && (
+                        <div className="text-[10px] text-amber-700 font-sans font-semibold mt-0.5">
+                          Transfer break detected
                         </div>
-                      </td>
-
-                      <td className="py-3.5 px-4 font-mono tabular-nums">
-                        <div className="font-semibold text-slate-900">
-                          {row.tenure.formattedTenure} →{' '}
-                          <span className="text-blue-700">{row.effectiveYearsForFormula} yrs</span>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'basicDa',
+                  header: 'Last Basic + DA',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[130px]',
+                  render: (row) => (
+                    <div>
+                      <div className="font-bold text-slate-900">{formatInr(row.lastDrawnBasicPlusDa)}</div>
+                      <div className="text-[10px] text-slate-500">
+                        Basic {formatInr(row.lastDrawnBasic)}
+                        {row.lastDrawnDa > 0 ? ` + DA ${formatInr(row.lastDrawnDa)}` : ''}
+                      </div>
+                      {row.previousPreRevisionBasicPlusDa && (
+                        <div className="text-[10px] text-emerald-700">
+                          Revised from {formatInr(row.previousPreRevisionBasicPlusDa)}
                         </div>
-                        <div className="text-[10px] text-slate-500">
-                          Start: {row.tenure.effectiveStartDate}
-                          {row.tenure.exceedsSixMonthsInFinalYear && ' · >6m rounded up'}
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'eligibility',
+                  header: 'Eligibility Rule',
+                  mobileLabel: 'Status',
+                  mobilePriority: true,
+                  minWidth: 'min-w-[175px]',
+                  render: (row) => (
+                    <div>
+                      {row.eligibilityRule === 'DEATH_IN_SERVICE_OVERRIDE' && (
+                        <span className="font-mono font-bold text-[10px] text-rose-700">DEATH_IN_SERVICE</span>
+                      )}
+                      {row.eligibilityRule === 'ONE_YEAR_FIXED_TERM_NOV_2025' && (
+                        <span className="font-semibold text-[11px] text-indigo-700">Fixed-Term 1Y (Nov 2025)</span>
+                      )}
+                      {row.eligibilityRule === 'FIVE_YEAR_STANDARD' && (
+                        <span className="font-semibold text-[11px] text-emerald-700">Vested (5+ Years)</span>
+                      )}
+                      {row.eligibilityRule === 'NOT_ELIGIBLE' && (
+                        <span className="font-semibold text-[11px] text-slate-500">Not Yet Vested</span>
+                      )}
+                      <div className="text-[10px] text-slate-500 mt-0.5 max-w-[200px]">{row.eligibilityNote}</div>
+                    </div>
+                  ),
+                  renderPriority: (row) => (
+                    <span
+                      className={`text-[11px] font-bold ${
+                        row.eligibilityRule === 'DEATH_IN_SERVICE_OVERRIDE'
+                          ? 'text-rose-700'
+                          : row.eligibilityRule === 'ONE_YEAR_FIXED_TERM_NOV_2025'
+                          ? 'text-indigo-700'
+                          : row.eligibilityRule === 'FIVE_YEAR_STANDARD'
+                          ? 'text-emerald-700'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {row.eligibilityRule === 'NOT_ELIGIBLE' ? 'Unvested' : 'Vested'}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'reserve',
+                  header: 'Provisional Reserve',
+                  mobileLabel: 'Reserve',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[130px]',
+                  render: (row) => (
+                    <div className="text-slate-700">
+                      <div>{formatInr(row.provisionalAccruedAmount)}</div>
+                      <div className="text-[10px] text-slate-400">+{formatInr(row.monthlyAccrualIncrement)}/mo</div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'payable',
+                  header: 'Vested Payable',
+                  mobileLabel: 'Payable',
+                  align: 'right',
+                  numeric: true,
+                  isHeaderMetric: true,
+                  mobilePriority: true,
+                  minWidth: 'min-w-[130px]',
+                  render: (row) => (
+                    <div>
+                      <div
+                        className={`font-extrabold text-sm ${
+                          row.payableGratuityAmount > 0 ? 'text-emerald-700' : 'text-slate-400'
+                        }`}
+                      >
+                        {formatInr(row.payableGratuityAmount)}
+                      </div>
+                      {row.ceilingApplied && (
+                        <div className="text-[10px] text-amber-700 font-semibold">
+                          Capped ₹20L (-{formatInr(row.cappedExcessAmount)})
                         </div>
-                        {row.tenure.continuousServiceAggregated && (
-                          <div className="text-[10px] text-indigo-700 font-sans font-semibold mt-0.5">
-                            Aggregated Subsidiary Tenure ({row.tenure.subsidiaryName || 'Prior Entity'})
-                          </div>
-                        )}
-                        {row.tenure.breakInServiceDetected && (
-                          <div className="text-[10px] text-amber-700 font-sans font-semibold mt-0.5">
-                            Transfer break detected (prior excluded)
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-right font-mono tabular-nums">
-                        <div className="font-bold text-slate-900">{formatInr(row.lastDrawnBasicPlusDa)}</div>
-                        <div className="text-[10px] text-slate-500">
-                          Basic {formatInr(row.lastDrawnBasic)}
-                          {row.lastDrawnDa > 0 ? ` + DA ${formatInr(row.lastDrawnDa)}` : ''}
-                        </div>
-                        {row.previousPreRevisionBasicPlusDa && (
-                          <div className="text-[10px] text-emerald-700">
-                            Revised from {formatInr(row.previousPreRevisionBasicPlusDa)}
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-4">
-                        {row.eligibilityRule === 'DEATH_IN_SERVICE_OVERRIDE' && (
-                          <span className="inline-block px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-mono font-bold text-[10px]">
-                            DEATH_IN_SERVICE
-                          </span>
-                        )}
-                        {row.eligibilityRule === 'ONE_YEAR_FIXED_TERM_NOV_2025' && (
-                          <span className="inline-block px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 font-semibold text-[10px]">
-                            Fixed-Term 1Y (Nov 2025)
-                          </span>
-                        )}
-                        {row.eligibilityRule === 'FIVE_YEAR_STANDARD' && (
-                          <span className="inline-block px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-semibold text-[10px]">
-                            Vested (5+ Years)
-                          </span>
-                        )}
-                        {row.eligibilityRule === 'NOT_ELIGIBLE' && (
-                          <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[10px]">
-                            Not Yet Vested
-                          </span>
-                        )}
-                        <div className="text-[10px] text-slate-500 mt-1 max-w-[200px]">
-                          {row.eligibilityNote}
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-700">
-                        {formatInr(row.provisionalAccruedAmount)}
-                        <div className="text-[10px] text-slate-400">
-                          +{formatInr(row.monthlyAccrualIncrement)}/mo
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-right font-mono tabular-nums">
-                        <div
-                          className={`font-extrabold text-sm ${
-                            row.payableGratuityAmount > 0 ? 'text-emerald-700' : 'text-slate-400'
-                          }`}
+                      )}
+                    </div>
+                  ),
+                  renderPriority: (row) => (
+                    <span
+                      className={`font-extrabold text-xs ${
+                        row.payableGratuityAmount > 0 ? 'text-emerald-700' : 'text-slate-400'
+                      }`}
+                    >
+                      {formatInr(row.payableGratuityAmount)}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'actions',
+                  header: 'Actions',
+                  align: 'right',
+                  isAction: true,
+                  minWidth: 'min-w-[165px]',
+                  render: (row) => {
+                    const workerObj = workers.find((w) => w.id === row.workerId);
+                    return (
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            selectWorkerForCalculator(row.workerId);
+                            setActiveTab('CALCULATOR');
+                          }}
+                          className="min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold text-[11px] cursor-pointer"
                         >
-                          {formatInr(row.payableGratuityAmount)}
-                        </div>
-                        {row.ceilingApplied && (
-                          <div className="text-[10px] text-amber-700 font-semibold">
-                            Capped at ₹20L (-{formatInr(row.cappedExcessAmount)})
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="inline-flex items-center gap-1.5">
+                          Simulate
+                        </button>
+                        {workerObj && (
                           <button
                             type="button"
                             onClick={() => {
-                              selectWorkerForCalculator(row.workerId);
-                              setActiveTab('CALCULATOR');
+                              selectWorkerForFnf(workerObj);
+                              setActiveTab('FNF');
                             }}
-                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold text-[11px] cursor-pointer"
+                            className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-[11px] cursor-pointer"
                           >
-                            Simulate
+                            Trigger FnF
                           </button>
-                          {workerObj && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                selectWorkerForFnf(workerObj);
-                                setActiveTab('FNF');
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-[11px] cursor-pointer"
-                            >
-                              Trigger FnF
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filteredLedger.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="py-10 text-center text-slate-500">
-                      No workers match the active filter criteria.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                        )}
+                      </div>
+                    );
+                  },
+                },
+              ]}
+            />
           </div>
         </div>
       )}

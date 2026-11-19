@@ -38,6 +38,8 @@ import {
   ScreenName,
   Worker,
 } from '../types/index';
+import { ResponsiveDataTable } from '../components/ResponsiveDataTable';
+import { TruncatedText } from '../components/TruncatedText';
 
 interface Props {
   onNavigate?: (screen: ScreenName) => void;
@@ -702,161 +704,266 @@ export const AnnualBonusScreen: React.FC<Props> = ({ onNavigate }) => {
             </div>
           </div>
 
-          {filteredItems.length === 0 ? (
-            <div className="p-10 text-center text-xs text-slate-500">
-              No workers match the selected filter criteria.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                    <th className="py-2.5 px-4">Employee</th>
-                    <th className="py-2.5 px-3 text-right">Monthly Gross vs ₹21k</th>
-                    <th className="py-2.5 px-3 text-right">Basic+DA → Cap ₹7k</th>
-                    <th className="py-2.5 px-3 text-right">FY Working Days</th>
-                    <th className="py-2.5 px-3 text-right">Statutory Bonus</th>
-                    <th className="py-2.5 px-3 text-right">Ex-Gratia (&gt;₹21k)</th>
-                    <th className="py-2.5 px-3 text-right">Sec 192 TDS</th>
-                    <th className="py-2.5 px-4 text-right">Net Off-Cycle Pay</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {filteredItems.map((item) => {
+          <div className="p-3 sm:p-4">
+            <ResponsiveDataTable
+              data={filteredItems}
+              keyExtractor={(item) => item.workerId}
+              stickyHeader={true}
+              maxHeightClassName="max-h-[65vh]"
+              tableMinWidthClassName="min-w-[1040px]"
+              paginationMode="pages"
+              initialPageSize={20}
+              pageSizeOptions={[10, 20, 50, 100]}
+              itemLabel="employees"
+              ariaLabel="Annual statutory bonus eligibility ledger"
+              emptyState={{
+                icon: <IndianRupee size={22} className="text-slate-400" />,
+                title: 'No workers match the selected filter criteria',
+                description: 'Try switching the eligibility filter or clearing your search query.',
+              }}
+              columns={[
+                {
+                  key: 'employee',
+                  header: 'Employee',
+                  stickyLeft: true,
+                  isPrimary: true,
+                  mobilePriority: true,
+                  minWidth: 'min-w-[205px]',
+                  render: (item) => {
                     const isOver21k = item.eligibilityStatus === 'DISQUALIFIED_ABOVE_21K';
+                    return (
+                      <div className="min-w-0">
+                        <TruncatedText
+                          text={item.workerName}
+                          modalTitle="Annual Bonus Profile"
+                          subtitle={`${item.designation} · ${item.department}`}
+                          details={[
+                            { label: 'Monthly Gross', value: `₹${item.monthlyGrossEarning.toLocaleString('en-IN')}`, mono: true },
+                            { label: 'Statutory Bonus', value: `₹${item.statutoryBonusAmount.toLocaleString('en-IN')}`, mono: true },
+                            { label: 'Net Off-Cycle Pay', value: `₹${item.netOffCyclePayout.toLocaleString('en-IN')}`, mono: true },
+                          ]}
+                          className="font-semibold text-slate-900 text-xs"
+                        />
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {item.designation} · {item.department}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[10px]">
+                          {item.isStatutoryEligible ? (
+                            <span className="text-emerald-700 font-semibold">
+                              STATUTORY ELIGIBLE{item.isPartYearProrated ? ' · PRO-RATED' : ''}
+                            </span>
+                          ) : isOver21k ? (
+                            <span className="text-amber-700 font-semibold">
+                              DISQUALIFIED (&gt; ₹21k) · Ex-Gratia
+                            </span>
+                          ) : (
+                            <span className="text-rose-700 font-semibold">
+                              INELIGIBLE (&lt; 30 Working Days)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  },
+                  renderPriority: (item) => (
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900 text-xs truncate">{item.workerName}</div>
+                      <div className="text-[10px] text-slate-500 truncate">{item.designation}</div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'eligibilityStatus',
+                  header: 'Eligibility',
+                  mobileLabel: 'Status',
+                  mobilePriority: true,
+                  hideInMobileCard: true,
+                  minWidth: 'min-w-[115px]',
+                  render: (item) => {
+                    const isOver21k = item.eligibilityStatus === 'DISQUALIFIED_ABOVE_21K';
+                    return item.isStatutoryEligible ? (
+                      <span className="text-[11px] font-bold text-emerald-700">Eligible</span>
+                    ) : isOver21k ? (
+                      <span className="text-[11px] font-bold text-amber-700">Ex-Gratia</span>
+                    ) : (
+                      <span className="text-[11px] font-bold text-rose-700">&lt;30 Days</span>
+                    );
+                  },
+                },
+                {
+                  key: 'monthlyGross',
+                  header: 'Monthly Gross vs ₹21k',
+                  mobileLabel: 'Monthly Gross',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[140px]',
+                  render: (item) => {
+                    const isOver21k = item.eligibilityStatus === 'DISQUALIFIED_ABOVE_21K';
+                    return (
+                      <div>
+                        <div className={isOver21k ? 'text-amber-700 font-semibold' : 'text-slate-900'}>
+                          ₹{item.monthlyGrossEarning.toLocaleString('en-IN')}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {isOver21k ? 'Above ₹21,000' : 'Within ₹21,000'}
+                        </div>
+                      </div>
+                    );
+                  },
+                },
+                {
+                  key: 'cappedBase',
+                  header: 'Basic+DA → Cap ₹7k',
+                  mobileLabel: 'Capped Base',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[135px]',
+                  render: (item) => (
+                    <div>
+                      <div className="text-slate-900 font-semibold">
+                        ₹{item.cappedMonthlyBonusWageBase.toLocaleString('en-IN')}/mo
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Actual ₹{item.monthlyBasicPlusDa.toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'fyDays',
+                  header: 'FY Working Days',
+                  mobileLabel: 'FY Days',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[135px]',
+                  render: (item) => (
+                    <div>
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          max={item.totalCalendarDaysInFy}
+                          value={workedDaysOverrideMap[item.workerId] ?? item.workedDaysInFy}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setWorkedDaysOverrideMap((prev) => {
+                              if (val === '') {
+                                const copy = { ...prev };
+                                delete copy[item.workerId];
+                                return copy;
+                              }
+                              return { ...prev, [item.workerId]: Number(val) };
+                            });
+                          }}
+                          aria-label={`Worked days in FY for ${item.workerName}`}
+                          className="w-14 h-7 px-1.5 text-right border border-slate-200 rounded bg-white text-xs font-mono tabular-nums text-slate-900 outline-none focus:border-slate-500"
+                        />
+                        <span className="text-slate-400">/{item.totalCalendarDaysInFy}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        {(item.prorationRatio * 100).toFixed(1)}% FY
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'statutoryBonus',
+                  header: 'Statutory Bonus',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[130px]',
+                  render: (item) => (
+                    <div>
+                      <div className="font-bold text-slate-900">
+                        ₹{item.statutoryBonusAmount.toLocaleString('en-IN')}
+                      </div>
+                      {item.isStatutoryEligible && (
+                        <div className="text-[10px] text-slate-400">
+                          {item.bonusRatePct}% on ₹{item.annualCappedBonusWageBase.toLocaleString('en-IN')}
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'exGratia',
+                  header: 'Ex-Gratia (>₹21k)',
+                  mobileLabel: 'Ex-Gratia',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[130px]',
+                  render: (item) => {
+                    const isOver21k = item.eligibilityStatus === 'DISQUALIFIED_ABOVE_21K';
+                    return isOver21k ? (
+                      <div>
+                        <input
+                          type="number"
+                          min={0}
+                          step={500}
+                          placeholder="0"
+                          value={exGratiaMap[item.workerId] || ''}
+                          onChange={(e) =>
+                            setExGratiaMap((prev) => ({
+                              ...prev,
+                              [item.workerId]: Math.max(0, Number(e.target.value) || 0),
+                            }))
+                          }
+                          aria-label={`Ex-Gratia amount for ${item.workerName}`}
+                          className="w-24 h-7 px-2 text-right border border-slate-300 rounded bg-white text-xs font-mono tabular-nums text-blue-800 font-semibold outline-none focus:border-blue-600"
+                        />
+                        <div className="text-[10px] text-slate-400 mt-0.5">Not in Form C/D</div>
+                      </div>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    );
+                  },
+                },
+                {
+                  key: 'tds',
+                  header: 'Sec 192 TDS',
+                  align: 'right',
+                  numeric: true,
+                  minWidth: 'min-w-[105px]',
+                  render: (item) => (
+                    <div>
+                      <div className={item.bonusTdsDeduction > 0 ? 'text-rose-700 font-semibold' : 'text-slate-500'}>
+                        ₹{item.bonusTdsDeduction.toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {item.taxRegime} · {item.effectiveTdsRatePct}%
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'netPay',
+                  header: 'Net Off-Cycle Pay',
+                  mobileLabel: 'Net Pay',
+                  align: 'right',
+                  numeric: true,
+                  isHeaderMetric: true,
+                  mobilePriority: true,
+                  minWidth: 'min-w-[125px]',
+                  render: (item) => {
                     const isBelow30Days = item.eligibilityStatus === 'PART_YEAR_BELOW_30_DAYS';
                     return (
-                      <tr key={item.workerId} className="hover:bg-slate-50/70">
-                        <td className="py-3 px-4 align-top">
-                          <div className="font-semibold text-slate-900">{item.workerName}</div>
-                          <div className="text-[11px] text-slate-500">
-                            {item.designation} · {item.department}
-                          </div>
-                          <div className="mt-1 font-mono text-[10px]">
-                            {item.isStatutoryEligible ? (
-                              <span className="text-emerald-700 font-semibold">
-                                STATUTORY ELIGIBLE{item.isPartYearProrated ? ' · PRO-RATED' : ''}
-                              </span>
-                            ) : isOver21k ? (
-                              <span className="text-amber-700 font-semibold">
-                                DISQUALIFIED (&gt; ₹21,000/mo) · Ex-Gratia Only
-                              </span>
-                            ) : (
-                              <span className="text-rose-700 font-semibold">
-                                INELIGIBLE (&lt; 30 Working Days)
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          <div className={isOver21k ? 'text-amber-700 font-semibold' : 'text-slate-900'}>
-                            ₹{item.monthlyGrossEarning.toLocaleString('en-IN')}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {isOver21k ? 'Above ₹21,000' : 'Within ₹21,000'}
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          <div className="text-slate-900 font-semibold">
-                            ₹{item.cappedMonthlyBonusWageBase.toLocaleString('en-IN')}/mo
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            Actual ₹{item.monthlyBasicPlusDa.toLocaleString('en-IN')}
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          <div className="inline-flex items-center justify-end gap-1">
-                            <input
-                              type="number"
-                              min={0}
-                              max={item.totalCalendarDaysInFy}
-                              value={workedDaysOverrideMap[item.workerId] ?? item.workedDaysInFy}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setWorkedDaysOverrideMap((prev) => {
-                                  if (val === '') {
-                                    const copy = { ...prev };
-                                    delete copy[item.workerId];
-                                    return copy;
-                                  }
-                                  return { ...prev, [item.workerId]: Number(val) };
-                                });
-                              }}
-                              aria-label={`Worked days in FY for ${item.workerName}`}
-                              className="w-14 h-7 px-1.5 text-right border border-slate-200 rounded bg-white text-xs font-mono tabular-nums text-slate-900 outline-none focus:border-slate-500"
-                            />
-                            <span className="text-slate-400">/{item.totalCalendarDaysInFy}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            {(item.prorationRatio * 100).toFixed(1)}% FY
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          <div className="font-bold text-slate-900">
-                            ₹{item.statutoryBonusAmount.toLocaleString('en-IN')}
-                          </div>
-                          {item.isStatutoryEligible && (
-                            <div className="text-[10px] text-slate-400">
-                              {item.bonusRatePct}% on ₹{item.annualCappedBonusWageBase.toLocaleString('en-IN')}
-                            </div>
-                          )}
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          {isOver21k ? (
-                            <div>
-                              <input
-                                type="number"
-                                min={0}
-                                step={500}
-                                placeholder="0"
-                                value={exGratiaMap[item.workerId] || ''}
-                                onChange={(e) =>
-                                  setExGratiaMap((prev) => ({
-                                    ...prev,
-                                    [item.workerId]: Math.max(0, Number(e.target.value) || 0),
-                                  }))
-                                }
-                                aria-label={`Ex-Gratia amount for ${item.workerName}`}
-                                className="w-24 h-7 px-2 text-right border border-slate-300 rounded bg-white text-xs font-mono tabular-nums text-blue-800 font-semibold outline-none focus:border-blue-600"
-                              />
-                              <div className="text-[10px] text-slate-400 mt-0.5">
-                                Not in Form C/D
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
-                        </td>
-
-                        <td className="py-3 px-3 text-right font-mono tabular-nums align-top">
-                          <div className={item.bonusTdsDeduction > 0 ? 'text-rose-700 font-semibold' : 'text-slate-500'}>
-                            ₹{item.bonusTdsDeduction.toLocaleString('en-IN')}
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {item.taxRegime} · {item.effectiveTdsRatePct}%
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono tabular-nums align-top">
-                          <div className="font-bold text-emerald-700">
-                            ₹{item.netOffCyclePayout.toLocaleString('en-IN')}
-                          </div>
-                          {isBelow30Days && (
-                            <div className="text-[10px] text-rose-600">Below 30d</div>
-                          )}
-                        </td>
-                      </tr>
+                      <div>
+                        <div className="font-bold text-emerald-700">
+                          ₹{item.netOffCyclePayout.toLocaleString('en-IN')}
+                        </div>
+                        {isBelow30Days && <div className="text-[10px] text-rose-600">Below 30d</div>}
+                      </div>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  },
+                  renderPriority: (item) => (
+                    <span className="font-bold text-xs text-emerald-700">
+                      ₹{item.netOffCyclePayout.toLocaleString('en-IN')}
+                    </span>
+                  ),
+                },
+              ]}
+            />
+          </div>
         </div>
       )}
 

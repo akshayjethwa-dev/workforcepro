@@ -12,6 +12,7 @@ import { ScreenName } from '../types/index';
 import { dbService } from '../services/db';
 import { inboxService } from '../services/inboxService';
 import { auth } from '../lib/firebase';
+import { TruncatedText } from './TruncatedText';
 
 interface Props {
   isOpen: boolean;
@@ -111,13 +112,13 @@ export const Sidebar: React.FC<Props> = ({
             if (!isDesktop) onClose(); 
           }
         }}
-        className={`flex items-center w-full px-3 py-2.5 rounded-xl transition-all duration-150 text-xs font-medium group ${
+        className={`flex items-center gap-2 w-full min-w-0 px-3 py-2.5 rounded-xl transition-all duration-150 text-fluid-xs font-medium group ${
           isActive 
             ? 'bg-blue-600 text-white shadow-xs font-semibold' 
             : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
         }`}
       >
-        <div className={`p-1.5 rounded-lg mr-2.5 shrink-0 transition-colors ${
+        <div className={`p-1.5 rounded-lg shrink-0 transition-colors ${
           isActive 
             ? 'bg-white/15 text-white' 
             : locked
@@ -126,15 +127,15 @@ export const Sidebar: React.FC<Props> = ({
         }`}>
           <Icon size={16} />
         </div>
-        <span className="flex-1 text-left truncate">{label}</span>
+        <span className="flex-1 min-w-0 text-left truncate" title={label}>{label}</span>
         {locked && availableOn && (
-          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/80 font-medium">
+          <span className="flex items-center gap-1 shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/80 font-medium">
             <Lock size={10} className="text-amber-600 shrink-0" />
-            <span>Available on {availableOn}</span>
+            <span>{availableOn}</span>
           </span>
         )}
         {!locked && badge && (
-          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+          <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-mono ${
             isActive ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
           }`}>
             {badge}
@@ -322,11 +323,29 @@ export const Sidebar: React.FC<Props> = ({
             <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center shrink-0">
               <User size={15} />
             </div>
-            <div className="min-w-0 truncate">
-              <div className="text-xs font-bold text-slate-900 truncate">
-                {(profile as any)?.name || profile?.email?.split('@')[0] || 'User'}
+            <div className="min-w-0 flex-1">
+              <div className="text-fluid-xs font-bold text-slate-900 min-w-0">
+                <TruncatedText
+                  text={(profile as any)?.name || profile?.email?.split('@')[0] || 'User'}
+                  modalTitle="Signed-In Account"
+                  details={[
+                    ...(profile?.email ? [{ label: 'Email Address', value: profile.email, breakAnywhere: true }] : []),
+                    ...(profile?.companyName ? [{ label: 'Organization', value: profile.companyName }] : []),
+                    ...(profile?.role ? [{ label: 'Role', value: profile.role }] : []),
+                  ]}
+                  className="text-fluid-xs font-bold text-slate-900"
+                />
               </div>
-              <div className="text-[10px] text-slate-400 truncate">{profile?.email}</div>
+              {profile?.email && (
+                <div className="text-[11px] text-slate-400 min-w-0">
+                  <TruncatedText
+                    text={profile.email}
+                    modalTitle="Account Email"
+                    breakAnywhere
+                    className="text-[11px] text-slate-400"
+                  />
+                </div>
+              )}
             </div>
           </div>
           <button

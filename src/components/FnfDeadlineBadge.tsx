@@ -33,18 +33,18 @@ export const FnfDeadlineBadge: React.FC<Props> = ({
 
   if (evalRes.state === 'DEADLINE_MET') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-mono text-[11px] font-bold tabular-nums">
-        <CheckCircle2 size={12} />
-        <span>{compact ? 'DEADLINE MET' : `DEADLINE MET · Due ${evalRes.effectiveDeadlineLabel}`}</span>
+      <span className="inline-flex items-center flex-wrap gap-1.5 max-w-full px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-mono text-fluid-2xs font-bold tabular-nums">
+        <CheckCircle2 size={12} className="shrink-0" />
+        <span className="break-words min-w-0">{compact ? 'DEADLINE MET' : `DEADLINE MET · Due ${evalRes.effectiveDeadlineLabel}`}</span>
       </span>
     );
   }
 
   if (evalRes.state === 'SETTLED_LATE') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 font-mono text-[11px] font-bold tabular-nums">
-        <Clock size={12} />
-        <span>{evalRes.countdownText}</span>
+      <span className="inline-flex items-center flex-wrap gap-1.5 max-w-full px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 font-mono text-fluid-2xs font-bold tabular-nums">
+        <Clock size={12} className="shrink-0" />
+        <span className="break-words min-w-0">{evalRes.countdownText}</span>
       </span>
     );
   }
@@ -53,10 +53,10 @@ export const FnfDeadlineBadge: React.FC<Props> = ({
     return (
       <span
         title={record.legalHold?.reason}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 font-mono text-[11px] font-bold tabular-nums"
+        className="inline-flex items-center flex-wrap gap-1.5 max-w-full px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 font-mono text-fluid-2xs font-bold tabular-nums"
       >
-        <PauseCircle size={12} className="text-amber-700" />
-        <span>
+        <PauseCircle size={12} className="text-amber-700 shrink-0" />
+        <span className="break-words min-w-0">
           {compact
             ? 'LEGAL_HOLD · PAUSED'
             : `PAUSED (LEGAL_HOLD · ${record.legalHold?.category || 'HOLD'})`}
@@ -67,9 +67,9 @@ export const FnfDeadlineBadge: React.FC<Props> = ({
 
   if (evalRes.state === 'BREACHED') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600 text-white border border-rose-700 font-mono text-[11px] font-bold tabular-nums animate-pulse">
-        <AlertTriangle size={12} />
-        <span>
+      <span className="inline-flex items-center flex-wrap gap-1.5 max-w-full px-2.5 py-1 rounded-lg bg-rose-600 text-white border border-rose-700 font-mono text-fluid-2xs font-bold tabular-nums animate-pulse">
+        <AlertTriangle size={12} className="shrink-0" />
+        <span className="break-words min-w-0">
           {compact
             ? `BREACHED (+${evalRes.overdueWholeDays}d · ₹${evalRes.accruedInterestPenalty.toLocaleString('en-IN')} int.)`
             : `${evalRes.countdownText} · 12% Int: ₹${evalRes.accruedInterestPenalty.toLocaleString('en-IN')}`}
@@ -81,14 +81,14 @@ export const FnfDeadlineBadge: React.FC<Props> = ({
   const urgent = evalRes.state === 'URGENT_DUE_SOON';
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-mono text-[11px] font-bold tabular-nums ${
+      className={`inline-flex items-center flex-wrap gap-1.5 max-w-full px-2.5 py-1 rounded-lg border font-mono text-fluid-2xs font-bold tabular-nums ${
         urgent
           ? 'bg-amber-50 text-amber-900 border-amber-300'
           : 'bg-blue-50 text-blue-800 border-blue-200'
       }`}
     >
-      <Clock size={12} />
-      <span>
+      <Clock size={12} className="shrink-0" />
+      <span className="break-words min-w-0">
         {compact
           ? `${evalRes.countdownText}`
           : `Sec 17(2) Timer: ${evalRes.countdownText} · Due ${evalRes.effectiveDeadlineLabel}`}

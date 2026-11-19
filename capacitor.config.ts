@@ -13,6 +13,10 @@ const config: CapacitorConfig = {
     },
     CapacitorUpdater: {
       autoUpdate: true, // Allows Capgo to automatically download and apply updates
+    },
+    Keyboard: {
+      resize: 'body',
+      resizeOnFullScreen: true,
     }
   }
 };

@@ -28,6 +28,8 @@ import {
   validateWorkerWageStructure,
 } from '../services/wageStructureValidationService';
 import { WageStructureValidatorCard } from './WageStructureValidatorCard';
+import { KeyboardAwareFormContainer } from './KeyboardAwareFormContainer';
+import { ModalDatePicker } from './ModalDatePicker';
 import { dbService } from '../services/db';
 import { useToast } from '../contexts/ToastContext';
 
@@ -350,10 +352,44 @@ export const WageStructureEditorModal: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Scrollable Body */}
-        <div className="p-6 overflow-y-auto space-y-5 flex-1">
+        {/* Keyboard-Aware Scrollable Body + Sticky Footer */}
+        <KeyboardAwareFormContainer
+          onFinalFieldSubmit={handleSave}
+          extraBottomPadding={40}
+          className="p-4 sm:p-6 space-y-5 flex-1"
+          footerClassName="px-4 sm:px-6 py-3.5 bg-slate-50 border-t border-slate-200"
+          stickyFooter={
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2.5 min-h-[2.75rem] rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-bold hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving || liveAudit.totalRemuneration <= 0}
+                className={`px-5 py-2.5 min-h-[2.75rem] rounded-xl text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50 ${
+                  liveAudit.isFiftyPercentNonCompliant
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                <span>
+                  {liveAudit.isFiftyPercentNonCompliant
+                    ? 'Save as NON_COMPLIANT'
+                    : 'Save Compliant Structure'}
+                </span>
+              </button>
+            </div>
+          }
+        >
           {/* Wage Type + State + Revision Effective Date */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
                 Wage Mode
@@ -362,7 +398,7 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setWageType('MONTHLY')}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold border flex items-center justify-center gap-1 cursor-pointer ${
+                  className={`py-2 px-2 min-h-11 rounded-xl text-xs font-bold border flex items-center justify-center gap-1 cursor-pointer ${
                     wageType === 'MONTHLY'
                       ? 'bg-blue-600 text-white border-blue-600'
                       : 'bg-white text-slate-600 border-slate-200'
@@ -373,7 +409,7 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => setWageType('DAILY')}
-                  className={`py-2 px-2 rounded-xl text-xs font-bold border flex items-center justify-center gap-1 cursor-pointer ${
+                  className={`py-2 px-2 min-h-11 rounded-xl text-xs font-bold border flex items-center justify-center gap-1 cursor-pointer ${
                     wageType === 'DAILY'
                       ? 'bg-blue-600 text-white border-blue-600'
                       : 'bg-white text-slate-600 border-slate-200'
@@ -389,7 +425,7 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                   Work State (Location)
                 </label>
                 <div className="relative">
-                  <MapPin size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                  <MapPin size={14} className="absolute left-3 top-3.5 text-slate-400" />
                   <select
                     value={stateName}
                     onChange={(e) => {
@@ -397,7 +433,7 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                       setStateName(nextState);
                       setWageZone(getDefaultZoneForState(nextState));
                     }}
-                    className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold bg-white outline-none focus:border-blue-600"
+                    className="w-full pl-8 pr-3 py-2.5 min-h-11 border border-slate-200 rounded-xl text-xs font-semibold bg-white outline-none focus:border-blue-600"
                   >
                     {INDIAN_STATES.map((st) => (
                       <option key={st} value={st}>
@@ -412,17 +448,18 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1 flex items-center gap-1">
                   <History size={11} /> Mid-Year Revision Date
                 </label>
-                <input
-                  type="date"
+                <ModalDatePicker
+                  fieldName="revisionDate"
+                  label="Mid-Year Revision Date"
+                  placeholder="Select revision date"
                   value={revisionDate}
-                  onChange={(e) => setRevisionDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono font-semibold bg-white outline-none focus:border-blue-600"
+                  onChange={(iso) => setRevisionDate(iso)}
                 />
               </div>
             </div>
 
             {/* Minimum Wage Classification Row: Zone, Skill Level, Scheduled Employment & Probation */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5">
               <div>
                 <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
                   Minimum Wage Zone
@@ -533,19 +570,21 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                   {liveAudit.statutoryMinimumWageDaily}/day)
                 </span>
               </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
                   Basic Pay ({unitLabel}) *
                 </label>
                 <div className="relative">
-                  <IndianRupee size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                  <IndianRupee size={14} className="absolute left-3 top-3.5 text-slate-400" />
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     min="0"
                     value={basic || ''}
                     onChange={(e) => setBasic(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                    className="w-full pl-8 pr-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                   />
                 </div>
               </div>
@@ -554,13 +593,15 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                   DA (Dearness Allow.)
                 </label>
                 <div className="relative">
-                  <IndianRupee size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                  <IndianRupee size={14} className="absolute left-3 top-3.5 text-slate-400" />
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     min="0"
                     value={da || ''}
                     onChange={(e) => setDa(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                    className="w-full pl-8 pr-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                   />
                 </div>
               </div>
@@ -569,13 +610,15 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                   Retaining Allowance
                 </label>
                 <div className="relative">
-                  <IndianRupee size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                  <IndianRupee size={14} className="absolute left-3 top-3.5 text-slate-400" />
                   <input
                     type="number"
+                    inputMode="decimal"
+                    enterKeyHint="next"
                     min="0"
                     value={retainingAllowance || ''}
                     onChange={(e) => setRetainingAllowance(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                    className="w-full pl-8 pr-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                   />
                 </div>
               </div>
@@ -587,17 +630,19 @@ export const WageStructureEditorModal: React.FC<Props> = ({
             <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
               2. Excluded Components ({unitLabel})
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <label className="text-[10px] font-bold text-slate-600 uppercase block mb-1">
                   HRA
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="next"
                   min="0"
                   value={hra || ''}
                   onChange={(e) => setHra(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                 />
               </div>
               <div>
@@ -606,10 +651,12 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="next"
                   min="0"
                   value={travel || ''}
                   onChange={(e) => setTravel(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                 />
               </div>
               <div>
@@ -618,10 +665,12 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="next"
                   min="0"
                   value={medical || ''}
                   onChange={(e) => setMedical(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                 />
               </div>
               <div>
@@ -630,10 +679,12 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="next"
                   min="0"
                   value={others || ''}
                   onChange={(e) => setOthers(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-slate-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-blue-600"
                 />
               </div>
             </div>
@@ -649,17 +700,19 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 Included in total CTC package display but explicitly excluded from Total Remuneration for the 50% threshold check.
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] font-bold text-indigo-900 uppercase block mb-1">
                   Employer PF ({unitLabel})
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="next"
                   min="0"
                   value={employerPf || ''}
                   onChange={(e) => setEmployerPf(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-indigo-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-indigo-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-indigo-600"
                 />
               </div>
               <div>
@@ -668,10 +721,12 @@ export const WageStructureEditorModal: React.FC<Props> = ({
                 </label>
                 <input
                   type="number"
+                  inputMode="decimal"
+                  enterKeyHint="done"
                   min="0"
                   value={employerGratuity || ''}
                   onChange={(e) => setEmployerGratuity(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-indigo-600"
+                  className="w-full px-3 py-2.5 min-h-11 bg-white border border-indigo-200 rounded-xl text-sm font-bold font-mono outline-none focus:border-indigo-600"
                 />
               </div>
             </div>
@@ -685,36 +740,7 @@ export const WageStructureEditorModal: React.FC<Props> = ({
             onAutoRebalance={handleAutoRebalance}
             onMatchMinimumWage={handleMatchMinimumWage}
           />
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-bold hover:bg-slate-100 cursor-pointer"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || liveAudit.totalRemuneration <= 0}
-            className={`px-5 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50 ${
-              liveAudit.isFiftyPercentNonCompliant
-                ? 'bg-rose-600 hover:bg-rose-700'
-                : 'bg-blue-600 hover:bg-blue-700'
-            }`}
-          >
-            {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-            <span>
-              {liveAudit.isFiftyPercentNonCompliant
-                ? 'Save as NON_COMPLIANT'
-                : 'Save Compliant Structure'}
-            </span>
-          </button>
-        </div>
+        </KeyboardAwareFormContainer>
       </div>
     </div>
   );

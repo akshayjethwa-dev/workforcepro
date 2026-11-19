@@ -14,6 +14,10 @@ import { SetupGuideModal } from './SetupGuideModal';
 import { A11yAuditModal } from './A11yAuditModal';
 import { WhatsAppChatSimulator } from './WhatsAppChatSimulator';
 import { dbService } from '../services/db';
+import {
+  scrollElementAboveKeyboard,
+  useKeyboardAwareLayout,
+} from '../hooks/useKeyboardAwareLayout';
 
 const FREE_TRIAL_DAYS = 7; 
 
@@ -62,6 +66,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const [isWhatsAppSimulatorOpen, setWhatsAppSimulatorOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const { keyboardHeight, isKeyboardOpen } = useKeyboardAwareLayout();
 
   const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
   const isReseller = profile?.role === 'RESELLER';
@@ -150,20 +156,20 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
             onNavigate(screen);
           }
         }}
-        className={`flex flex-col items-center justify-center flex-1 h-full min-h-[48px] py-1 transition-all duration-150 active:scale-95 ${
+        className={`flex flex-col items-center justify-center flex-1 min-w-0 h-full min-h-[3rem] px-0.5 py-1 transition-all duration-150 active:scale-95 ${
           isActive ? 'text-blue-600 font-semibold' : 'text-slate-500 hover:text-slate-800'
         }`}
       >
-        <div className={`p-1 rounded-xl transition-all ${isActive ? 'bg-blue-50 text-blue-600' : ''}`}>
+        <div className={`p-1 rounded-xl shrink-0 transition-all ${isActive ? 'bg-blue-50 text-blue-600' : ''}`}>
           <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
         </div>
-        <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-[64px]">{label}</span>
+        <span className="text-fluid-2xs mt-0.5 tracking-tight truncate max-w-full px-0.5">{label}</span>
       </button>
     );
   };
 
   return (
-    <div className="min-h-dvh bg-slate-50 text-slate-900 flex flex-col antialiased">
+    <div className="min-h-dvh w-full max-w-full overflow-x-clip bg-slate-50 text-slate-900 flex flex-col antialiased">
       
       {/* Mobile Drawer Navigation (Drawer on small screens) */}
       <Sidebar
@@ -179,19 +185,19 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
       {/* TOP NOTIFICATION BANNERS (Impersonation / Trial) */}
       {showImpersonationBanner && (
         <div
-          className="bg-rose-600 shrink-0 text-white text-xs font-semibold px-4 py-2 flex items-center justify-between z-50 shadow-xs"
+          className="bg-rose-600 shrink-0 text-white text-fluid-xs font-semibold px-3 sm:px-4 py-2 flex items-center justify-between flex-wrap gap-2 z-50 shadow-xs"
           style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 6px)' }}
         >
-          <div className="flex items-center gap-2">
-            <Shield size={16} className="text-rose-200" />
-            <span>Impersonating Organization: <strong>{profile?.companyName}</strong></span>
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <Shield size={16} className="text-rose-200 shrink-0" />
+            <span className="break-words min-w-0">Impersonating Organization: <strong>{profile?.companyName}</strong></span>
           </div>
           <button
             onClick={async () => {
               await stopImpersonating();
               onNavigate('SUPER_ADMIN_DASHBOARD');
             }}
-            className="bg-white/20 hover:bg-white/30 px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wider transition-colors"
+            className="bg-white/20 hover:bg-white/30 px-2.5 py-1 rounded text-fluid-2xs font-bold uppercase tracking-wider transition-colors shrink-0"
           >
             Exit Impersonation
           </button>
@@ -201,23 +207,23 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
       {showTrialBanner && (
         <div
           onClick={() => onNavigate('BILLING')}
-          className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 shrink-0 text-white text-xs font-medium px-4 py-2 flex items-center justify-between cursor-pointer hover:brightness-105 transition-all z-40 border-b border-indigo-900/20 shadow-xs"
+          className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 shrink-0 text-white text-fluid-xs font-medium px-3 sm:px-4 py-2 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:brightness-105 transition-all z-40 border-b border-indigo-900/20 shadow-xs"
           style={{ paddingTop: showImpersonationBanner ? '6px' : 'calc(env(safe-area-inset-top, 0px) + 6px)' }}
         >
-          <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-            <span className="text-white">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span className="text-white break-words min-w-0">
               <strong className="font-semibold text-white">{trialDaysLeft} {trialDaysLeft === 1 ? 'day' : 'days'} remaining</strong> in your {FREE_TRIAL_DAYS}-day free organization trial.
             </span>
           </div>
-          <span className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider transition-colors shrink-0 ml-3">
+          <span className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-0.5 rounded text-fluid-2xs font-bold uppercase tracking-wider transition-colors shrink-0">
             Upgrade Plan
           </span>
         </div>
       )}
 
       {/* WORKSPACE CONTAINER: Full Desktop Layout with Sidebar + Fluid Main */}
-      <div className="flex-1 flex w-full relative">
+      <div className="flex-1 flex w-full max-w-full min-w-0 relative">
         
         {/* Desktop Persistent Sidebar (Only visible on lg: screens >= 1024px) */}
         <Sidebar
@@ -231,18 +237,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
         />
 
         {/* MAIN VIEWPORT CANVAS */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-dvh bg-slate-50">
+        <div className="flex-1 flex flex-col min-w-0 w-full max-w-full min-h-dvh bg-slate-50">
           
           {/* TOP APP BAR (Dual Viewport: Responsive Header conforming to the 3-Zone Contract) */}
-          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 py-3 transition-shadow shadow-xs">
-            <div className="flex items-center justify-between gap-4 max-w-7xl mx-auto">
+          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-2.5 sm:px-6 py-2.5 sm:py-3 transition-shadow shadow-xs w-full max-w-full">
+            <div className="flex items-center justify-between gap-1.5 sm:gap-4 max-w-7xl mx-auto min-w-0">
               
               {/* Zone 1: Brand & Breadcrumbs */}
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
                 {/* Mobile Hamburger Button */}
                 <button 
                   onClick={() => setSidebarOpen(true)}
-                  className="lg:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
+                  className="lg:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors min-w-[2.5rem] min-h-[2.5rem] flex items-center justify-center shrink-0"
                   aria-label="Open navigation menu"
                 >
                   <Menu size={22} />
@@ -284,21 +290,21 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
               </div>
 
               {/* Zone 3: Quick Action, Notifications & User Avatar */}
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                 {/* Mobile Search Button */}
                 <button
                   onClick={() => setCommandPaletteOpen(true)}
-                  className="md:hidden p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center"
+                  className="md:hidden p-1.5 sm:p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors min-w-[2.25rem] min-h-[2.25rem] flex items-center justify-center"
                   aria-label="Search and command palette"
                 >
-                  <Search size={19} />
+                  <Search size={18} />
                 </button>
 
                 {/* High-Contrast Sunlight Field Mode Quick Switch */}
                 <button
                   type="button"
                   onClick={toggleFieldMode}
-                  className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer min-h-[38px] ${
+                  className={`inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-fluid-xs font-bold border transition-all active:scale-95 cursor-pointer min-h-[2.25rem] ${
                     isFieldMode
                       ? 'bg-black text-white border-black ring-2 ring-amber-400 shadow-md font-black'
                       : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300 shadow-2xs'
@@ -307,7 +313,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   aria-pressed={isFieldMode}
                   aria-label="Toggle High-Contrast Field Mode"
                 >
-                  <Sun size={15} className={isFieldMode ? "text-amber-300" : "text-amber-600"} />
+                  <Sun size={15} className={`${isFieldMode ? "text-amber-300" : "text-amber-600"} shrink-0`} />
                   <span className="hidden sm:inline">
                     {isFieldMode ? 'Field Mode (ON)' : 'Field Mode'}
                   </span>
@@ -317,7 +323,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                 <button
                   type="button"
                   onClick={() => setA11yModalOpen(true)}
-                  className="hidden md:inline-flex p-2 text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 rounded-xl transition-colors min-w-[38px] min-h-[38px] items-center justify-center border border-slate-300 shadow-2xs"
+                  className="hidden md:inline-flex p-2 text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 rounded-xl transition-colors min-w-[2.375rem] min-h-[2.375rem] items-center justify-center border border-slate-300 shadow-2xs"
                   title="Run Automated Accessibility (axe-core) Audit"
                   aria-label="Accessibility and contrast audit"
                 >
@@ -328,7 +334,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                 {!isSuperAdmin && (
                   <button
                     onClick={() => setGuideOpen(true)}
-                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-semibold shadow-2xs transition-all active:scale-95"
+                    className="hidden xs:inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 min-h-[2.25rem] bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 border border-indigo-200/80 rounded-xl text-fluid-xs font-semibold shadow-2xs transition-all active:scale-95"
                     title="Factory Workflow & Setup Guide"
                   >
                     <BookOpen size={14} className="text-indigo-600 shrink-0" />
@@ -341,12 +347,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   <button
                     type="button"
                     onClick={() => setWhatsAppSimulatorOpen(true)}
-                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 min-h-[2.25rem] bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-300 rounded-xl text-fluid-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
                     title="WhatsApp Attendance & Notification Bot Simulator (E11)"
                   >
                     <MessageSquare size={14} className="text-emerald-600 shrink-0" />
                     <span className="hidden sm:inline">WhatsApp Bot</span>
-                    <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
                   </button>
                 )}
 
@@ -354,10 +360,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                 {!isSuperAdmin && !isReseller && limits?.kioskEnabled !== false && (
                   <button
                     onClick={() => onNavigate('ATTENDANCE_KIOSK')}
-                    className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors active:scale-95"
+                    className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[2.25rem] bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-fluid-xs font-semibold shadow-xs transition-colors active:scale-95"
                     title="Launch Face & QR Attendance Kiosk"
                   >
-                    <Camera size={14} />
+                    <Camera size={14} className="shrink-0" />
                     <span>Launch Kiosk</span>
                   </button>
                 )}
@@ -367,22 +373,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
                   <div className="relative" ref={notifRef}>
                     <button
                       onClick={() => setShowNotifications(!showNotifications)}
-                      className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors relative min-w-[40px] min-h-[40px] flex items-center justify-center"
+                      className="p-1.5 sm:p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition-colors relative min-w-[2.25rem] min-h-[2.25rem] flex items-center justify-center"
                       aria-label="Notifications"
                     >
-                      <Bell size={19} />
+                      <Bell size={18} />
                       {unreadCount > 0 && (
-                        <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-white" />
+                        <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-white" />
                       )}
                     </button>
 
                     {showNotifications && (
-                      <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-50 text-slate-800 animate-in fade-in slide-in-from-top-2">
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/70">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-900">Notifications</span>
+                      <div className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-1.25rem))] bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-50 text-slate-800 animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-center justify-between gap-2 flex-wrap px-4 py-3 border-b border-slate-100 bg-slate-50/70">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-fluid-xs font-bold text-slate-900">Notifications</span>
                             {unreadCount > 0 && (
-                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded-md font-mono">
+                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-fluid-2xs font-bold rounded-md font-mono shrink-0">
                                 {unreadCount} new
                               </span>
                             )}
@@ -453,16 +459,37 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentScreen, onNavig
           </header>
 
           {/* MAIN WORKSPACE CONTENT VIEWPORT */}
-          <main className="flex-1 overflow-y-auto scroll-smooth w-full">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 pb-24 lg:pb-8">
+          <main
+            ref={mainRef}
+            onFocusCapture={(e) => {
+              const target = e.target as HTMLElement | null;
+              if (!target) return;
+              const tag = target.tagName;
+              if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+                scrollElementAboveKeyboard(target, mainRef.current, keyboardHeight);
+              }
+            }}
+            className="flex-1 overflow-y-auto overflow-x-clip scroll-smooth w-full max-w-full min-w-0"
+          >
+            <div
+              className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-5 pb-24 lg:pb-8 w-full min-w-0"
+              style={{
+                paddingBottom: isKeyboardOpen
+                  ? `calc(${keyboardHeight}px + 7.5rem)`
+                  : undefined,
+              }}
+            >
               {children}
             </div>
           </main>
 
-          {/* MOBILE BOTTOM NAVIGATION BAR (Hidden on lg: screens >= 1024px) */}
+          {/* MOBILE BOTTOM NAVIGATION BAR (Hidden on lg: screens >= 1024px or when soft keyboard is open) */}
           {!isSuperAdmin && (
             <nav 
-              className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/80 z-30 shadow-lg"
+              aria-hidden={isKeyboardOpen}
+              className={`lg:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/80 z-30 shadow-lg transition-transform duration-200 ease-out ${
+                isKeyboardOpen ? 'translate-y-full pointer-events-none opacity-0' : 'translate-y-0 opacity-100'
+              }`}
               style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
             >
               <div className="flex items-center justify-around h-16 max-w-md mx-auto px-2">

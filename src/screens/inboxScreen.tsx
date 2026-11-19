@@ -12,6 +12,7 @@ import {
   InboxAuditEntry, ScreenName 
 } from '../types/index';
 import { inboxService, ManagerDelegation } from '../services/inboxService';
+import { TruncatedText } from '../components/TruncatedText';
 
 interface Props {
   onNavigate?: (screen: ScreenName) => void;
@@ -217,30 +218,30 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
     <div className="min-h-screen bg-slate-50 pb-24">
       {/* Top Header */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-6xl mx-auto px-4 py-4 sm:px-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0">
-                <Inbox size={26} />
+        <div className="max-w-6xl mx-auto px-3 py-3.5 sm:px-6 sm:py-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm shrink-0">
+                <Inbox size={24} />
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center flex-wrap gap-2">
+                  <h1 className="text-fluid-xl font-black text-slate-900 tracking-tight break-words">
                     Unified Action Inbox
                   </h1>
                   {pendingItems.length > 0 && (
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-rose-600 text-white animate-pulse">
+                    <span className="px-2.5 py-0.5 rounded-full text-fluid-2xs font-extrabold bg-rose-600 text-white animate-pulse shrink-0">
                       {pendingItems.length} Pending
                     </span>
                   )}
                 </div>
-                <p className="text-xs sm:text-sm text-slate-500 font-medium">
+                <p className="text-fluid-xs text-slate-500 font-medium break-words">
                   One-tap approvals, attendance exceptions, and shift escalations
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 self-end sm:self-auto">
+            <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto">
               <button
                 onClick={() => setShowDelegationModal(true)}
                 className="h-10 px-3 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-colors"
@@ -347,19 +348,19 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
 
                 <button
                   onClick={handleBulkApprove}
-                  className="h-14 sm:h-12 px-6 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-sm rounded-xl shadow-md flex items-center justify-center gap-2 transition-transform active:scale-98 shrink-0 min-w-[200px]"
+                  className="min-h-[3rem] py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black text-fluid-sm rounded-xl shadow-md flex items-center justify-center gap-2 transition-transform active:scale-98 w-full sm:w-auto sm:min-w-[12.5rem]"
                 >
-                  <CheckCircle2 size={18} />
-                  <span>Approve All {lowRiskItems.length} Advances</span>
+                  <CheckCircle2 size={18} className="shrink-0" />
+                  <span className="break-words">Approve All {lowRiskItems.length} Advances</span>
                 </button>
               </div>
             )}
 
             {/* Filters Bar */}
             <div className="p-3 bg-white border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 shrink-0">
-                  <Filter size={14} /> Type:
+              <div className="flex items-center flex-wrap gap-1.5 w-full sm:w-auto min-w-0">
+                <span className="text-fluid-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 shrink-0">
+                  <Filter size={14} className="shrink-0" /> Type:
                 </span>
                 {[
                   { id: 'ALL', label: 'All' },
@@ -372,7 +373,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                   <button
                     key={f.id}
                     onClick={() => { setTypeFilter(f.id); setCurrentPage(1); }}
-                    className={`h-9 px-3 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
+                    className={`min-h-[2.25rem] px-3 py-1.5 rounded-lg text-fluid-xs font-bold transition-colors ${
                       typeFilter === f.id
                         ? 'bg-blue-600 text-white shadow-xs'
                         : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -383,15 +384,15 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 ))}
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">
+              <div className="flex items-center flex-wrap gap-1.5 w-full sm:w-auto sm:justify-end">
+                <span className="text-fluid-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">
                   Urgency:
                 </span>
                 {['ALL', 'URGENT', 'HIGH', 'NORMAL'].map(u => (
                   <button
                     key={u}
                     onClick={() => { setUrgencyFilter(u); setCurrentPage(1); }}
-                    className={`h-9 px-2.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
+                    className={`min-h-[2.25rem] px-2.5 py-1.5 rounded-lg text-fluid-xs font-bold transition-colors ${
                       urgencyFilter === u
                         ? 'bg-slate-900 text-white'
                         : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -579,40 +580,49 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                           </div>
                         )}
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 font-medium">
-                          <span className="flex items-center gap-1 text-slate-800 font-bold">
-                            <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-fluid-xs text-slate-500 font-medium min-w-0">
+                          <span className="flex items-center gap-1.5 text-slate-800 font-bold min-w-0 max-w-full">
+                            <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold shrink-0">
                               {item.workerName.charAt(0)}
                             </span>
-                            {item.workerName}
+                            <TruncatedText
+                              text={item.workerName}
+                              modalTitle="Action Request Worker"
+                              subtitle={item.workerDesignation || item.title}
+                              details={[
+                                ...(item.workerPhone ? [{ label: 'Phone', value: item.workerPhone, mono: true }] : []),
+                                { label: 'Request Type', value: typeMeta.label },
+                              ]}
+                              className="font-bold text-slate-800 text-fluid-xs max-w-[14rem]"
+                            />
                           </span>
                           {item.workerDesignation && (
-                            <span>• {item.workerDesignation}</span>
+                            <span className="break-words">• {item.workerDesignation}</span>
                           )}
                           {item.workerPhone && (
-                            <span className="flex items-center gap-1">
-                              <Phone size={11} className="text-slate-400" />
+                            <span className="flex items-center gap-1 font-mono tabular-nums break-all [overflow-wrap:anywhere]">
+                              <Phone size={11} className="text-slate-400 shrink-0" />
                               {item.workerPhone}
                             </span>
                           )}
                           {item.details?.distanceMeters && (
                             <span className="flex items-center gap-1 text-amber-700 font-bold">
-                              <MapPin size={12} />
+                              <MapPin size={12} className="shrink-0" />
                               {item.details.distanceMeters}m outside geofence
                             </span>
                           )}
                         </div>
                       </div>
 
-                      {/* Right Action Buttons (Anchored, >= 56px touch target) */}
-                      <div className="flex items-center gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
+                      {/* Right Action Buttons (Anchored, >= 56px touch target, flex-wrap safe) */}
+                      <div className="flex flex-wrap items-center gap-2 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
                         {/* Review Button */}
                         <button
                           onClick={() => setReviewingItem(item)}
-                          className="h-14 min-w-[56px] px-4 rounded-xl border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-800 font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors"
+                          className="flex-1 sm:flex-none min-h-[3.25rem] min-w-[3.5rem] px-3.5 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-800 font-bold text-fluid-xs flex items-center justify-center gap-1.5 transition-colors"
                           title="Open detailed side inspection drawer"
                         >
-                          <Eye size={18} className="text-slate-600" />
+                          <Eye size={17} className="text-slate-600 shrink-0" />
                           <span>Review</span>
                         </button>
 
@@ -620,9 +630,9 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                         <button
                           disabled={isProcessing}
                           onClick={() => handleReject(item)}
-                          className="h-14 min-w-[56px] px-4 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                          className="flex-1 sm:flex-none min-h-[3.25rem] min-w-[3.5rem] px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 font-bold text-fluid-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
                         >
-                          <XCircle size={18} />
+                          <XCircle size={17} className="shrink-0" />
                           <span>Reject</span>
                         </button>
 
@@ -630,17 +640,17 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                         <button
                           disabled={isProcessing || item.isWaitingSync}
                           onClick={() => handleApprove(item)}
-                          className={`h-14 min-w-[110px] px-5 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-2 transition-transform active:scale-98 ${
+                          className={`flex-1 sm:flex-none min-h-[3.25rem] sm:min-w-[7rem] px-4 py-2 rounded-xl font-black text-fluid-sm text-white shadow-sm flex items-center justify-center gap-1.5 transition-transform active:scale-98 ${
                             item.isWaitingSync
                               ? 'bg-slate-400 cursor-not-allowed'
                               : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
                           }`}
                         >
                           {isProcessing ? (
-                            <RefreshCw size={18} className="animate-spin" />
+                            <RefreshCw size={18} className="animate-spin shrink-0" />
                           ) : (
                             <>
-                              <CheckCircle2 size={18} />
+                              <CheckCircle2 size={17} className="shrink-0" />
                               <span>Approve</span>
                             </>
                           )}

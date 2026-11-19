@@ -19,7 +19,7 @@ import { WorkerAccessModal } from '../components/WorkerAccessModal';
 import { magicLinkService } from '../services/magicLinkService';
 import { validateWorkerWageStructure } from '../services/wageStructureValidationService';
 import { WageStructureEditorModal } from '../components/WageStructureEditorModal';
-import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
+import { WorkerCard } from '../components/WorkerCard';
 import {
   calculateWorkerGratuity,
   getFnfSettlements,
@@ -330,31 +330,31 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     <div className="space-y-6 pb-12">
       
       {/* TOOLBAR HEADER */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Workers Directory</h1>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-            <span>Manage factory personnel & pay rates</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Workers Directory</h1>
+          <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+            <span>Manage factory personnel &amp; pay rates</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
-            <span className="font-mono tabular-nums text-slate-600">{filteredWorkers.length} of {workers.length} active</span>
+            <span className="font-mono tabular-nums text-slate-600">{filteredWorkers.length} of {workers.length} listed</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
           <button 
             onClick={() => setShowBulkImport(true)}
-            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-xs shadow-xs transition-all active:scale-95"
+            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0"
             title="Import workers in bulk via CSV"
           >
-            <Upload size={15} />
-            <span>Bulk CSV Import</span>
+            <Upload size={15} className="shrink-0" />
+            <span className="break-words">Bulk CSV Import</span>
           </button>
           <button 
             onClick={handleAddWorkerClick}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs transition-all active:scale-95 shrink-0"
+            className="inline-flex items-center justify-center gap-2 min-h-[2.5rem] px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0"
           >
-            <Plus size={16} />
-            <span>Add New Worker</span>
+            <Plus size={16} className="shrink-0" />
+            <span className="break-words">Add New Worker</span>
           </button>
         </div>
       </div>
@@ -366,46 +366,47 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
       />
 
       {/* FILTER & SEARCH ROW */}
-      <div className="flex flex-col sm:flex-row gap-2.5">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3.5 top-3 text-slate-400" size={17} />
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2.5 min-w-0">
+        <div className="flex-1 min-w-0 sm:min-w-[14rem] relative">
+          <Search className="absolute left-3.5 top-3 text-slate-400 pointer-events-none" size={17} />
           <input 
             type="text" 
             placeholder="Search by worker name, phone number, or role..." 
-            className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all shadow-xs"
+            className="w-full min-h-[2.75rem] pl-10 pr-9 py-2.5 bg-white border border-slate-200 rounded-xl text-fluid-sm text-slate-800 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all shadow-xs"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
           {searchTerm && (
             <button 
               onClick={() => setSearchTerm('')}
-              className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 p-0.5"
+              aria-label="Clear search"
+              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-1"
             >
               <X size={15} />
             </button>
           )}
         </div>
 
-        {/* STATUS FILTER PILLS */}
-        <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs font-semibold shrink-0">
+        {/* STATUS FILTER SEGMENTED CONTROL: wraps gracefully on 320px & 200% zoom */}
+        <div className="flex flex-wrap bg-slate-100 p-1 rounded-xl border border-slate-200 text-fluid-xs font-semibold gap-1 max-w-full">
           <button
             type="button"
             onClick={() => setStatusFilter('ALL')}
-            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'ALL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg transition-all min-w-0 ${statusFilter === 'ALL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
           >
             All ({workers.length})
           </button>
           <button
             type="button"
             onClick={() => setStatusFilter('ACTIVE')}
-            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'ACTIVE' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg transition-all min-w-0 ${statusFilter === 'ACTIVE' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Active ({workers.filter(w => !isWorkerExited(w)).length})
           </button>
           <button
             type="button"
             onClick={() => setStatusFilter('INACTIVE')}
-            className={`px-3 py-1.5 rounded-lg transition-all ${statusFilter === 'INACTIVE' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg transition-all min-w-0 ${statusFilter === 'INACTIVE' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Exited ({workers.filter(w => isWorkerExited(w)).length})
           </button>
@@ -415,7 +416,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
           <select
             value={selectedBranch}
             onChange={e => setSelectedBranch(e.target.value)}
-            className="bg-white border border-slate-200 text-xs font-semibold text-slate-700 py-2.5 px-3 rounded-xl shadow-xs outline-none hover:border-slate-300 transition-colors"
+            className="w-full sm:w-auto min-h-[2.75rem] bg-white border border-slate-200 text-fluid-xs font-semibold text-slate-700 py-2.5 px-3 rounded-xl shadow-xs outline-none hover:border-slate-300 transition-colors"
           >
             <option value="ALL">All Branches</option>
             {settings.branches.map(b => (
@@ -443,17 +444,8 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
         </div>
       ) : (
         /* RESPONSIVE DUAL-VIEWPORT WORKER GRID: 1 column on phone, 2 cols on tablet, 3 cols on desktop */
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 min-w-0">
           {filteredWorkers.map(worker => {
-            const hasFace = Boolean(worker.faceDescriptor);
-            const daily = worker.dailyWage ?? (worker.wageConfig?.type === 'DAILY' ? worker.wageConfig?.amount : undefined);
-            const monthly = worker.monthlySalary ?? (worker.wageConfig?.type === 'MONTHLY' ? worker.wageConfig?.amount : undefined);
-            const rateStr = daily 
-              ? `₹${daily.toLocaleString()} / day` 
-              : monthly 
-              ? `₹${monthly.toLocaleString()} / mo` 
-              : 'Rate unassigned';
-
             const isInactive = isWorkerExited(worker);
             const workerTokens = magicLinkService.getTokensForWorker(worker.id);
             const activeTokensCount = workerTokens.active.length;
@@ -465,281 +457,38 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
               .sort((a, b) => b.exitDate.localeCompare(a.exitDate))[0];
 
             return (
-              <div 
-                key={worker.id} 
-                className={`bg-white p-5 rounded-2xl border transition-all flex flex-col justify-between group ${
-                  isInactive 
-                    ? 'border-rose-200/80 bg-rose-50/10 opacity-95' 
-                    : 'border-slate-200/80 hover:border-slate-300 shadow-xs'
-                }`}
-              >
-                <div>
-                  {/* WORKER HEADER ROW */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden relative shrink-0 flex items-center justify-center">
-                        {worker.photoUrl ? (
-                          <img 
-                            src={worker.photoUrl} 
-                            alt={worker.name} 
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover" 
-                            onError={(e) => {
-                              (e.currentTarget as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        ) : (
-                          <span className="text-base font-bold text-slate-600 font-mono">
-                            {worker.name.charAt(0).toUpperCase()}
-                          </span>
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-sm text-slate-900 truncate group-hover:text-blue-600 transition-colors">
-                            {worker.name}
-                          </h3>
-                          {isInactive ? (
-                            <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200">
-                              {worker.status === 'RESIGNED'
-                                ? 'Resigned'
-                                : worker.status === 'TERMINATED'
-                                ? 'Terminated'
-                                : 'Exited'}
-                            </span>
-                          ) : (
-                            <span className="shrink-0 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
-                              Active
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-slate-500 truncate mt-0.5">
-                          {worker.designation || 'Factory Operator'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* ACTIONS: Edit, Exit/Reactivate & Delete */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button 
-                        onClick={() => onEditWorker(worker)}
-                        title="Edit profile & wage"
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-
-                      {/* WORKER-EXIT / REACTIVATE BUTTON */}
-                      {isInactive ? (
-                        <button
-                          onClick={() => handleReactivateWorker(worker)}
-                          title="Reactivate worker profile"
-                          className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <RotateCcw size={15} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            const initReason = worker.exitReason || 'RESIGNATION';
-                            setExitDateInput(worker.dateOfExit || new Date().toISOString().split('T')[0]);
-                            setExitReasonInput(initReason);
-                            setExitDeathOverride(Boolean(worker.deathInService || initReason === 'DEATH_IN_SERVICE'));
-                            setExitNomineeName(worker.nomineeName || '');
-                            setExitNoticeRequiredDays(String(worker.noticePeriodDays ?? (initReason === 'RESIGNATION' ? (worker.category === 'Permanent' ? 30 : 15) : 0)));
-                            setExitNoticeServedDays('0');
-                            setExitNoticeWaived(false);
-                            setExitLeaveDays(String(worker.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0));
-                            setWorkerToExit(worker);
-                          }}
-                          title="Mark Resigned / Terminated & Trigger Automated FnF"
-                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <UserX size={15} />
-                        </button>
-                      )}
-                      
-                      {profile?.role === 'FACTORY_OWNER' && (
-                        <button 
-                          onClick={() => setWorkerToDelete(worker)}
-                          title="Remove worker"
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* WORKER METADATA STRIP */}
-                  <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs text-slate-600">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400 text-[11px]">Pay Rate</span>
-                      <span className="font-mono font-bold text-slate-900 tabular-nums">
-                        {rateStr}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400 text-[11px]">Phone</span>
-                      <span className="font-mono text-slate-600 tabular-nums">
-                        {worker.phone || 'No phone recorded'}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-1 text-[11px]">
-                      <span className="text-slate-400">Biometric Verification</span>
-                      <span className={`font-medium flex items-center gap-1 ${hasFace ? 'text-emerald-700' : 'text-slate-500'}`}>
-                        {hasFace ? (
-                          <>
-                            <UserCheck size={12} className="text-emerald-600" />
-                            <span>Face Enrolled</span>
-                          </>
-                        ) : (
-                          <>
-                            <Camera size={12} className="text-slate-400" />
-                            <span>QR Code Only</span>
-                          </>
-                        )}
-                      </span>
-                    </div>
-
-                    {latestFnf && (
-                      <div className="pt-2 border-t border-slate-100 space-y-1.5">
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <FnfDeadlineBadge record={latestFnf} orgSettings={settings} compact />
-                          {onOpenFnfGratuity && (
-                            <button
-                              type="button"
-                              onClick={() => onOpenFnfGratuity(worker.id)}
-                              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 cursor-pointer"
-                            >
-                              Open FnF ({latestFnf.status}) →
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {wageAudit && wageAudit.hasAnyViolation && (
-                      <div className="pt-1.5 flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-1 flex-wrap">
-                          {wageAudit.isFiftyPercentNonCompliant && (
-                            <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 font-mono font-bold text-[10px]">
-                              NON_COMPLIANT · Gap ₹{wageAudit.gapAmount.toLocaleString('en-IN')}
-                            </span>
-                          )}
-                          {wageAudit.isMinimumWageViolation && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-mono font-bold text-[10px]">
-                              MIN_WAGE
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setWageStructureWorker(worker)}
-                          className="text-[11px] font-bold text-blue-600 hover:text-blue-800 cursor-pointer"
-                        >
-                          Fix Structure
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* BOTTOM ACTIONS: EWA Accrued Wages + Kharchi / Advance */}
-                <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
-                  <button 
-                    onClick={() => setEwaModalWorker(worker)}
-                    className="py-2 px-2.5 rounded-xl text-xs font-bold transition-all active:scale-98 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs cursor-pointer"
-                    title="Real-time Accrued Wage Balance & EWA Withdrawal"
-                  >
-                    <IndianRupee size={13} className="text-emerald-700" />
-                    <span>EWA Access</span>
-                  </button>
-
-                  <button 
-                    onClick={() => handleOpenAdvance(worker)}
-                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition-all active:scale-98 flex items-center justify-center gap-1 ${
-                      limits?.allowancesAndDeductionsEnabled 
-                        ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 cursor-pointer' 
-                        : 'bg-slate-50 text-slate-400 border border-slate-200 cursor-not-allowed'
-                    }`}
-                  >
-                    <span>Kharchi</span>
-                  </button>
-                </div>
-
-                {/* ONE-TAP MAGIC LINK ACTIONS (PAYSLIP, SCHEDULE, ATTENDANCE SUMMARY) */}
-                <div className="mt-3 pt-2.5 border-t border-slate-100">
-                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                    <span className="flex items-center gap-1 text-slate-500">
-                      <Sparkles size={11} className="text-amber-500" />
-                      <span>One-Tap Magic Links</span>
-                    </span>
-                    <span className="text-[10px] text-emerald-600 font-semibold lowercase">WhatsApp • SMS</span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                    <button
-                      type="button"
-                      disabled={isInactive}
-                      onClick={() => setMagicLinkWorker({ worker, scope: 'PAYSLIP' })}
-                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-blue-50/80 hover:bg-blue-100 disabled:opacity-40 text-blue-700 border border-blue-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
-                      title={isInactive ? 'Worker is inactive' : 'Send Payslip to Worker via WhatsApp or SMS'}
-                    >
-                      <IndianRupee size={11} className="text-blue-600" />
-                      <span>Payslip</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isInactive}
-                      onClick={() => setMagicLinkWorker({ worker, scope: 'SCHEDULE' })}
-                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-indigo-50/80 hover:bg-indigo-100 disabled:opacity-40 text-indigo-700 border border-indigo-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
-                      title={isInactive ? 'Worker is inactive' : 'Send Duty Schedule to Worker via WhatsApp or SMS'}
-                    >
-                      <Calendar size={11} className="text-indigo-600" />
-                      <span>Schedule</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isInactive}
-                      onClick={() => setMagicLinkWorker({ worker, scope: 'ATTENDANCE_SUMMARY' })}
-                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-emerald-50/80 hover:bg-emerald-100 disabled:opacity-40 text-emerald-700 border border-emerald-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
-                      title={isInactive ? 'Worker is inactive' : 'Send Attendance Summary to Worker via WhatsApp or SMS'}
-                    >
-                      <Clock size={11} className="text-emerald-600" />
-                      <span>Attendance</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isInactive}
-                      onClick={() => setMagicLinkWorker({ worker, scope: 'PUNCH' })}
-                      className="py-1.5 px-2 rounded-xl text-[11px] font-semibold bg-purple-50/80 hover:bg-purple-100 disabled:opacity-40 text-purple-700 border border-purple-200/80 flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-2xs"
-                      title={isInactive ? 'Worker is inactive' : 'Send One-Tap Mobile Punch Link to Worker via WhatsApp or SMS'}
-                    >
-                      <Smartphone size={11} className="text-purple-600" />
-                      <span>Punch</span>
-                    </button>
-                  </div>
-
-                  {/* WORKER ACCESS, BOUND DEVICES & DPDP AUDIT BUTTON */}
-                  <button
-                    type="button"
-                    onClick={() => setWorkerAccessTarget(worker)}
-                    className="w-full mt-2 py-2 px-3 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200/80 hover:border-slate-300 flex items-center justify-between text-slate-700 transition-all cursor-pointer shadow-2xs"
-                    title="Inspect active magic tokens, bound devices, revocation audit log & DPDP subject-access report"
-                  >
-                    <span className="flex items-center gap-1.5 text-slate-800 font-bold">
-                      <Key size={13} className="text-indigo-600" />
-                      <span>Worker Access &amp; Audit</span>
-                    </span>
-                    <span className="font-mono text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/70 px-2 py-0.5 rounded-md">
-                      {activeTokensCount} active
-                    </span>
-                  </button>
-                </div>
-
-              </div>
+              <WorkerCard
+                key={worker.id}
+                worker={worker}
+                settings={settings}
+                latestFnf={latestFnf}
+                wageAudit={wageAudit}
+                activeTokensCount={activeTokensCount}
+                isInactive={isInactive}
+                isOwner={profile?.role === 'FACTORY_OWNER'}
+                allowancesEnabled={Boolean(limits?.allowancesAndDeductionsEnabled)}
+                onEdit={onEditWorker}
+                onExit={(w) => {
+                  const initReason = w.exitReason || 'RESIGNATION';
+                  setExitDateInput(w.dateOfExit || new Date().toISOString().split('T')[0]);
+                  setExitReasonInput(initReason);
+                  setExitDeathOverride(Boolean(w.deathInService || initReason === 'DEATH_IN_SERVICE'));
+                  setExitNomineeName(w.nomineeName || '');
+                  setExitNoticeRequiredDays(String(w.noticePeriodDays ?? (initReason === 'RESIGNATION' ? (w.category === 'Permanent' ? 30 : 15) : 0)));
+                  setExitNoticeServedDays('0');
+                  setExitNoticeWaived(false);
+                  setExitLeaveDays(String(w.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0));
+                  setWorkerToExit(w);
+                }}
+                onReactivate={handleReactivateWorker}
+                onDelete={(w) => setWorkerToDelete(w)}
+                onOpenEwa={(w) => setEwaModalWorker(w)}
+                onOpenAdvance={handleOpenAdvance}
+                onOpenMagicLink={(w, scope) => setMagicLinkWorker({ worker: w, scope })}
+                onOpenAccess={(w) => setWorkerAccessTarget(w)}
+                onOpenWageStructure={(w) => setWageStructureWorker(w)}
+                onOpenFnfGratuity={onOpenFnfGratuity}
+              />
             );
           })}
         </div>

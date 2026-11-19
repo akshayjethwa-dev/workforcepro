@@ -1,4 +1,25 @@
 @import "tailwindcss";
+@config "../tailwind.config.js";
+
+@theme {
+  /* Fluid rem-based typography tokens synced with tailwind.config.js for Tailwind v4 */
+  --text-fluid-2xs: clamp(0.6875rem, 0.65rem + 0.15vw, 0.75rem);
+  --text-fluid-2xs--line-height: 1.4;
+  --text-fluid-xs: clamp(0.75rem, 0.71rem + 0.2vw, 0.8125rem);
+  --text-fluid-xs--line-height: 1.45;
+  --text-fluid-sm: clamp(0.8125rem, 0.77rem + 0.25vw, 0.9375rem);
+  --text-fluid-sm--line-height: 1.5;
+  --text-fluid-base: clamp(0.875rem, 0.82rem + 0.3vw, 1rem);
+  --text-fluid-base--line-height: 1.55;
+  --text-fluid-lg: clamp(1rem, 0.92rem + 0.45vw, 1.1875rem);
+  --text-fluid-lg--line-height: 1.4;
+  --text-fluid-xl: clamp(1.125rem, 1rem + 0.7vw, 1.5rem);
+  --text-fluid-xl--line-height: 1.3;
+  --text-fluid-2xl: clamp(1.25rem, 1.05rem + 1vw, 1.875rem);
+  --text-fluid-2xl--line-height: 1.22;
+  --text-fluid-3xl: clamp(1.5rem, 1.2rem + 1.5vw, 2.25rem);
+  --text-fluid-3xl--line-height: 1.15;
+}
 
 /* Safe area CSS variables and tenant brand variables */
 :root {
@@ -9,26 +30,107 @@
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
+  --keyboard-height: 0px;
+}
+
+/* Root viewport & 200% accessibility font-scaling compliance:
+   Keep root font-size at 100% (rem-relative) and prevent horizontal scrolling on body & root containers */
+html {
+  font-size: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: 5rem;
+  scroll-padding-bottom: calc(6rem + var(--keyboard-height, 0px));
 }
 
 body {
   font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: clamp(0.875rem, 0.82rem + 0.3vw, 1rem);
+  line-height: 1.5;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   margin: 0;
   padding: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
+  overflow-wrap: break-word;
+  word-break: break-word;
   background-color: #f8fafc;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+#root,
+main {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+/* Enforce word-break: break-word on all text containers so long names or translated
+   strings (Gujarati/Hindi) wrap cleanly instead of pushing layout elements out of bounds */
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+li,
+td,
+th,
+dt,
+dd,
+label,
+figcaption,
+blockquote,
+section,
+article {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Preserve clean single-line ellipsis truncation when explicitly requested */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Aggressive wrapping for unbroken strings such as long email addresses, URLs, and tokens */
+.break-anywhere,
+a[href],
+code,
+[data-break-anywhere="true"] {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 input, textarea, select {
   -webkit-user-select: auto;
   user-select: auto;
   font-family: inherit;
+  max-width: 100%;
+  scroll-margin-top: 5.5rem;
+  scroll-margin-bottom: calc(6rem + var(--keyboard-height, 0px));
+}
+
+/* Smooth keyboard-aware scroll containers across all forms */
+.keyboard-aware-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(5.5rem + var(--keyboard-height, 0px) + env(safe-area-inset-bottom, 0px));
 }
 
 /* Tabular figures for financial numbers, timestamps, and metric counters */
@@ -69,7 +171,7 @@ input, textarea, select {
 /* ============================================================================
    HIGH-CONTRAST "FIELD MODE" THEME (SUNLIGHT & LOW-VISION ACCESSIBILITY)
    Enforces WCAG 2.1 AAA (>= 7:1) contrast, pure white background, near-black
-   text, >= 16px body type, and >= 18px critical data metrics.
+   text, >= 1rem body type, and >= 1.25rem critical data metrics (rem-scaled).
    ============================================================================ */
 
 html.field-mode,
@@ -86,7 +188,7 @@ html.field-mode body,
 body.field-mode {
   background-color: #ffffff !important;
   color: #000000 !important;
-  font-size: 16px !important;
+  font-size: 1rem !important;
   line-height: 1.5 !important;
   letter-spacing: -0.01em;
 }
@@ -126,27 +228,33 @@ html.field-mode .text-gray-500 {
   font-weight: 500 !important;
 }
 
-/* Scale minimum type size in Field Mode: body >= 16px */
+/* Scale minimum type size in Field Mode using rem (respects 200% OS zoom) */
 html.field-mode .text-xs,
+html.field-mode .text-fluid-xs,
+html.field-mode .text-fluid-2xs,
 html.field-mode .text-\[10px\],
 html.field-mode .text-\[11px\],
 html.field-mode .text-\[12px\] {
-  font-size: 0.9375rem !important; /* 15px-16px */
-  line-height: 1.375rem !important;
+  font-size: 0.9375rem !important;
+  line-height: 1.4 !important;
 }
 
-html.field-mode .text-sm {
-  font-size: 1rem !important; /* 16px */
-  line-height: 1.5rem !important;
+html.field-mode .text-sm,
+html.field-mode .text-fluid-sm {
+  font-size: 1rem !important;
+  line-height: 1.5 !important;
 }
 
-/* Critical data and financial figures in Field Mode: >= 18px */
+/* Critical data and financial figures in Field Mode: >= 1.25rem */
 html.field-mode .field-critical-data,
 html.field-mode .text-lg,
 html.field-mode .text-xl,
 html.field-mode .text-2xl,
-html.field-mode .text-3xl {
-  font-size: 1.25rem !important; /* 20px */
+html.field-mode .text-3xl,
+html.field-mode .text-fluid-lg,
+html.field-mode .text-fluid-xl,
+html.field-mode .text-fluid-2xl {
+  font-size: 1.25rem !important;
   font-weight: 800 !important;
   color: #000000 !important;
 }
@@ -186,10 +294,10 @@ html.field-mode :focus-visible {
   outline-offset: 3px !important;
 }
 
-/* Interactive touch targets >= 44px in Field Mode */
+/* Interactive touch targets >= 2.75rem (44px at 100%, scales with rem) in Field Mode */
 html.field-mode button,
 html.field-mode a,
 html.field-mode input,
 html.field-mode select {
-  min-height: 44px;
+  min-height: 2.75rem;
 }

@@ -9,6 +9,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { EcrValidatorModal } from '../components/EcrValidatorModal';
+import { ResponsiveDataTable, ResponsiveColumn } from '../components/ResponsiveDataTable';
+import { TruncatedText } from '../components/TruncatedText';
 import { AttendanceRecord, Worker as WorkerProfile } from '../types/index';
 import * as XLSX from 'xlsx';
 
@@ -907,224 +909,390 @@ export const ReportsScreen: React.FC = () => {
 
           {/* VIEW MODE 1: FORM T STATUTORY DAY-BY-DAY (1 TO 31) MATRIX */}
           {viewMode === 'DAY_BY_DAY' ? (
-            <div className="overflow-x-auto max-w-full">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[10px] uppercase font-semibold">
-                  <tr>
-                    <th className="py-2.5 px-3 sticky left-0 z-10 bg-slate-50 border-r border-slate-200 min-w-[40px] text-center">#</th>
-                    <th className="py-2.5 px-3 sticky left-[40px] z-10 bg-slate-50 border-r border-slate-200 min-w-[170px]">Workman</th>
-                    <th className="py-2.5 px-2 text-center border-r border-slate-200 min-w-[70px]">Category</th>
-                    
-                    {/* Day Columns 1 to N */}
-                    {monthDays.map(d => {
-                      const dayDate = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 1, d);
-                      const isSun = dayDate.getDay() === 0;
-                      return (
-                        <th 
-                          key={d} 
-                          className={`py-2 px-1 text-center font-mono min-w-[28px] max-w-[32px] border-r border-slate-100 ${isSun ? 'bg-indigo-50/50 text-indigo-700 font-bold' : ''}`}
-                          title={`${d} ${dayDate.toLocaleString('default', { month: 'short' })}`}
-                        >
-                          <div>{d}</div>
-                          <div className="text-[8px] font-normal text-slate-400">
-                            {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'][dayDate.getDay()]}
+            <div className="p-3 sm:p-4">
+              {(() => {
+                const dayColumns: ResponsiveColumn<any>[] = [
+                  {
+                    key: 'workman',
+                    header: 'Workman',
+                    stickyLeft: true,
+                    isPrimary: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[180px]',
+                    render: (row, idx) => (
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-[10px] text-slate-400 w-5 shrink-0">{idx + 1}.</span>
+                        <div className="min-w-0 flex-1">
+                          <TruncatedText
+                            text={row.name}
+                            modalTitle="Form T Muster Record"
+                            subtitle={`${row.designation || 'Worker'} · ${row.category}`}
+                            details={[
+                              { label: 'Paid Days', value: String(row.payableDays), mono: true },
+                              { label: 'Worked (P)', value: String(row.present), mono: true },
+                              { label: 'Absent (LWP)', value: String(row.absent), mono: true },
+                              { label: 'Overtime', value: `${row.otHours}h`, mono: true },
+                              { label: 'UAN', value: row.uan || '—', mono: true },
+                            ]}
+                            className="font-bold text-slate-900 text-xs"
+                          />
+                          <div className="text-[10px] text-slate-500 truncate">{row.designation}</div>
+                        </div>
+                      </div>
+                    ),
+                    renderPriority: (row) => (
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 text-xs truncate">{row.name}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{row.designation}</div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'category',
+                    header: 'Category',
+                    align: 'center',
+                    minWidth: 'min-w-[85px]',
+                    render: (row) => <span className="text-[11px] text-slate-600">{row.category}</span>,
+                  },
+                  ...monthDays.map((d): ResponsiveColumn<any> => {
+                    const dayDate = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 1, d);
+                    const isSun = dayDate.getDay() === 0;
+                    const dayLabel = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'][dayDate.getDay()];
+                    return {
+                      key: `day-${d}`,
+                      header: `${d} ${dayLabel}`,
+                      align: 'center',
+                      hideInMobileCard: true,
+                      minWidth: 'min-w-[34px]',
+                      headerClassName: isSun ? 'bg-indigo-50 text-indigo-700 px-1' : 'px-1',
+                      cellClassName: `px-0.5 ${isSun ? 'bg-indigo-50/30' : ''}`,
+                      render: (row) => {
+                        const dayInfo = row.dailyAttendance?.[d];
+                        const code = dayInfo?.code || '-';
+                        return (
+                          <span
+                            title={`Day ${d}: ${dayInfo?.status || 'No record'} ${dayInfo?.otHours ? `(OT: ${dayInfo.otHours}h)` : ''}`}
+                            className={`inline-block w-6 h-5 leading-5 text-[10px] font-mono rounded text-center ${getBadgeStyle(code)}`}
+                          >
+                            {code}
+                          </span>
+                        );
+                      },
+                    };
+                  }),
+                  {
+                    key: 'present',
+                    header: 'P',
+                    mobileLabel: 'Worked (P)',
+                    align: 'center',
+                    numeric: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="font-bold text-emerald-700">{row.present}</span>,
+                    renderPriority: (row) => (
+                      <span className="text-xs font-bold text-emerald-700">{row.present}P · {row.absent}A</span>
+                    ),
+                  },
+                  {
+                    key: 'halfDay',
+                    header: 'HD',
+                    mobileLabel: 'Half Days',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="text-amber-700 font-medium">{row.halfDay}</span>,
+                  },
+                  {
+                    key: 'weeklyOff',
+                    header: 'WO',
+                    mobileLabel: 'Weekly Offs',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="text-slate-500">{row.weeklyOff}</span>,
+                  },
+                  {
+                    key: 'paidHoliday',
+                    header: 'PH',
+                    mobileLabel: 'Paid Holidays',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="text-indigo-700">{row.paidHoliday}</span>,
+                  },
+                  {
+                    key: 'paidLeave',
+                    header: 'L',
+                    mobileLabel: 'Paid Leaves',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="text-cyan-700">{row.paidLeave}</span>,
+                  },
+                  {
+                    key: 'payableDays',
+                    header: 'Paid Days',
+                    align: 'center',
+                    numeric: true,
+                    isHeaderMetric: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[75px]',
+                    cellClassName: 'bg-indigo-50/40',
+                    render: (row) => <span className="font-extrabold text-indigo-900">{row.payableDays}</span>,
+                    renderPriority: (row) => (
+                      <span className="font-extrabold text-xs text-indigo-900">{row.payableDays}d</span>
+                    ),
+                  },
+                  {
+                    key: 'absent',
+                    header: 'A',
+                    mobileLabel: 'Absent (LWP)',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[44px]',
+                    render: (row) => <span className="text-rose-600 font-medium">{row.absent}</span>,
+                  },
+                  {
+                    key: 'otHours',
+                    header: 'OT (h)',
+                    mobileLabel: 'Overtime',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[60px]',
+                    render: (row) => <span className="font-semibold text-slate-800">{row.otHours}h</span>,
+                  },
+                  {
+                    key: 'statutoryIds',
+                    header: 'Statutory IDs',
+                    minWidth: 'min-w-[135px]',
+                    render: (row) => (
+                      <div className="text-[10px] font-sans text-slate-600">
+                        <div><span className="text-slate-400 font-mono text-[9px]">UAN:</span> {row.uan || '-'}</div>
+                        <div><span className="text-slate-400 font-mono text-[9px]">ESI:</span> {row.esicIp || '-'}</div>
+                      </div>
+                    ),
+                  },
+                ];
+
+                return (
+                  <ResponsiveDataTable
+                    data={filteredData}
+                    columns={dayColumns}
+                    keyExtractor={(row) => row.id}
+                    loading={loading}
+                    stickyHeader={true}
+                    maxHeightClassName="max-h-[65vh]"
+                    tableMinWidthClassName="min-w-[1550px]"
+                    paginationMode="pages"
+                    initialPageSize={20}
+                    pageSizeOptions={[10, 20, 50, 100]}
+                    itemLabel="muster rows"
+                    ariaLabel={`Form T day-by-day muster roll for ${reportMonth}`}
+                    emptyState={{
+                      icon: <FileText size={24} className="text-slate-400" />,
+                      title: `No muster records found for ${reportMonth}`,
+                      description: 'Records update automatically with punches, kiosk sync, and supervisor logs.',
+                    }}
+                    renderMobileCard={(row) => (
+                      <article className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="min-w-0 flex-1">
+                            <TruncatedText
+                              text={row.name}
+                              modalTitle="Form T Muster Summary"
+                              subtitle={`${row.designation || 'Worker'} · ${row.category}`}
+                              className="font-bold text-fluid-sm text-slate-900"
+                            />
+                            <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                              {row.designation} · {row.category}
+                            </div>
                           </div>
-                        </th>
-                      );
-                    })}
+                          <div className="text-right shrink-0">
+                            <div className="font-mono tabular-nums font-extrabold text-sm text-indigo-900">
+                              {row.payableDays} Paid Days
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-500">OT: {row.otHours}h</div>
+                          </div>
+                        </div>
 
-                    {/* Summary Columns */}
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-bold text-emerald-800 border-l border-r border-slate-200 min-w-[40px]" title="Days Worked">P</th>
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-semibold text-amber-800 border-r border-slate-200 min-w-[40px]" title="Half Days">HD</th>
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-semibold text-slate-600 border-r border-slate-200 min-w-[40px]" title="Weekly Offs">WO</th>
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-semibold text-indigo-700 border-r border-slate-200 min-w-[40px]" title="Paid Holidays">PH</th>
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-semibold text-cyan-700 border-r border-slate-200 min-w-[40px]" title="Paid Leaves">L</th>
-                    <th className="py-2.5 px-2.5 text-center bg-indigo-50/80 font-extrabold text-indigo-900 border-r border-slate-200 min-w-[55px]" title="Payable / Paid Days">Paid Days</th>
-                    <th className="py-2.5 px-2 text-center bg-slate-50 font-semibold text-rose-700 border-r border-slate-200 min-w-[40px]" title="Absent / LWP Days">A</th>
-                    <th className="py-2.5 px-2.5 text-center bg-slate-50 font-semibold text-slate-800 border-r border-slate-200 min-w-[50px]" title="Overtime Hours">OT (h)</th>
-                    <th className="py-2.5 px-3 bg-slate-50 text-slate-600 min-w-[120px]">Statutory IDs</th>
-                  </tr>
-                </thead>
+                        <div className="grid grid-cols-4 gap-2 pt-2.5 border-t border-slate-100 text-center font-mono tabular-nums text-xs">
+                          <div className="bg-emerald-50/60 rounded-lg py-1.5 px-1">
+                            <div className="text-[9px] font-sans text-slate-500 uppercase">Worked</div>
+                            <div className="font-bold text-emerald-700">{row.present}</div>
+                          </div>
+                          <div className="bg-amber-50/60 rounded-lg py-1.5 px-1">
+                            <div className="text-[9px] font-sans text-slate-500 uppercase">Half</div>
+                            <div className="font-bold text-amber-700">{row.halfDay}</div>
+                          </div>
+                          <div className="bg-rose-50/60 rounded-lg py-1.5 px-1">
+                            <div className="text-[9px] font-sans text-slate-500 uppercase">Absent</div>
+                            <div className="font-bold text-rose-700">{row.absent}</div>
+                          </div>
+                          <div className="bg-slate-50 rounded-lg py-1.5 px-1">
+                            <div className="text-[9px] font-sans text-slate-500 uppercase">WO/PH/L</div>
+                            <div className="font-bold text-slate-700">
+                              {(row.weeklyOff || 0) + (row.paidHoliday || 0) + (row.paidLeave || 0)}
+                            </div>
+                          </div>
+                        </div>
 
-                <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                  {loading ? (
-                    [1, 2, 3, 4, 5].map(i => (
-                      <tr key={i} className="animate-pulse">
-                        <td colSpan={daysInMonth + 12} className="py-4 px-4">
-                          <div className="h-3 bg-slate-100 rounded w-full" />
-                        </td>
-                      </tr>
-                    ))
-                  ) : filteredData.length === 0 ? (
-                    <tr>
-                      <td colSpan={daysInMonth + 12} className="py-12 text-center text-slate-400 font-sans">
-                        <FileText size={28} className="mx-auto mb-2 text-slate-300" />
-                        <p className="font-semibold text-slate-700 text-xs">No records found for {reportMonth}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Records update automatically with punches, kiosk sync, and supervisor logs.</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredData.map((row, idx) => (
-                      <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-2.5 px-3 sticky left-0 z-10 bg-white hover:bg-slate-50 border-r border-slate-100 text-center font-bold text-slate-400">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2.5 px-3 sticky left-[40px] z-10 bg-white hover:bg-slate-50 border-r border-slate-200 font-sans">
-                          <div className="font-bold text-slate-900 text-xs truncate max-w-[150px]">{row.name}</div>
-                          <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{row.designation}</div>
-                        </td>
-                        <td className="py-2.5 px-2 text-center border-r border-slate-100 font-sans text-[10px] text-slate-600">
-                          {row.category}
-                        </td>
-
-                        {/* Day Cells */}
-                        {monthDays.map(d => {
-                          const dayInfo = row.dailyAttendance?.[d];
-                          const code = dayInfo?.code || '-';
-                          const isSun = dayInfo?.dayOfWeek === 0;
-
-                          return (
-                            <td 
-                              key={d} 
-                              className={`py-1 px-0.5 text-center border-r border-slate-100 ${isSun ? 'bg-indigo-50/30' : ''}`}
-                              title={`Day ${d}: ${dayInfo?.status || 'No record'} ${dayInfo?.otHours ? `(OT: ${dayInfo.otHours}h)` : ''}`}
-                            >
-                              <span className={`inline-block w-6 h-5 leading-5 text-[10px] rounded text-center ${getBadgeStyle(code)}`}>
-                                {code}
-                              </span>
-                            </td>
-                          );
-                        })}
-
-                        {/* Summary Metrics */}
-                        <td className="py-2 px-1 text-center font-bold text-emerald-700 border-l border-r border-slate-100 bg-emerald-50/20">
-                          {row.present}
-                        </td>
-                        <td className="py-2 px-1 text-center font-medium text-amber-700 border-r border-slate-100">
-                          {row.halfDay}
-                        </td>
-                        <td className="py-2 px-1 text-center text-slate-500 border-r border-slate-100">
-                          {row.weeklyOff}
-                        </td>
-                        <td className="py-2 px-1 text-center text-indigo-700 border-r border-slate-100">
-                          {row.paidHoliday}
-                        </td>
-                        <td className="py-2 px-1 text-center text-cyan-700 border-r border-slate-100">
-                          {row.paidLeave}
-                        </td>
-                        <td className="py-2 px-1 text-center font-bold text-indigo-900 bg-indigo-50/60 border-r border-slate-100 text-xs">
-                          {row.payableDays}
-                        </td>
-                        <td className="py-2 px-1 text-center font-medium text-rose-600 border-r border-slate-100">
-                          {row.absent}
-                        </td>
-                        <td className="py-2 px-1 text-center text-slate-800 font-semibold border-r border-slate-100">
-                          {row.otHours}h
-                        </td>
-                        <td className="py-2 px-3 text-[10px] font-sans text-slate-600">
-                          <div><span className="text-slate-400 font-mono text-[9px]">UAN:</span> {row.uan || '-'}</div>
-                          <div><span className="text-slate-400 font-mono text-[9px]">ESI:</span> {row.esicIp || '-'}</div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                        {/* Compact horizontal day strip strictly scoped inside the card */}
+                        <div className="overflow-x-auto pb-1">
+                          <div className="inline-flex items-center gap-1 font-mono text-[10px]">
+                            {monthDays.map((d) => {
+                              const code = row.dailyAttendance?.[d]?.code || '-';
+                              return (
+                                <div key={d} className="flex flex-col items-center shrink-0">
+                                  <span className="text-[8px] text-slate-400">{d}</span>
+                                  <span className={`inline-block w-5 h-5 leading-5 rounded text-center ${getBadgeStyle(code)}`}>
+                                    {code}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </article>
+                    )}
+                  />
+                );
+              })()}
             </div>
           ) : (
             /* VIEW MODE 2: EXECUTIVE SUMMARY VIEW */
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold text-[10px]">
-                  <tr>
-                    <th className="py-3 px-4 sm:px-6">Personnel</th>
-                    <th className="py-3 px-3">Category</th>
-                    <th className="py-3 px-3 text-center">Worked (P)</th>
-                    <th className="py-3 px-3 text-center">Payable Days</th>
-                    <th className="py-3 px-3 text-center">Absent (LWP)</th>
-                    <th className="py-3 px-3 text-center">OT Hours</th>
-                    <th className="py-3 px-3 text-center">Late Marks</th>
-                    <th className="py-3 px-3 text-right">Geofence Flags</th>
-                    <th className="py-3 px-4 sm:px-6 text-right">Statutory Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
-                  {loading ? (
-                    [1, 2, 3, 4, 5].map(i => (
-                      <tr key={i} className="animate-pulse">
-                        <td className="py-3.5 px-4 sm:px-6">
-                          <div className="h-3.5 bg-slate-200 rounded w-28 mb-1" />
-                          <div className="h-2.5 bg-slate-100 rounded w-16" />
-                        </td>
-                        <td className="py-3.5 px-3"><div className="h-4 bg-slate-100 rounded w-16" /></td>
-                        <td className="py-3.5 px-3 text-center"><div className="h-4 bg-slate-100 rounded w-6 mx-auto" /></td>
-                        <td className="py-3.5 px-3 text-center"><div className="h-4 bg-slate-100 rounded w-6 mx-auto" /></td>
-                        <td className="py-3.5 px-3 text-center"><div className="h-4 bg-slate-100 rounded w-6 mx-auto" /></td>
-                        <td className="py-3.5 px-3 text-center"><div className="h-4 bg-slate-100 rounded w-8 mx-auto" /></td>
-                        <td className="py-3.5 px-3 text-center"><div className="h-4 bg-slate-100 rounded w-6 mx-auto" /></td>
-                        <td className="py-3.5 px-3 text-right"><div className="h-4 bg-slate-100 rounded w-6 ml-auto" /></td>
-                        <td className="py-3.5 px-4 sm:px-6 text-right"><div className="h-4 bg-slate-100 rounded w-16 ml-auto" /></td>
-                      </tr>
-                    ))
-                  ) : filteredData.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-12 text-center text-slate-400 font-sans">
-                        <p className="font-semibold text-slate-700 text-xs">No records found</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredData.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3.5 px-4 sm:px-6 font-sans">
-                          <p className="font-bold text-slate-900 text-xs">{row.name}</p>
-                          <p className="text-[11px] text-slate-500">{row.designation} · {row.department}</p>
-                        </td>
-                        <td className="py-3.5 px-3 font-sans text-xs text-slate-600">
-                          {row.category}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-bold text-emerald-700">
-                          {row.present}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-bold text-indigo-900 bg-indigo-50/40">
-                          {row.payableDays}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-medium text-slate-500">
-                          {row.absent}
-                        </td>
-                        <td className="py-3.5 px-3 text-center text-slate-700 font-semibold">
-                          {row.otHours}h
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-semibold text-amber-700">
-                          {row.late}
-                        </td>
-                        <td className="py-3.5 px-3 text-right">
-                          {row.geofenceViolations > 0 ? (
-                            <span className="text-rose-600 font-bold inline-flex items-center gap-1">
-                              <AlertCircle size={12} /> {row.geofenceViolations}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">-</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 sm:px-6 text-right font-sans text-[11px]">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {row.uan ? (
-                              <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold text-[10px]">
-                                PF
-                              </span>
-                            ) : null}
-                            {row.esicIp ? (
-                              <span className="px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 font-semibold text-[10px]">
-                                ESI
-                              </span>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="p-3 sm:p-4">
+              <ResponsiveDataTable
+                data={filteredData}
+                keyExtractor={(row) => row.id}
+                loading={loading}
+                stickyHeader={true}
+                maxHeightClassName="max-h-[65vh]"
+                tableMinWidthClassName="min-w-[920px]"
+                paginationMode="pages"
+                initialPageSize={20}
+                pageSizeOptions={[10, 20, 50, 100]}
+                itemLabel="personnel"
+                ariaLabel={`Executive attendance summary for ${reportMonth}`}
+                emptyState={{
+                  icon: <FileText size={24} className="text-slate-400" />,
+                  title: `No summary records found for ${reportMonth}`,
+                  description: 'Adjust your search query or department filter to view staff attendance summaries.',
+                }}
+                columns={[
+                  {
+                    key: 'personnel',
+                    header: 'Personnel',
+                    stickyLeft: true,
+                    isPrimary: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[185px]',
+                    render: (row) => (
+                      <div className="min-w-0">
+                        <TruncatedText
+                          text={row.name}
+                          modalTitle="Executive Summary Record"
+                          subtitle={`${row.designation || 'Worker'} · ${row.department || 'General'}`}
+                          className="font-bold text-slate-900 text-xs"
+                        />
+                        <p className="text-[11px] text-slate-500 truncate">
+                          {row.designation} · {row.department}
+                        </p>
+                      </div>
+                    ),
+                    renderPriority: (row) => (
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 text-xs truncate">{row.name}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{row.category}</div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'category',
+                    header: 'Category',
+                    minWidth: 'min-w-[95px]',
+                    render: (row) => <span className="text-xs text-slate-600">{row.category}</span>,
+                  },
+                  {
+                    key: 'worked',
+                    header: 'Worked (P)',
+                    align: 'center',
+                    numeric: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[90px]',
+                    render: (row) => <span className="font-bold text-emerald-700">{row.present}</span>,
+                    renderPriority: (row) => (
+                      <span className="text-xs font-bold text-emerald-700">{row.present}P · {row.absent}A</span>
+                    ),
+                  },
+                  {
+                    key: 'payableDays',
+                    header: 'Payable Days',
+                    align: 'center',
+                    numeric: true,
+                    isHeaderMetric: true,
+                    mobilePriority: true,
+                    minWidth: 'min-w-[100px]',
+                    cellClassName: 'bg-indigo-50/40',
+                    render: (row) => <span className="font-bold text-indigo-900">{row.payableDays}</span>,
+                    renderPriority: (row) => (
+                      <span className="font-extrabold text-xs text-indigo-900">{row.payableDays}d</span>
+                    ),
+                  },
+                  {
+                    key: 'absent',
+                    header: 'Absent (LWP)',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[95px]',
+                    render: (row) => <span className="font-medium text-slate-500">{row.absent}</span>,
+                  },
+                  {
+                    key: 'otHours',
+                    header: 'OT Hours',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[85px]',
+                    render: (row) => <span className="text-slate-700 font-semibold">{row.otHours}h</span>,
+                  },
+                  {
+                    key: 'lateMarks',
+                    header: 'Late Marks',
+                    align: 'center',
+                    numeric: true,
+                    minWidth: 'min-w-[90px]',
+                    render: (row) => <span className="font-semibold text-amber-700">{row.late}</span>,
+                  },
+                  {
+                    key: 'geofenceFlags',
+                    header: 'Geofence Flags',
+                    align: 'right',
+                    numeric: true,
+                    minWidth: 'min-w-[115px]',
+                    render: (row) =>
+                      row.geofenceViolations > 0 ? (
+                        <span className="text-rose-600 font-bold inline-flex items-center gap-1">
+                          <AlertCircle size={12} /> {row.geofenceViolations}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">-</span>
+                      ),
+                  },
+                  {
+                    key: 'statutory',
+                    header: 'Statutory Status',
+                    align: 'right',
+                    minWidth: 'min-w-[115px]',
+                    render: (row) => (
+                      <div className="inline-flex items-center justify-end gap-1.5 text-[11px] font-semibold">
+                        {row.uan ? <span className="text-indigo-700">PF</span> : null}
+                        {row.uan && row.esicIp ? <span className="text-slate-300">·</span> : null}
+                        {row.esicIp ? <span className="text-teal-700">ESI</span> : null}
+                        {!row.uan && !row.esicIp && <span className="text-slate-400">—</span>}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
             </div>
           )}
 

@@ -30,6 +30,13 @@ import {
   validateWorkerWageStructure,
 } from '../services/wageStructureValidationService';
 import { WageStructureValidatorCard } from '../components/WageStructureValidatorCard';
+import { KeyboardAwareFormContainer } from '../components/KeyboardAwareFormContainer';
+import { ModalDatePicker } from '../components/ModalDatePicker';
+import { InlineFieldError } from '../components/InlineFieldError';
+import {
+  scrollToFirstInvalidField,
+  useKeyboardAwareLayout,
+} from '../hooks/useKeyboardAwareLayout';
 
 interface Props {
   onBack: () => void;
@@ -84,6 +91,19 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   
   const isEditing = !!initialData;
   
+  const formContainerRef = useRef<HTMLDivElement | null>(null);
+  const { keyboardHeight, isKeyboardOpen } = useKeyboardAwareLayout();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const clearFieldError = (field: string) => {
+    setFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
@@ -342,34 +362,76 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   );
 
   const validateStep = (step: number): boolean => {
+    const errors: Record<string, string> = {};
+
     if (step === 0) {
-      if (!formData.name?.trim()) { toast.error("Full Name is required."); return false; }
-      if (!formData.phone?.trim() || !/^\d{10}$/.test(formData.phone)) { toast.error("Mobile Number must be exactly 10 digits."); return false; }
-      if (!formData.gender) { toast.error("Gender is required."); return false; }
-      if (!formData.dob) { toast.error("Date of Birth is required."); return false; }
-      if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) { toast.error("Aadhar Number must be exactly 12 digits."); return false; }
+      if (!formData.name?.trim()) {
+        errors.name = 'Full Name is required.';
+      }
+      if (!formData.phone?.trim() || !/^\d{10}$/.test(formData.phone)) {
+        errors.phone = 'Mobile Number must be exactly 10 digits.';
+      }
+      if (!formData.gender) {
+        errors.gender = 'Please select a gender.';
+      }
+      if (!formData.dob) {
+        errors.dob = 'Date of Birth is required.';
+      }
+      if (formData.aadhar && !/^\d{12}$/.test(formData.aadhar)) {
+        errors.aadhar = 'Aadhar Number must be exactly 12 digits.';
+      }
       if (formData.kioskPin && !/^\d{4,6}$/.test(formData.kioskPin)) {
-        toast.error("Quick Switch Kiosk PIN must be between 4 and 6 digits (numbers only).");
-        return false;
+        errors.kioskPin = 'Quick Switch Kiosk PIN must be 4 to 6 numeric digits.';
       }
     }
+
     if (step === 1) {
-      if (!formData.designation?.trim()) { toast.error("Designation is required."); return false; }
+      if (!formData.designation?.trim()) {
+        errors.designation = 'Designation is required (e.g. Helper, Operator).';
+      }
     }
+
     if (step === 2) {
-      if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) { toast.error("Wage Amount / Gross Salary is required."); return false; }
-      if (formData.wageConfig?.type === 'MONTHLY' && (!formData.wageConfig?.monthlyBreakdown?.basic || formData.wageConfig.monthlyBreakdown.basic <= 0)) {
-         toast.error("Basic Salary is required for Monthly Wages to calculate PF accurately."); return false;
+      if (formData.wageConfig?.type === 'MONTHLY') {
+        if (!formData.wageConfig?.monthlyBreakdown?.basic || formData.wageConfig.monthlyBreakdown.basic <= 0) {
+          errors.basicPay = 'Basic Pay is required for Monthly Wages to calculate PF accurately.';
+        }
+        if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) {
+          errors.basicPay = errors.basicPay || 'Gross monthly salary must be greater than ₹0.';
+        }
+      } else {
+        if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) {
+          errors.wageAmount = 'Daily Rate Amount is required and must be greater than ₹0.';
+        }
       }
-      if (formData.wageConfig?.overtimeEligible && (!formData.wageConfig.overtimeRatePerHour || formData.wageConfig.overtimeRatePerHour <= 0)) {
-         toast.error("Overtime hourly rate is required when Overtime is enabled."); return false; 
+      if (
+        formData.wageConfig?.overtimeEligible &&
+        (!formData.wageConfig.overtimeRatePerHour || formData.wageConfig.overtimeRatePerHour <= 0)
+      ) {
+        errors.overtimeRate = 'Overtime hourly rate is required when Overtime is enabled.';
       }
     }
+
+    setFieldErrors(errors);
+
+    const errorKeys = Object.keys(errors);
+    if (errorKeys.length > 0) {
+      toast.error(errors[errorKeys[0]]);
+      // Wait one tick so inline error messages mount and push layout down before scrolling to the first invalid field
+      window.requestAnimationFrame(() => {
+        scrollToFirstInvalidField(formContainerRef.current, errorKeys[0]);
+      });
+      return false;
+    }
+
     return true;
   };
 
   const handleNext = () => {
-    if (validateStep(currentStep)) setCurrentStep(prev => prev + 1);
+    if (validateStep(currentStep)) {
+      setFieldErrors({});
+      setCurrentStep(prev => prev + 1);
+    }
   };
 
   const handleSave = async () => {
@@ -571,21 +633,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 pb-20">
+    <div className="max-w-3xl mx-auto space-y-5 sm:space-y-6">
       
       {/* Header Toolbar */}
-      <div className="flex items-center justify-between pb-4 border-b border-slate-200/80">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 pb-4 border-b border-slate-200/80">
+        <div className="flex items-center gap-3 min-w-0">
           <button 
+            type="button"
             onClick={() => { currentStep > 0 ? setCurrentStep(c => c - 1) : onBack(); }} 
-            className="w-10 h-10 flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs"
+            className="w-11 h-11 flex items-center justify-center rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs shrink-0"
             aria-label="Go Back"
           >
             <ChevronLeft className="text-slate-700" size={20}/>
           </button>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">{isEditing ? 'Edit Worker Profile' : 'Register New Personnel'}</h1>
-            <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+          <div className="min-w-0">
+            <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 truncate">{isEditing ? 'Edit Worker Profile' : 'Register New Personnel'}</h1>
+            <div className="text-fluid-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
               <span>{STEPS[currentStep].title}</span>
               <span aria-hidden="true" className="text-slate-300">·</span>
               <span className="font-mono tabular-nums text-slate-600 font-medium">Step {currentStep + 1} of {STEPS.length}</span>
@@ -593,13 +656,13 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
           </div>
         </div>
 
-        <div className="text-xs font-mono tabular-nums text-slate-500">
+        <div className="text-fluid-xs font-mono tabular-nums text-slate-500 shrink-0">
           {Math.round(((currentStep + 1) / STEPS.length) * 100)}% Complete
         </div>
       </div>
 
       {/* Modern Stepper Tabs */}
-      <div className="grid grid-cols-5 gap-2 p-1 bg-slate-100/80 rounded-2xl border border-slate-200/60">
+      <div className="grid grid-cols-5 gap-1.5 sm:gap-2 p-1 bg-slate-100/80 rounded-2xl border border-slate-200/60">
         {STEPS.map((step, idx) => {
           const Icon = step.icon;
           const isActive = idx === currentStep;
@@ -610,9 +673,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
               type="button"
               onClick={() => {
                 // Allow navigating backwards or if step valid
-                if (idx < currentStep) setCurrentStep(idx);
+                if (idx < currentStep) {
+                  setFieldErrors({});
+                  setCurrentStep(idx);
+                }
               }}
-              className={`flex flex-col sm:flex-row items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-semibold transition-all ${
+              className={`flex flex-col sm:flex-row items-center justify-center gap-1.5 py-2.5 px-2 min-h-[2.75rem] rounded-xl text-xs font-semibold transition-all ${
                 isActive 
                   ? 'bg-white text-blue-600 shadow-xs' 
                   : isCompleted 
@@ -629,53 +695,167 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         })}
       </div>
 
-      {/* Step Form Body */}
-      <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200/80 shadow-xs">
+      {/* Keyboard-Aware Scrollable Step Form Body */}
+      <KeyboardAwareFormContainer
+        containerRef={formContainerRef}
+        onFinalFieldSubmit={currentStep < 4 ? handleNext : undefined}
+        extraBottomPadding={120}
+        className="bg-white p-4 sm:p-8 rounded-2xl border border-slate-200/80 shadow-xs"
+      >
         {/* STEP 1: PERSONAL */}
         {currentStep === 0 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h2 className="text-lg font-bold text-gray-800 mb-2">Personal Information</h2>
+            <h2 className="text-fluid-lg font-bold text-gray-800 mb-2">Personal Information</h2>
             <div className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase ml-1">Full Name *</label>
-                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                  value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="e.g. Ramesh Kumar" />
+              <div data-field="name">
+                <label htmlFor="worker-name" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Full Name *</label>
+                <input
+                  id="worker-name"
+                  type="text"
+                  autoComplete="name"
+                  enterKeyHint="next"
+                  aria-invalid={Boolean(fieldErrors.name)}
+                  aria-describedby={fieldErrors.name ? 'worker-name-error' : undefined}
+                  className={`w-full p-3.5 mt-1 border rounded-xl outline-none focus:ring-2 min-h-12 transition-colors ${
+                    fieldErrors.name
+                      ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                      : 'border-gray-200 bg-white focus:ring-blue-500'
+                  }`}
+                  value={formData.name}
+                  onChange={e => {
+                    setFormData({...formData, name: e.target.value});
+                    clearFieldError('name');
+                  }}
+                  placeholder="e.g. Ramesh Kumar"
+                />
+                <InlineFieldError id="worker-name-error" message={fieldErrors.name} />
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase ml-1">Mobile Number *</label>
-                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                  type="tel" maxLength={10} value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value.replace(/\D/g, '')})} placeholder="10-digit number" />
+
+              <div data-field="phone">
+                <label htmlFor="worker-phone" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Mobile Number *</label>
+                <input
+                  id="worker-phone"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  enterKeyHint="next"
+                  maxLength={10}
+                  aria-invalid={Boolean(fieldErrors.phone)}
+                  aria-describedby={fieldErrors.phone ? 'worker-phone-error' : undefined}
+                  className={`w-full p-3.5 mt-1 border rounded-xl outline-none focus:ring-2 min-h-12 font-mono transition-colors ${
+                    fieldErrors.phone
+                      ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                      : 'border-gray-200 bg-white focus:ring-blue-500'
+                  }`}
+                  value={formData.phone}
+                  onChange={e => {
+                    setFormData({...formData, phone: e.target.value.replace(/\D/g, '')});
+                    clearFieldError('phone');
+                  }}
+                  placeholder="10-digit number"
+                />
+                <InlineFieldError id="worker-phone-error" message={fieldErrors.phone} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                 <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Gender *</label>
-                    <select className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white min-h-12"
-                       value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value as any})}>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div data-field="gender">
+                    <label htmlFor="worker-gender" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Gender *</label>
+                    <select
+                      id="worker-gender"
+                      aria-invalid={Boolean(fieldErrors.gender)}
+                      aria-describedby={fieldErrors.gender ? 'worker-gender-error' : undefined}
+                      className={`w-full p-3.5 mt-1 border rounded-xl bg-white min-h-12 outline-none focus:ring-2 transition-colors ${
+                        fieldErrors.gender
+                          ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                          : 'border-gray-200 focus:ring-blue-500'
+                      }`}
+                      value={formData.gender}
+                      onChange={e => {
+                        setFormData({...formData, gender: e.target.value as any});
+                        clearFieldError('gender');
+                      }}
+                    >
                        <option value="">Select Gender</option>
                        <option value="Male">Male</option>
                        <option value="Female">Female</option>
                        <option value="Other">Other</option>
                     </select>
+                    <InlineFieldError id="worker-gender-error" message={fieldErrors.gender} />
                  </div>
-                 <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">DOB *</label>
-                    <input type="date" className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white min-h-12"
-                       value={formData.dob} onChange={e => setFormData({...formData, dob: e.target.value})} />
+
+                 <div data-field="dob">
+                    <label htmlFor="worker-dob" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Date of Birth *</label>
+                    <ModalDatePicker
+                      id="worker-dob"
+                      fieldName="dob"
+                      label="Select Date of Birth"
+                      placeholder="Select date of birth"
+                      value={formData.dob || ''}
+                      minYear={1945}
+                      maxYear={new Date().getFullYear()}
+                      hasError={Boolean(fieldErrors.dob)}
+                      className="mt-1"
+                      onChange={iso => {
+                        setFormData({...formData, dob: iso});
+                        clearFieldError('dob');
+                      }}
+                    />
+                    <InlineFieldError id="worker-dob-error" message={fieldErrors.dob} />
                  </div>
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase ml-1">Aadhar Number (Optional)</label>
-                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                  maxLength={12} type="tel" value={formData.aadhar} onChange={e => setFormData({...formData, aadhar: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UID" />
+
+              <div data-field="aadhar">
+                <label htmlFor="worker-aadhar" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Aadhar Number (Optional)</label>
+                <input
+                  id="worker-aadhar"
+                  type="tel"
+                  inputMode="numeric"
+                  enterKeyHint="next"
+                  maxLength={12}
+                  aria-invalid={Boolean(fieldErrors.aadhar)}
+                  aria-describedby={fieldErrors.aadhar ? 'worker-aadhar-error' : undefined}
+                  className={`w-full p-3.5 mt-1 border rounded-xl outline-none focus:ring-2 min-h-12 font-mono transition-colors ${
+                    fieldErrors.aadhar
+                      ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                      : 'border-gray-200 bg-white focus:ring-blue-500'
+                  }`}
+                  value={formData.aadhar}
+                  onChange={e => {
+                    setFormData({...formData, aadhar: e.target.value.replace(/\D/g, '')});
+                    clearFieldError('aadhar');
+                  }}
+                  placeholder="12-digit UID"
+                />
+                <InlineFieldError id="worker-aadhar-error" message={fieldErrors.aadhar} />
               </div>
-              <div>
-                <div className="flex items-center justify-between ml-1">
-                  <label className="text-xs font-bold text-gray-500 uppercase">Quick Switch Kiosk PIN (4–6 Digits)</label>
+
+              <div data-field="kioskPin">
+                <div className="flex items-center justify-between flex-wrap gap-1 ml-1">
+                  <label htmlFor="worker-kiosk-pin" className="text-xs font-bold text-gray-600 uppercase">Quick Switch Kiosk PIN (4–6 Digits)</label>
                   <span className="text-[10px] text-blue-600 font-mono font-bold">Unique per tenant</span>
                 </div>
-                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono tracking-widest"
-                  maxLength={6} type="password" value={formData.kioskPin || ''} onChange={e => setFormData({...formData, kioskPin: e.target.value.replace(/\D/g, '')})} placeholder="Defaults to last 4 digits of phone" />
-                <span className="text-[11px] text-gray-400 ml-1 block mt-0.5">Used by workers to switch profiles instantly on shared kiosk tablets.</span>
+                <input
+                  id="worker-kiosk-pin"
+                  type="password"
+                  inputMode="numeric"
+                  enterKeyHint="done"
+                  maxLength={6}
+                  aria-invalid={Boolean(fieldErrors.kioskPin)}
+                  aria-describedby={fieldErrors.kioskPin ? 'worker-pin-error' : undefined}
+                  className={`w-full p-3.5 mt-1 border rounded-xl outline-none focus:ring-2 min-h-12 font-mono tracking-widest transition-colors ${
+                    fieldErrors.kioskPin
+                      ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                      : 'border-gray-200 bg-white focus:ring-blue-500'
+                  }`}
+                  value={formData.kioskPin || ''}
+                  onChange={e => {
+                    setFormData({...formData, kioskPin: e.target.value.replace(/\D/g, '')});
+                    clearFieldError('kioskPin');
+                  }}
+                  placeholder="Defaults to last 4 digits of phone"
+                />
+                <InlineFieldError id="worker-pin-error" message={fieldErrors.kioskPin} />
+                <span className="text-[11px] text-gray-500 ml-1 block mt-1">Used by workers to switch profiles instantly on shared kiosk tablets.</span>
               </div>
             </div>
           </div>
@@ -734,15 +914,32 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </select>
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase ml-1">Designation *</label>
-                <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                  value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} placeholder="e.g. Helper, Operator" />
+              <div data-field="designation">
+                <label htmlFor="worker-designation" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Designation *</label>
+                <input
+                  id="worker-designation"
+                  type="text"
+                  enterKeyHint="next"
+                  aria-invalid={Boolean(fieldErrors.designation)}
+                  aria-describedby={fieldErrors.designation ? 'worker-designation-error' : undefined}
+                  className={`w-full p-3.5 mt-1 border rounded-xl outline-none focus:ring-2 min-h-12 transition-colors ${
+                    fieldErrors.designation
+                      ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                      : 'border-gray-200 bg-white focus:ring-blue-500'
+                  }`}
+                  value={formData.designation}
+                  onChange={e => {
+                    setFormData({...formData, designation: e.target.value});
+                    clearFieldError('designation');
+                  }}
+                  placeholder="e.g. Helper, Operator"
+                />
+                <InlineFieldError id="worker-designation-error" message={fieldErrors.designation} />
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                  <div className="col-span-1">
-                   <label className="text-xs font-bold text-gray-500 uppercase ml-1">Shift Timing *</label>
+                   <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Shift Timing *</label>
                    <select 
                      className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm min-h-12"
                      value={formData.shiftId} 
@@ -761,7 +958,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                  </div>
 
                  <div className="col-span-1">
-                   <label className="text-xs font-bold text-gray-500 uppercase ml-1">Weekly Off *</label>
+                   <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Weekly Off *</label>
                    <select 
                      className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm min-h-12"
                      value={formData.weeklyOffOverride ? formData.weeklyOffOverride[0] : 'default'} 
@@ -778,11 +975,13 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                  </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase ml-1">Notice Period (Days)</label>
+                  <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Notice Period (Days)</label>
                   <input
                     type="number"
+                    inputMode="numeric"
+                    enterKeyHint={isLeaveOverride ? 'next' : 'done'}
                     min={0}
                     className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono text-sm"
                     value={formData.noticePeriodDays ?? (formData.category === 'Permanent' ? 30 : 15)}
@@ -792,7 +991,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 {isEditing && (
                   <>
                     <div>
-                      <label className="text-xs font-bold text-gray-500 uppercase ml-1">Employment Status</label>
+                      <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Employment Status</label>
                       <select
                         className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm font-semibold min-h-12"
                         value={formData.status || 'ACTIVE'}
@@ -816,12 +1015,14 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </div>
                     {(formData.status === 'RESIGNED' || formData.status === 'TERMINATED' || formData.status === 'INACTIVE') && (
                       <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase ml-1">Exit Date</label>
-                        <input
-                          type="date"
-                          className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl bg-white outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono min-h-12"
+                        <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Exit Date</label>
+                        <ModalDatePicker
+                          fieldName="dateOfExit"
+                          label="Select Exit Date"
+                          placeholder="Select exit date"
                           value={formData.dateOfExit || new Date().toISOString().split('T')[0]}
-                          onChange={e => setFormData({...formData, dateOfExit: e.target.value})}
+                          className="mt-1"
+                          onChange={iso => setFormData({...formData, dateOfExit: iso})}
                         />
                       </div>
                     )}
@@ -836,7 +1037,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     <span className="text-xs font-bold text-gray-800 uppercase block">Leave Policy Override</span>
                     <span className="text-[10px] text-gray-500">Assign custom leave balances for this worker.</span>
                   </div>
-                  <div className="relative inline-flex items-center">
+                  <div className="relative inline-flex items-center shrink-0">
                     <input 
                       type="checkbox" 
                       className="sr-only peer" 
@@ -863,22 +1064,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </label>
 
                 {isLeaveOverride && (
-                  <div className="grid grid-cols-3 gap-3 animate-in fade-in slide-in-from-top-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 animate-in fade-in slide-in-from-top-2">
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1 ml-1">Casual (CL)</label>
-                      <input type="number" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
+                      <input type="number" inputMode="numeric" enterKeyHint="next" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
                         value={formData.leaveBalances?.cl ?? 0}
                         onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), cl: parseInt(e.target.value) || 0}})} />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1 ml-1">Sick (SL)</label>
-                      <input type="number" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
+                      <input type="number" inputMode="numeric" enterKeyHint="next" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
                         value={formData.leaveBalances?.sl ?? 0}
                         onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), sl: parseInt(e.target.value) || 0}})} />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1 ml-1">Privilege (PL)</label>
-                      <input type="number" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
+                      <input type="number" inputMode="numeric" enterKeyHint="done" min="0" className="w-full p-3.5 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
                         value={formData.leaveBalances?.pl ?? 0}
                         onChange={e => setFormData({...formData, leaveBalances: {...(formData.leaveBalances || {cl:0, sl:0, pl:0}), pl: parseInt(e.target.value) || 0}})} />
                     </div>
@@ -918,11 +1119,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
             {/* Work State, Zone, Skill, Scheduled Employment, Revision Date & Probation */}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Work State (Employee Location)</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Work State (Employee Location)</label>
                   <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
                     value={formData.state || resolveWorkerDefaultState(formData, settings || undefined)}
                     onChange={e => {
                       const nextSt = e.target.value;
@@ -939,9 +1140,9 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Minimum Wage Zone</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Minimum Wage Zone</label>
                   <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
                     value={formData.wageZone || getDefaultZoneForState(formData.state || resolveWorkerDefaultState(formData, settings || undefined))}
                     onChange={e => setFormData({ ...formData, wageZone: e.target.value })}
                   >
@@ -952,11 +1153,11 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Skill Category</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Skill Category</label>
                   <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
                     value={formData.skillCategory || 'UNSKILLED'}
                     onChange={e => setFormData({ ...formData, skillCategory: e.target.value as WorkerSkillCategory })}
                   >
@@ -966,9 +1167,9 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Scheduled Employment</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Scheduled Employment</label>
                   <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
                     value={formData.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
                     onChange={e => setFormData({ ...formData, scheduledEmployment: e.target.value })}
                   >
@@ -978,12 +1179,14 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Structure Effective Date</label>
-                  <input
-                    type="date"
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-mono font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Structure Effective Date</label>
+                  <ModalDatePicker
+                    fieldName="salaryRevisionDate"
+                    label="Structure Effective Date"
+                    placeholder="Select effective date"
                     value={formData.salaryRevisionDate || ''}
-                    onChange={e => setFormData({ ...formData, salaryRevisionDate: e.target.value })}
+                    className="mt-1"
+                    onChange={iso => setFormData({ ...formData, salaryRevisionDate: iso })}
                   />
                 </div>
               </div>
@@ -1021,19 +1224,35 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
             {formData.wageConfig?.type === 'DAILY' ? (
               <div className="mt-4 space-y-4 animate-in fade-in">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Daily Rate Amount *</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div data-field="wageAmount">
+                    <label htmlFor="worker-daily-rate" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Daily Rate Amount *</label>
                     <div className="relative mt-1.5">
                       <IndianRupee className="absolute left-3 top-4 text-gray-400" size={18}/>
-                      <input type="number" className="w-full pl-9 p-3.5 border border-gray-200 rounded-xl font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500 min-h-13"
+                      <input
+                        id="worker-daily-rate"
+                        type="number"
+                        inputMode="decimal"
+                        enterKeyHint="next"
+                        aria-invalid={Boolean(fieldErrors.wageAmount)}
+                        aria-describedby={fieldErrors.wageAmount ? 'worker-wage-error' : undefined}
+                        className={`w-full pl-9 p-3.5 border rounded-xl font-bold text-lg outline-none focus:ring-2 min-h-13 transition-colors ${
+                          fieldErrors.wageAmount
+                            ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                            : 'border-gray-200 bg-white focus:ring-blue-500'
+                        }`}
                         placeholder="e.g. 500"
                         value={formData.wageConfig?.amount || ''} 
-                        onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value) || 0}})} />
+                        onChange={e => {
+                          setFormData({...formData, wageConfig: {...formData.wageConfig!, amount: parseFloat(e.target.value) || 0}});
+                          clearFieldError('wageAmount');
+                        }}
+                      />
                     </div>
+                    <InlineFieldError id="worker-wage-error" message={fieldErrors.wageAmount} />
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Monthly Equivalent Multiplier</label>
+                    <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Monthly Equivalent Multiplier</label>
                     <div className="grid grid-cols-2 gap-2 mt-1.5">
                       {([26, 30] as const).map(mult => (
                         <button
@@ -1061,7 +1280,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
                 {/* Toggleable Daily Wage Component Split */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                  <label className="flex items-center justify-between cursor-pointer">
+                  <label className="flex items-center justify-between gap-3 cursor-pointer">
                     <div>
                       <span className="text-xs font-bold text-slate-800 block">Specify Daily Component Breakdown (Optional)</span>
                       <span className="text-[11px] text-slate-500">Split daily wage into Basic/DA vs HRA/Travel/Medical/Other allowances</span>
@@ -1079,57 +1298,57 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                           }));
                         }
                       }}
-                      className="w-4 h-4 accent-blue-600"
+                      className="w-4 h-4 accent-blue-600 shrink-0"
                     />
                   </label>
 
                   {useDailyBreakdown && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Basic *</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.basic || ''}
-                          onChange={e => handleDailyBreakdownChange('basic', e.target.value)} placeholder="e.g. 300" />
+                          onChange={e => { handleDailyBreakdownChange('basic', e.target.value); clearFieldError('wageAmount'); }} placeholder="e.g. 300" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily DA</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.da || ''}
                           onChange={e => handleDailyBreakdownChange('da', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Retaining</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.retainingAllowance || ''}
                           onChange={e => handleDailyBreakdownChange('retainingAllowance', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily HRA</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.hra || ''}
                           onChange={e => handleDailyBreakdownChange('hra', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Travel</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.travel || ''}
                           onChange={e => handleDailyBreakdownChange('travel', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Medical</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.medical || ''}
                           onChange={e => handleDailyBreakdownChange('medical', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 uppercase block">Daily Others</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.others || ''}
                           onChange={e => handleDailyBreakdownChange('others', e.target.value)} placeholder="0" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-indigo-700 uppercase block">ER PF+Grat/day</label>
-                        <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold font-mono"
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold font-mono min-h-11"
                           value={formData.wageConfig?.dailyBreakdown?.employerPf || ''}
                           onChange={e => handleDailyBreakdownChange('employerPf', e.target.value)} placeholder="0" />
                       </div>
@@ -1148,30 +1367,47 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <span className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider block">
                     WageBase = Basic Pay + DA + Retaining Allowance
                   </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Basic Pay *</label>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div data-field="basicPay">
+                      <label htmlFor="worker-basic-pay" className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">Basic Pay *</label>
                       <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
-                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
+                        <input
+                          id="worker-basic-pay"
+                          type="number"
+                          inputMode="decimal"
+                          enterKeyHint="next"
+                          aria-invalid={Boolean(fieldErrors.basicPay)}
+                          aria-describedby={fieldErrors.basicPay ? 'worker-basic-error' : undefined}
+                          className={`w-full pl-8 p-2.5 border rounded-lg text-sm font-bold font-mono focus:ring-2 outline-none min-h-11 transition-colors ${
+                            fieldErrors.basicPay
+                              ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                              : 'border-blue-200 bg-white focus:ring-blue-500'
+                          }`}
                           value={formData.wageConfig?.monthlyBreakdown?.basic || ''}
-                          onChange={e => handleMonthlyWageChange('basic', e.target.value)} placeholder="e.g. 15000" />
+                          onChange={e => {
+                            handleMonthlyWageChange('basic', e.target.value);
+                            clearFieldError('basicPay');
+                          }}
+                          placeholder="e.g. 15000"
+                        />
                       </div>
+                      <InlineFieldError id="worker-basic-error" message={fieldErrors.basicPay} />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">DA (Dearness Allow.)</label>
+                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">DA (Dearness Allow.)</label>
                       <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
-                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                           value={formData.wageConfig?.monthlyBreakdown?.da || ''}
                           onChange={e => handleMonthlyWageChange('da', e.target.value)} placeholder="0" />
                       </div>
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">Retaining Allowance</label>
+                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">Retaining Allowance</label>
                       <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3 text-blue-400" size={14}/>
-                        <input type="number" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                           value={formData.wageConfig?.monthlyBreakdown?.retainingAllowance || ''}
                           onChange={e => handleMonthlyWageChange('retainingAllowance', e.target.value)} placeholder="0" />
                       </div>
@@ -1184,28 +1420,28 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <span className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
                     Excluded Components = HRA + Travel + Medical + Other Allowances
                   </span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">HRA</label>
-                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">HRA</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.hra || ''}
                         onChange={e => handleMonthlyWageChange('hra', e.target.value)} placeholder="e.g. 5000" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Travel Allow.</label>
-                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Travel Allow.</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.travel || ''}
                         onChange={e => handleMonthlyWageChange('travel', e.target.value)} placeholder="0" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Medical Allow.</label>
-                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Medical Allow.</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.medical || ''}
                         onChange={e => handleMonthlyWageChange('medical', e.target.value)} placeholder="0" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1">Other Allow.</label>
-                      <input type="number" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Other Allow.</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.others || ''}
                         onChange={e => handleMonthlyWageChange('others', e.target.value)} placeholder="e.g. 2000" />
                     </div>
@@ -1217,23 +1453,23 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <span className="text-[10px] font-extrabold text-indigo-900 uppercase tracking-wider block">
                     Employer Contributions (Excluded from 50% Rule Denominator)
                   </span>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1">Employer PF (₹/mo)</label>
-                      <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1 block">Employer PF (₹/mo)</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.employerPf || ''}
                         onChange={e => handleMonthlyWageChange('employerPf', e.target.value)} placeholder="0" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1">Employer Gratuity (₹/mo)</label>
-                      <input type="number" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1 block">Employer Gratuity (₹/mo)</label>
+                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none min-h-11"
                         value={formData.wageConfig?.monthlyBreakdown?.employerGratuity || ''}
                         onChange={e => handleMonthlyWageChange('employerGratuity', e.target.value)} placeholder="0" />
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-blue-200 flex justify-between items-center">
+                <div className="pt-3 border-t border-blue-200 flex justify-between items-center flex-wrap gap-2">
                     <span className="text-xs font-bold text-blue-900 uppercase">Total Remuneration (Excl. Employer PF/Gratuity)</span>
                     <span className="text-xl font-black font-mono text-blue-700">₹ {(formData.wageConfig?.amount || 0).toLocaleString('en-IN')}</span>
                 </div>
@@ -1296,18 +1532,31 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </label>
 
                 {formData.wageConfig?.overtimeEligible && (
-                    <div className="animate-in fade-in slide-in-from-top-2">
-                        <label className="text-[10px] font-bold text-blue-800 uppercase ml-1">OT Pay Rate (Per Hour) *</label>
+                    <div data-field="overtimeRate" className="animate-in fade-in slide-in-from-top-2">
+                        <label htmlFor="worker-ot-rate" className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">OT Pay Rate (Per Hour) *</label>
                         <div className="relative mt-1">
-                            <IndianRupee className="absolute left-3 top-3 text-blue-500" size={18}/>
+                            <IndianRupee className="absolute left-3 top-3.5 text-blue-500" size={18}/>
                             <input 
+                              id="worker-ot-rate"
                               type="number" 
-                              className="w-full pl-10 p-3 border border-blue-200 rounded-lg text-sm bg-white font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 outline-none min-h-12" 
+                              inputMode="decimal"
+                              enterKeyHint="next"
+                              aria-invalid={Boolean(fieldErrors.overtimeRate)}
+                              aria-describedby={fieldErrors.overtimeRate ? 'worker-ot-error' : undefined}
+                              className={`w-full pl-10 p-3 border rounded-lg text-sm bg-white font-bold text-blue-900 focus:ring-2 outline-none min-h-12 transition-colors ${
+                                fieldErrors.overtimeRate
+                                  ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
+                                  : 'border-blue-200 focus:ring-blue-500'
+                              }`}
                               placeholder="e.g. 100" 
                               value={formData.wageConfig?.overtimeRatePerHour || ''} 
-                              onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, overtimeRatePerHour: parseFloat(e.target.value)}})} 
+                              onChange={e => {
+                                setFormData({...formData, wageConfig: {...formData.wageConfig!, overtimeRatePerHour: parseFloat(e.target.value)}});
+                                clearFieldError('overtimeRate');
+                              }}
                             />
                         </div>
+                        <InlineFieldError id="worker-ot-error" message={fieldErrors.overtimeRate} />
                     </div>
                 )}
             </div>
@@ -1315,16 +1564,16 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             {limits?.allowancesAndDeductionsEnabled && (
                 <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mt-2">
                   <h3 className="text-sm font-bold text-gray-700 mb-3">Daily Allowances (Optional)</h3>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase ml-1">Travel</label>
-                        <input type="number" className="w-full p-3 mt-1 border border-gray-200 rounded-lg text-sm bg-white min-h-12" placeholder="₹ 0"
+                        <label className="text-[10px] font-bold text-gray-500 uppercase ml-1 block">Travel</label>
+                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-3 mt-1 border border-gray-200 rounded-lg text-sm bg-white min-h-12" placeholder="₹ 0"
                           value={formData.wageConfig?.allowances?.travel || ''}
                           onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, travel: parseFloat(e.target.value)}}})} />
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase ml-1">Food</label>
-                        <input type="number" className="w-full p-3 mt-1 border border-gray-200 rounded-lg text-sm bg-white min-h-12" placeholder="₹ 0"
+                        <label className="text-[10px] font-bold text-gray-500 uppercase ml-1 block">Food</label>
+                        <input type="number" inputMode="decimal" enterKeyHint="done" className="w-full p-3 mt-1 border border-gray-200 rounded-lg text-sm bg-white min-h-12" placeholder="₹ 0"
                           value={formData.wageConfig?.allowances?.food || ''}
                           onChange={e => setFormData({...formData, wageConfig: {...formData.wageConfig!, allowances: {...formData.wageConfig!.allowances, food: parseFloat(e.target.value)}}})} />
                       </div>
@@ -1338,58 +1587,58 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         {currentStep === 3 && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex items-center gap-2 mb-2">
-              <div className="bg-indigo-600 p-1.5 rounded-lg">
+              <div className="bg-indigo-600 p-1.5 rounded-lg shrink-0">
                 <Shield size={16} className="text-white" />
               </div>
-              <h2 className="text-lg font-bold text-gray-800">Statutory Compliance</h2>
+              <h2 className="text-fluid-lg font-bold text-gray-800">Statutory Compliance</h2>
             </div>
             
             {limits?.statutoryComplianceEnabled ? (
                 <>
-                    <p className="text-xs text-gray-500 mb-4">Required for EPFO ECR & ESIC Return generation</p>
+                    <p className="text-xs text-gray-500 mb-4">Required for EPFO ECR &amp; ESIC Return generation</p>
                     <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">UAN (PF Number)</label>
-                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                            maxLength={12} type="tel" value={formData.uan || ''} onChange={e => setFormData({...formData, uan: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UAN" />
+                          <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">UAN (PF Number)</label>
+                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono"
+                            maxLength={12} type="tel" inputMode="numeric" enterKeyHint="next" value={formData.uan || ''} onChange={e => setFormData({...formData, uan: e.target.value.replace(/\D/g, '')})} placeholder="12-digit UAN" />
                         </div>
                         <div>
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">ESIC IP Number</label>
-                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                            maxLength={17} type="tel" value={formData.esicIp || ''} onChange={e => setFormData({...formData, esicIp: e.target.value.replace(/\D/g, '')})} placeholder="10-17 digits" />
+                          <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">ESIC IP Number</label>
+                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono"
+                            maxLength={17} type="tel" inputMode="numeric" enterKeyHint="next" value={formData.esicIp || ''} onChange={e => setFormData({...formData, esicIp: e.target.value.replace(/\D/g, '')})} placeholder="10-17 digits" />
                         </div>
                       </div>
 
                       <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase ml-1">PAN Number</label>
-                        <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase min-h-12"
-                          maxLength={10} value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value.toUpperCase()})} placeholder="e.g. ABCDE1234F" />
+                        <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">PAN Number</label>
+                        <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 uppercase min-h-12 font-mono"
+                          maxLength={10} enterKeyHint="next" value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value.toUpperCase()})} placeholder="e.g. ABCDE1234F" />
                       </div>
 
                       <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase ml-1">Father's Name <span className="text-[10px] lowercase">(for EPFO)</span></label>
+                        <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Father's Name <span className="text-[10px] lowercase">(for EPFO)</span></label>
                         <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                          value={formData.fatherName || ''} onChange={e => setFormData({...formData, fatherName: e.target.value})} placeholder="Enter full name" />
+                          enterKeyHint="next" value={formData.fatherName || ''} onChange={e => setFormData({...formData, fatherName: e.target.value})} placeholder="Enter full name" />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">DOB <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
-                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                            maxLength={10} type="tel" value={formData.dateOfBirth || ''} onChange={e => setFormData({...formData, dateOfBirth: e.target.value})} placeholder="15/08/1990" />
+                          <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">DOB <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
+                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono"
+                            maxLength={10} type="tel" inputMode="numeric" enterKeyHint="next" value={formData.dateOfBirth || ''} onChange={e => setFormData({...formData, dateOfBirth: e.target.value})} placeholder="15/08/1990" />
                         </div>
                         <div>
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Joining <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
-                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                            maxLength={10} type="tel" value={formData.dateOfJoining || ''} onChange={e => setFormData({...formData, dateOfJoining: e.target.value})} placeholder="01/01/2024" />
+                          <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Joining <span className="text-[10px] lowercase">(DD/MM/YYYY)</span></label>
+                          <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono"
+                            maxLength={10} type="tel" inputMode="numeric" enterKeyHint="next" value={formData.dateOfJoining || ''} onChange={e => setFormData({...formData, dateOfJoining: e.target.value})} placeholder="01/01/2024" />
                         </div>
                       </div>
 
                       <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase ml-1">Date of Exit <span className="text-[10px] lowercase">(optional)</span></label>
-                        <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12"
-                          maxLength={10} type="tel" value={formData.dateOfExit || ''} onChange={e => setFormData({...formData, dateOfExit: e.target.value})} placeholder="31/12/2024" />
+                        <label className="text-xs font-bold text-gray-600 uppercase ml-1 block">Date of Exit <span className="text-[10px] lowercase">(optional)</span></label>
+                        <input className="w-full p-3.5 mt-1 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 min-h-12 font-mono"
+                          maxLength={10} type="tel" inputMode="numeric" enterKeyHint="next" value={formData.dateOfExit || ''} onChange={e => setFormData({...formData, dateOfExit: e.target.value})} placeholder="31/12/2024" />
                       </div>
                     </div>
                 </>
@@ -1415,7 +1664,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="text-[11px] font-bold text-slate-600 block mb-1">Employment Type</label>
                   <select
@@ -1428,7 +1677,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                         isContractor: nextType === 'CONTRACTOR' || nextType === 'CONTRACT',
                       });
                     }}
-                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-blue-600"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-blue-600 min-h-11"
                   >
                     <option value="PERMANENT">Permanent (5-Yr Gratuity Rule)</option>
                     <option value="FIXED_TERM">Fixed-Term Hire (1-Yr Nov 2025)</option>
@@ -1441,20 +1690,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                   <label className="text-[11px] font-bold text-slate-600 block mb-1">Nominee Full Name</label>
                   <input
                     type="text"
+                    enterKeyHint="next"
                     value={formData.nomineeName || ''}
                     onChange={e => setFormData({ ...formData, nomineeName: e.target.value })}
                     placeholder="Beneficiary name"
-                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 min-h-11"
                   />
                 </div>
                 <div>
                   <label className="text-[11px] font-bold text-slate-600 block mb-1">Nominee Relation</label>
                   <input
                     type="text"
+                    enterKeyHint="next"
                     value={formData.nomineeRelation || ''}
                     onChange={e => setFormData({ ...formData, nomineeRelation: e.target.value })}
                     placeholder="Spouse / Parent / Child"
-                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 min-h-11"
                   />
                 </div>
               </div>
@@ -1476,17 +1727,18 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                         },
                       })
                     }
-                    className="w-4 h-4 accent-blue-600"
+                    className="w-4 h-4 accent-blue-600 shrink-0"
                   />
                   <span>Transferred from a group / subsidiary company (aggregate continuous service)</span>
                 </label>
 
                 {formData.subsidiaryTransfer?.transferredFromSubsidiary && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                       <label className="text-[10px] font-semibold text-slate-600 block mb-1">Prior Subsidiary Name</label>
                       <input
                         type="text"
+                        enterKeyHint="next"
                         value={formData.subsidiaryTransfer?.subsidiaryName || ''}
                         onChange={e =>
                           setFormData({
@@ -1498,28 +1750,29 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                           })
                         }
                         placeholder="Subsidiary Pvt Ltd"
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs min-h-11"
                       />
                     </div>
                     <div>
                       <label className="text-[10px] font-semibold text-slate-600 block mb-1">Original Subsidiary Joining Date</label>
-                      <input
-                        type="date"
+                      <ModalDatePicker
+                        fieldName="subsidiaryJoiningDate"
+                        label="Original Subsidiary Joining Date"
+                        placeholder="Select joining date"
                         value={formData.subsidiaryTransfer?.previousJoiningDate || ''}
-                        onChange={e =>
+                        onChange={iso =>
                           setFormData({
                             ...formData,
                             subsidiaryTransfer: {
                               ...formData.subsidiaryTransfer!,
-                              previousJoiningDate: e.target.value,
+                              previousJoiningDate: iso,
                             },
                           })
                         }
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
                       />
                     </div>
                     <div className="flex items-end">
-                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 p-2 bg-white border border-slate-200 rounded-lg w-full cursor-pointer">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 p-2.5 bg-white border border-slate-200 rounded-lg w-full cursor-pointer min-h-11">
                         <input
                           type="checkbox"
                           checked={formData.subsidiaryTransfer?.noBreakInService ?? true}
@@ -1532,7 +1785,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                               },
                             })
                           }
-                          className="w-4 h-4 accent-blue-600"
+                          className="w-4 h-4 accent-blue-600 shrink-0"
                         />
                         <span>No break in service</span>
                       </label>
@@ -1612,13 +1865,14 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                 </label>
 
                 {(formData.ptExempt || formData.ptExemptionStatus === 'PT_EXEMPT') && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:pl-6">
                     <div>
                       <label className="text-[10px] font-semibold text-slate-600 block mb-1">
                         Previous Employer Name
                       </label>
                       <input
                         type="text"
+                        enterKeyHint="next"
                         value={formData.ptPreviousEmployerDeclaration?.previousEmployerName || ''}
                         onChange={e =>
                           setFormData({
@@ -1631,7 +1885,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                           })
                         }
                         placeholder="e.g. Bharat Forge Ltd"
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs min-h-11"
                       />
                     </div>
                     <div>
@@ -1640,6 +1894,7 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                       </label>
                       <input
                         type="text"
+                        enterKeyHint="done"
                         value={formData.ptPreviousEmployerDeclaration?.certificateRef || ''}
                         onChange={e =>
                           setFormData({
@@ -1652,27 +1907,28 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                           })
                         }
                         placeholder="e.g. PT-CERT-2026-11"
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-mono min-h-11"
                       />
                     </div>
                     <div>
                       <label className="text-[10px] font-semibold text-slate-600 block mb-1">
                         Declaration Date
                       </label>
-                      <input
-                        type="date"
+                      <ModalDatePicker
+                        fieldName="ptDeclaredDate"
+                        label="PT Declaration Date"
+                        placeholder="Select declaration date"
                         value={formData.ptPreviousEmployerDeclaration?.declaredDate || ''}
-                        onChange={e =>
+                        onChange={iso =>
                           setFormData({
                             ...formData,
                             ptPreviousEmployerDeclaration: {
                               declared: true,
                               ...(formData.ptPreviousEmployerDeclaration || {}),
-                              declaredDate: e.target.value,
+                              declaredDate: iso,
                             },
                           })
                         }
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
                       />
                     </div>
                   </div>
@@ -1759,26 +2015,58 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
              )}
           </div>
         )}
-      </div>
+      </KeyboardAwareFormContainer>
 
-      {/* Footer Navigation: Clean Dual Viewport Action Strip */}
+      {/* Keyboard-Aware Footer Navigation: Rises smoothly above soft keyboard on mobile/native */}
       {currentStep < 4 && (
-        <div className="flex items-center justify-between pt-4 border-t border-slate-200/80">
-          <button 
-            type="button"
-            onClick={() => currentStep > 0 ? setCurrentStep(c => c - 1) : onBack()} 
-            className="px-5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 font-semibold text-xs border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs"
-          >
-            {currentStep === 0 ? 'Cancel' : 'Back'}
-          </button>
-          <button 
-            type="button"
-            onClick={handleNext} 
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
-          >
-            <span>Next Step</span>
-            <ChevronRight size={15} />
-          </button>
+        <div
+          className={`fixed left-0 right-0 z-30 lg:static bg-white/95 lg:bg-transparent backdrop-blur-md lg:backdrop-blur-none border-t border-slate-200/90 lg:border-slate-200/80 shadow-lg lg:shadow-none px-4 py-3 lg:px-0 lg:pt-4 lg:pb-2 transition-[bottom] duration-200 ease-out ${
+            isKeyboardOpen ? '' : 'bottom-16 lg:bottom-auto'
+          }`}
+          style={
+            isKeyboardOpen
+              ? { bottom: `${keyboardHeight}px` }
+              : undefined
+          }
+        >
+          <div className="max-w-3xl mx-auto flex items-center justify-between gap-2.5">
+            <button 
+              type="button"
+              onClick={() => {
+                setFieldErrors({});
+                if (currentStep > 0) setCurrentStep(c => c - 1);
+                else onBack();
+              }} 
+              className="px-4 sm:px-5 min-h-[2.75rem] rounded-xl text-slate-700 hover:text-slate-900 font-semibold text-xs border border-slate-200 bg-white hover:bg-slate-50 transition-colors shadow-xs"
+            >
+              {currentStep === 0 ? 'Cancel' : 'Back'}
+            </button>
+
+            <div className="flex items-center gap-2">
+              {isEditing && capturedImages[0] === 'EXISTING_DATA' && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    if (validateStep(currentStep)) handleSave();
+                  }}
+                  className="px-4 sm:px-5 min-h-[2.75rem] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                >
+                  {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                  <span>Save</span>
+                </button>
+              )}
+
+              <button 
+                type="button"
+                onClick={handleNext} 
+                className="px-5 sm:px-6 min-h-[2.75rem] bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+              >
+                <span>Next Step</span>
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

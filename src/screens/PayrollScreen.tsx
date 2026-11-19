@@ -36,6 +36,8 @@ import {
 import { FnfLegalHoldCategory, FnfSettlementRecord } from '../types/index';
 import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
 import { FnfLegalHoldModal } from '../components/FnfLegalHoldModal';
+import { TruncatedText } from '../components/TruncatedText';
+import { ResponsiveDataTable, ResponsiveColumn } from '../components/ResponsiveDataTable';
 
 interface PayrollScreenProps {
   onNavigate?: (screen: ScreenName) => void;
@@ -496,11 +498,11 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
     <div className="space-y-6 pb-12">
       
       {/* TOOLBAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Monthly Payroll & Statutory Compliance</h1>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
-            <span>Automated PF (12%), ESI (0.75%), State PT (all 28 states) & TDS</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Monthly Payroll &amp; Statutory Compliance</h1>
+          <div className="text-fluid-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
+            <span>Automated PF (12%), ESI (0.75%), State PT (all 28 states) &amp; TDS</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
             <span className="font-mono tabular-nums text-slate-600 font-semibold">
               {new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}
@@ -508,9 +510,9 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
-          <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-xl px-2.5 h-10 shadow-xs">
-            <Calendar size={14} className="text-slate-500" />
+        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto max-w-full">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-xl px-2.5 min-h-[2.5rem] py-1.5 shadow-xs">
+            <Calendar size={14} className="text-slate-500 shrink-0" />
             <input
               type="month"
               value={currentMonthStr}
@@ -518,58 +520,58 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                 if (e.target.value) setCurrentMonthStr(e.target.value);
               }}
               aria-label="Payroll Month"
-              className="text-xs font-mono font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
+              className="text-fluid-xs font-mono font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
               title="Switch payroll month (pre-Nov 2025 triggers retrospective legacy rules)"
             />
           </div>
 
           <button
             onClick={() => setIsMinWageModalOpen(true)}
-            className="h-10 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             title="View state-wise minimum wage database by zone & skill level, and manage mid-month revisions"
           >
-            <Scale size={14} className="text-slate-700" />
+            <Scale size={14} className="text-slate-700 shrink-0" />
             <span>State Min Wages</span>
           </button>
 
           <button
             onClick={() => setIsAuditHistoryOpen(true)}
-            className="h-10 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             title="Inspect saved WageComplianceAudit records & Gratuity Liability projections"
           >
-            <History size={14} className="text-indigo-600" />
+            <History size={14} className="text-indigo-600 shrink-0" />
             <span>Compliance Audits ({savedAudits.length})</span>
           </button>
 
           <button
             onClick={handleRunServerPreFinalizationCheck}
             disabled={validatingServer || payrolls.length === 0}
-            className="h-10 px-3.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="min-h-[2.5rem] py-2 px-3.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             title="Run server-side 50% Rule & Minimum Wage validation before finalizing payroll"
           >
-            {validatingServer ? <Loader2 size={15} className="animate-spin" /> : <Lock size={14} className="text-emerald-400" />}
+            {validatingServer ? <Loader2 size={15} className="animate-spin shrink-0" /> : <Lock size={14} className="text-emerald-400 shrink-0" />}
             <span>Audit &amp; Finalize Payroll</span>
           </button>
 
           <button
             onClick={() => setIsExportPackOpen(true)}
-            className="h-10 px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="min-h-[2.5rem] py-2 px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             title="Export complete filing pack (.ZIP): EPFO ECR, Form 24Q quarterly return, Form 16 Part A/B certificates"
           >
-            <Archive size={15} />
+            <Archive size={15} className="shrink-0" />
             <span>Export Filing Pack (.ZIP)</span>
           </button>
 
           <button
             onClick={handleDownloadECR}
-            className="h-10 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="min-h-[2.5rem] py-2 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             title="Download official EPFO ECR 2.0 file (#~# delimited format) for unified portal upload"
           >
-            <Download size={15} className="text-blue-600" />
+            <Download size={15} className="text-blue-600 shrink-0" />
             <span>EPFO ECR (.txt)</span>
           </button>
           
-          <div className="text-xs text-slate-500 font-mono tabular-nums bg-white border border-slate-200/80 px-3 py-2 rounded-xl shadow-xs">
+          <div className="text-fluid-xs text-slate-500 font-mono tabular-nums bg-white border border-slate-200/80 px-3 py-2 rounded-xl shadow-xs">
             Staff Ledger: <strong className="text-slate-900">{totalStaffCount} Operators</strong>
           </div>
         </div>
@@ -951,15 +953,27 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                           : 'bg-slate-50/60 border-slate-200'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-2 flex-wrap">
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-sm text-slate-900">{rec.workerName}</span>
-                            <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-800 font-mono text-[10px] font-bold">
+                      <div className="flex items-start justify-between gap-2 flex-wrap min-w-0">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <div className="min-w-0 max-w-full">
+                              <TruncatedText
+                                text={rec.workerName}
+                                modalTitle="FnF Settlement Worker"
+                                subtitle={`${rec.designation || 'Employee'} · Exit ${rec.exitDate}`}
+                                details={[
+                                  { label: 'Status', value: rec.status },
+                                  { label: 'Schedule A (2d Wage)', value: `₹${(rec.fnfWageNetPayable ?? rec.netFnfPayable).toLocaleString('en-IN')}`, mono: true },
+                                  { label: 'Schedule B (30d Gratuity)', value: `₹${(rec.gratuityPayable || 0).toLocaleString('en-IN')}`, mono: true },
+                                ]}
+                                className="font-bold text-fluid-sm text-slate-900"
+                              />
+                            </div>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-800 font-mono text-[10px] font-bold shrink-0">
                               {rec.separationStatus || rec.exitReason}
                             </span>
                             <span
-                              className={`px-1.5 py-0.5 rounded font-mono text-[10px] font-bold ${
+                              className={`px-1.5 py-0.5 rounded font-mono text-[10px] font-bold shrink-0 ${
                                 rec.status === 'SETTLED'
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : rec.status === 'APPROVED'
@@ -972,7 +986,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                               {rec.status}
                             </span>
                           </div>
-                          <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                          <div className="text-[11px] font-mono text-slate-500 mt-0.5 break-words">
                             Exit {rec.exitDate} · {rec.designation}
                           </div>
                         </div>
@@ -1113,378 +1127,605 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
             </div>
           )}
 
-          {/* DUAL VIEWPORT PAYROLL ROSTER: 1 column mobile, 2 columns desktop */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {payrolls.map(payroll => (
-              <div 
-                key={payroll.id} 
-                className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between overflow-hidden"
-              >
-                <div 
-                  onClick={() => {
-                    if (!limits?.payslipEnabled) {
-                      toast.info("Generating Detailed Payslips is available on Pro & Enterprise plans.");
-                      return;
-                    }
-                    setSelectedPayroll(payroll);
-                  }}
-                  className="p-5 cursor-pointer hover:bg-slate-50/50 transition-colors flex-1"
+          {/* RESPONSIVE PAYROLL REGISTER:
+              - Desktop (md+): 10-column sticky-header <table> with wrapper-only overflow-x-auto
+              - Mobile (< md): Vertical stacked cards OR Compact Column Priority view [Name, Status, Net Pay]
+              - Pagination prevents rendering 500+ payroll rows at once on low-end phones */}
+          {(() => {
+            const openPayslip = (payroll: MonthlyPayroll) => {
+              if (!limits?.payslipEnabled) {
+                toast.info("Generating Detailed Payslips is available on Pro & Enterprise plans.");
+                return;
+              }
+              setSelectedPayroll(payroll);
+            };
+
+            const renderPayrollStatusAction = (payroll: MonthlyPayroll, compact = false) => {
+              const workerConflict = unresolvedConflicts.find((c) => c.workerId === payroll.workerId);
+              const workerMinWageAudit =
+                serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+                payroll.wageStructureAudit;
+
+              if (payroll.status === 'PAID') {
+                return (
+                  <span className="text-xs font-semibold text-emerald-700 inline-flex items-center gap-1 px-2 py-1">
+                    <CheckCircle size={13} />
+                    <span>Settled</span>
+                  </span>
+                );
+              }
+              if (workerConflict) {
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsConflictModalOpen(true);
+                    }}
+                    className={`${compact ? 'min-h-[32px] px-2.5 py-1 text-[11px]' : 'min-h-[38px] px-3 py-1.5 text-xs'} font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 rounded-xl transition-all cursor-pointer inline-flex items-center gap-1`}
+                    title="Click to resolve attendance conflict blocking this payroll"
+                  >
+                    <AlertCircle size={13} />
+                    <span>{compact ? 'Conflict' : 'Resolve Conflict'}</span>
+                  </button>
+                );
+              }
+              if (workerMinWageAudit?.isMinimumWageViolation) {
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => handleMarkAsPaid(payroll, e)}
+                    className={`${compact ? 'min-h-[32px] px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 rounded-xl transition-all cursor-pointer inline-flex items-center gap-1`}
+                    title="MINIMUM_WAGE_VIOLATION: Payout blocked until Basic Pay meets state minimum wage"
+                  >
+                    <Lock size={12} />
+                    <span>{compact ? 'Blocked' : 'Blocked: Min Wage'}</span>
+                  </button>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => handleMarkAsPaid(payroll, e)}
+                  className={`${compact ? 'min-h-[32px] px-2.5 py-1 text-[11px]' : 'px-3.5 py-1.5 text-xs'} font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer whitespace-nowrap`}
                 >
-                  {/* WORKER AND NET PAY */}
-                  <div className="flex justify-between items-start gap-3">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-sm text-slate-700 shrink-0">
+                  Mark Paid
+                </button>
+              );
+            };
+
+            const payrollColumns: ResponsiveColumn<MonthlyPayroll>[] = [
+              {
+                key: 'employee',
+                header: 'Employee',
+                mobileLabel: 'Employee',
+                stickyLeft: true,
+                isPrimary: true,
+                mobilePriority: true,
+                minWidth: 'min-w-[200px]',
+                render: (payroll) => {
+                  const cardAudit =
+                    serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+                    payroll.wageStructureAudit;
+                  const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
+                  return (
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0">
                         {payroll.workerName.charAt(0)}
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-bold text-sm text-slate-900 truncate">{payroll.workerName}</h3>
-                        <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                          <span className="font-mono tabular-nums">{payroll.attendanceSummary.payableDays} Payable Days</span>
-                          <span aria-hidden="true" className="text-slate-300">·</span>
-                          <span className="font-mono tabular-nums">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
+                      <div className="min-w-0 flex-1">
+                        <TruncatedText
+                          text={payroll.workerName}
+                          modalTitle="Payroll Worker Summary"
+                          subtitle={`${payroll.workerDesignation || 'Operator'} · ${currentMonthStr}`}
+                          details={[
+                            { label: 'Net Payable', value: `₹${payroll.netPayable.toLocaleString('en-IN')}`, mono: true },
+                            { label: 'Gross Wages', value: `₹${payroll.earnings.gross.toLocaleString('en-IN')}`, mono: true },
+                            { label: 'Payable Days', value: `${payroll.attendanceSummary.payableDays} days (${payroll.attendanceSummary.totalOvertimeHours}h OT)`, mono: true },
+                            { label: 'Status', value: payroll.status },
+                          ]}
+                          className="font-bold text-xs text-slate-900"
+                        />
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {payroll.workerDesignation || 'Operator'}
                         </div>
-                      </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <div className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-slate-900">
-                        ₹{payroll.netPayable.toLocaleString()}
-                      </div>
-                      <div className="text-[11px] mt-0.5">
-                        {payroll.status === 'PAID' ? (
-                          <span className="text-emerald-700 font-semibold">· Disbursed</span>
-                        ) : (
-                          <span className="text-amber-700 font-semibold">· Unpaid</span>
+                        {cardAudit?.hasAnyViolation && (
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            <span className="text-[10px] font-mono font-bold text-rose-700">
+                              {cardAudit.isMinimumWageViolation ? 'MIN WAGE VIOLATION' : '50% RULE GAP'}
+                            </span>
+                            {workerObj && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingWageWorker(workerObj);
+                                }}
+                                className="text-[10px] font-bold text-blue-700 hover:underline cursor-pointer"
+                              >
+                                Fix
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
+                  );
+                },
+                renderPriority: (payroll) => (
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 text-fluid-xs truncate">{payroll.workerName}</div>
+                    <div className="text-[11px] text-slate-500 font-mono tabular-nums truncate">
+                      {payroll.attendanceSummary.payableDays}d · {payroll.attendanceSummary.totalOvertimeHours}h OT
+                    </div>
                   </div>
+                ),
+              },
+              {
+                key: 'attendance',
+                header: 'Payable Days',
+                align: 'center',
+                numeric: true,
+                minWidth: 'min-w-[120px]',
+                render: (payroll) => (
+                  <div>
+                    <div className="font-bold text-slate-900">
+                      {payroll.attendanceSummary.payableDays}d
+                      {payroll.attendanceSummary.totalOvertimeHours > 0 && (
+                        <span className="text-amber-700 ml-1">+{payroll.attendanceSummary.totalOvertimeHours}h</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      P:{payroll.attendanceSummary.presentDays} · H:{payroll.attendanceSummary.halfDays} · A:{payroll.attendanceSummary.absentDays}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: 'gross',
+                header: 'Gross Wages',
+                align: 'right',
+                numeric: true,
+                minWidth: 'min-w-[115px]',
+                render: (payroll) => (
+                  <div>
+                    <div className="font-bold text-slate-900">
+                      ₹{payroll.earnings.gross.toLocaleString('en-IN')}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      Basic ₹{payroll.earnings.basic.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: 'pfEsi',
+                header: 'PF / ESI (EE)',
+                align: 'right',
+                numeric: true,
+                minWidth: 'min-w-[125px]',
+                render: (payroll) =>
+                  payroll.statutory ? (
+                    <div>
+                      <div className="text-slate-800">
+                        PF ₹{payroll.statutory.employeePf.toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {payroll.statutory.isEsiApplicable
+                          ? `ESI ₹${payroll.statutory.employeeEsi.toLocaleString('en-IN')}`
+                          : 'ESI Exempt'}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  ),
+              },
+              {
+                key: 'ptTds',
+                header: 'PT / LWF / TDS',
+                align: 'right',
+                numeric: true,
+                minWidth: 'min-w-[130px]',
+                render: (payroll) =>
+                  payroll.statutory ? (
+                    <div>
+                      <div className="text-slate-800">
+                        PT ₹{payroll.statutory.professionalTax} · LWF ₹{payroll.statutory.employeeLwf || 0}
+                      </div>
+                      <div className={`text-[10px] ${payroll.statutory.tds > 0 ? 'text-violet-700 font-semibold' : 'text-slate-400'}`}>
+                        TDS ₹{payroll.statutory.tds.toLocaleString('en-IN')} ({payroll.statutory.taxRegime})
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  ),
+              },
+              {
+                key: 'advances',
+                header: 'Kharchi / Adv',
+                align: 'right',
+                numeric: true,
+                minWidth: 'min-w-[105px]',
+                render: (payroll) =>
+                  payroll.deductions.advances > 0 ? (
+                    <span className="font-semibold text-rose-600">
+                      -₹{payroll.deductions.advances.toLocaleString('en-IN')}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">₹0</span>
+                  ),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                align: 'center',
+                mobilePriority: true,
+                minWidth: 'min-w-[105px]',
+                render: (payroll) => {
+                  const workerConflict = unresolvedConflicts.find((c) => c.workerId === payroll.workerId);
+                  const workerMinWageAudit =
+                    serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+                    payroll.wageStructureAudit;
 
-                  {/* ATTENDANCE & ADVANCES BREAKDOWN */}
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono tabular-nums">
-                    <span>{payroll.attendanceSummary.presentDays} Present</span>
-                    <span aria-hidden="true" className="text-slate-300">·</span>
-                    <span>{payroll.attendanceSummary.halfDays} Half</span>
-                    <span aria-hidden="true" className="text-slate-300">·</span>
-                    <span>{payroll.attendanceSummary.absentDays} Absent</span>
-                    {payroll.attendanceSummary.paidLeaves > 0 && (
-                      <>
-                        <span aria-hidden="true" className="text-slate-300">·</span>
-                        <span className="text-blue-600">{payroll.attendanceSummary.paidLeaves} Leave</span>
-                      </>
+                  if (payroll.status === 'PAID') {
+                    return <span className="text-xs font-bold text-emerald-700">Disbursed</span>;
+                  }
+                  if (workerConflict) {
+                    return <span className="text-xs font-bold text-rose-700">Conflict</span>;
+                  }
+                  if (workerMinWageAudit?.isMinimumWageViolation) {
+                    return <span className="text-xs font-bold text-rose-700">Blocked</span>;
+                  }
+                  return <span className="text-xs font-bold text-amber-700">Unpaid</span>;
+                },
+              },
+              {
+                key: 'netPayable',
+                header: 'Net Payable',
+                mobileLabel: 'Net Pay',
+                align: 'right',
+                numeric: true,
+                mobilePriority: true,
+                isHeaderMetric: true,
+                minWidth: 'min-w-[125px]',
+                render: (payroll) => (
+                  <div>
+                    <div className="font-extrabold text-sm text-slate-900">
+                      ₹{payroll.netPayable.toLocaleString('en-IN')}
+                    </div>
+                    {payroll.fnfSummary?.isFnF && (
+                      <div className="text-[10px] text-emerald-700 font-semibold">
+                        +FnF ₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
+                      </div>
                     )}
                   </div>
-
-                  {/* EARNINGS VS ADVANCE DEDUCTIONS */}
-                  <div className="mt-3 p-2.5 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs font-mono tabular-nums">
-                    <span className="text-slate-600">
-                      Gross: <strong className="text-slate-900 font-bold">₹{payroll.earnings.gross.toLocaleString()}</strong>
-                    </span>
-                    <span className="text-rose-600">
-                      Kharchi: <strong className="font-bold">-₹{payroll.deductions.advances.toLocaleString()}</strong>
-                    </span>
+                ),
+                renderPriority: (payroll) => (
+                  <div className="font-extrabold text-xs text-slate-900">
+                    ₹{payroll.netPayable.toLocaleString('en-IN')}
                   </div>
-
-                  {payroll.fnfSummary?.isFnF && (
-                    <div className="mt-2 p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between gap-2 text-xs font-mono tabular-nums">
-                      <div className="text-emerald-950">
-                        <span className="font-bold">FnF Gratuity Settlement</span>
-                        <span className="block text-[10px] text-emerald-800">
-                          {payroll.fnfSummary.roundedYears} yrs · Exit {payroll.fnfSummary.exitDate}
-                          {payroll.fnfSummary.deathInService ? ' · DEATH_IN_SERVICE' : ''}
-                          {payroll.fnfSummary.ceilingApplied ? ' · ₹20L Cap' : ''}
-                        </span>
-                      </div>
-                      <span className="font-bold text-emerald-800">
-                        +₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
-                      </span>
+                ),
+              },
+              {
+                key: 'ctc',
+                header: 'Employer CTC',
+                align: 'right',
+                numeric: true,
+                minWidth: 'min-w-[125px]',
+                render: (payroll) => {
+                  const ctc =
+                    payroll.employerCostToCompany ||
+                    payroll.earnings.gross + (payroll.statutory?.totalEmployerStatutory || 0);
+                  return (
+                    <div>
+                      <div className="font-semibold text-slate-800">₹{ctc.toLocaleString('en-IN')}</div>
+                      {payroll.statutory && (
+                        <div className="text-[10px] text-slate-400">
+                          ER +₹{payroll.statutory.totalEmployerStatutory.toLocaleString('en-IN')}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  );
+                },
+              },
+              {
+                key: 'actions',
+                header: 'Actions',
+                align: 'right',
+                isAction: true,
+                minWidth: 'min-w-[260px]',
+                render: (payroll) => {
+                  const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
+                  return (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center justify-end gap-1.5 flex-wrap"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => openPayslip(payroll)}
+                        className="min-h-[32px] px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        title="View printable payslip"
+                      >
+                        <FileText size={12} />
+                        <span>Slip</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTracePayroll(payroll)}
+                        className="min-h-[32px] px-2 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        title="Show audited calculation derivation"
+                      >
+                        <Calculator size={12} />
+                        <span>Calc</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTaxDeclarationWorker(workerObj)}
+                        className="min-h-[32px] px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        title="Configure state PT & tax regime"
+                      >
+                        <Shield size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setForm16Worker(workerObj)}
+                        className="min-h-[32px] px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        title="Generate Form 16 Part B Certificate"
+                      >
+                        <FileCheck size={12} />
+                      </button>
+                      {renderPayrollStatusAction(payroll, true)}
+                    </div>
+                  );
+                },
+              },
+            ];
 
-                  {/* STATUTORY DEDUCTION PILLS & CTC LIABILITIES */}
-                  {payroll.statutory && (
-                    <div className="mt-2.5 p-2.5 bg-slate-50/70 rounded-xl border border-slate-200/90 space-y-1.5">
-                      <div className="flex items-center justify-between flex-wrap gap-1 text-[11px]">
-                        <span className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">
-                          Statutory Deductions (EE)
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
-                            {payroll.statutory.state} PT
-                          </span>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                            {payroll.statutory.taxRegime} Regime
-                          </span>
+            return (
+              <ResponsiveDataTable
+                data={payrolls}
+                columns={payrollColumns}
+                keyExtractor={(payroll) => payroll.id}
+                loading={loading}
+                stickyHeader={true}
+                maxHeightClassName="max-h-[68vh]"
+                tableMinWidthClassName="min-w-[1340px]"
+                paginationMode="pages"
+                initialPageSize={20}
+                pageSizeOptions={[10, 20, 50, 100]}
+                itemLabel="payrolls"
+                ariaLabel={`Monthly payroll register for ${currentMonthStr}`}
+                onRowClick={openPayslip}
+                emptyState={{
+                  icon: <IndianRupee size={24} className="text-slate-400" />,
+                  title: 'No personnel records found for salary generation',
+                  description: 'Workers must be registered in the directory to compute monthly payroll.',
+                }}
+                renderMobileCard={(payroll) => (
+                  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between overflow-hidden">
+                    <div
+                      onClick={() => openPayslip(payroll)}
+                      className="p-4 sm:p-5 cursor-pointer hover:bg-slate-50/50 transition-colors flex-1"
+                    >
+                      {/* WORKER AND NET PAY */}
+                      <div className="flex justify-between items-start gap-2.5 flex-wrap xs:flex-nowrap min-w-0">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-fluid-sm text-slate-700 shrink-0">
+                            {payroll.workerName.charAt(0)}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="font-bold text-fluid-sm text-slate-900 min-w-0">
+                              <TruncatedText
+                                text={payroll.workerName}
+                                modalTitle="Payroll Worker Summary"
+                                subtitle={`${payroll.workerDesignation || 'Operator'} · ${currentMonthStr}`}
+                                details={[
+                                  { label: 'Net Payable', value: `₹${payroll.netPayable.toLocaleString('en-IN')}`, mono: true },
+                                  { label: 'Gross Wages', value: `₹${payroll.earnings.gross.toLocaleString('en-IN')}`, mono: true },
+                                  { label: 'Payable Days', value: `${payroll.attendanceSummary.payableDays} days (${payroll.attendanceSummary.totalOvertimeHours}h OT)`, mono: true },
+                                  { label: 'Status', value: payroll.status },
+                                ]}
+                                className="font-bold text-fluid-sm text-slate-900"
+                              />
+                            </h3>
+                            <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-1.5 gap-y-0.5 mt-0.5">
+                              <span className="font-mono tabular-nums">{payroll.attendanceSummary.payableDays} Payable Days</span>
+                              <span aria-hidden="true" className="text-slate-300">·</span>
+                              <span className="font-mono tabular-nums">{payroll.attendanceSummary.totalOvertimeHours}h OT</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0 ml-auto">
+                          <div className="text-fluid-lg font-extrabold font-mono tabular-nums text-slate-900">
+                            ₹{payroll.netPayable.toLocaleString('en-IN')}
+                          </div>
+                          <div className="text-fluid-2xs mt-0.5">
+                            {payroll.status === 'PAID' ? (
+                              <span className="text-emerald-700 font-semibold">· Disbursed</span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">· Unpaid</span>
+                            )}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5 text-[11px] font-mono tabular-nums">
-                        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
-                          EPF: <strong>₹{payroll.statutory.employeePf}</strong>
-                        </span>
-                        {payroll.statutory.isEsiApplicable ? (
-                          <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
-                            ESI: <strong>₹{payroll.statutory.employeeEsi}</strong>
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-800 font-semibold" title={payroll.statutory.esiDroppedNote}>
-                            ESI: Exempt (&gt; ₹21k)
-                          </span>
-                        )}
-                        <span
-                          className={`px-2 py-0.5 rounded-md border ${
-                            payroll.statutory.isPtExempt
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
-                              : 'bg-white border-slate-200 text-slate-700'
-                          }`}
-                          title={payroll.statutory.ptExemptionNote}
-                        >
-                          PT: <strong>₹{payroll.statutory.professionalTax}</strong>
-                          {payroll.statutory.isPtExempt ? ' (PT_EXEMPT)' : ''}
-                          {payroll.statutory.ptProratedInfo ? ' (Pro-rated)' : ''}
-                          {payroll.statutory.ptFebruaryAdjustmentApplied ? ' (Feb Adj.)' : ''}
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded-md border ${
-                            payroll.statutory.isContractorExcludedFromLwf
-                              ? 'bg-slate-100 border-slate-300 text-slate-600'
-                              : (payroll.statutory.employeeLwf || 0) > 0
-                              ? 'bg-cyan-50 border-cyan-200 text-cyan-900 font-semibold'
-                              : 'bg-white border-slate-200 text-slate-500'
-                          }`}
-                          title={
-                            payroll.statutory.lwfTransferSplit?.splitSummary ||
-                            payroll.statutory.lwfSkippedReason ||
-                            `${payroll.statutory.state} · ${payroll.statutory.lwfCycleLabel || 'LWF'}`
-                          }
-                        >
-                          LWF ({payroll.statutory.state}): <strong>₹{payroll.statutory.employeeLwf || 0}</strong>
-                          {payroll.statutory.isContractorExcludedFromLwf ? ' · Contractor' : ''}
-                          {payroll.statutory.lwfTransferSplit ? ' · Split' : ''}
-                          {payroll.statutory.lwfSkippedReason === 'WAGE_CEILING_EXCEEDED' ? ' · Ceiling Exempt' : ''}
-                          {payroll.statutory.lwfSkippedReason === 'STATE_NO_LWF' ? ' · No LWF' : ''}
-                        </span>
-                        {payroll.statutory.tds > 0 ? (
-                          <span className="px-2 py-0.5 rounded-md bg-violet-50 border border-violet-200 text-violet-800 font-bold">
-                            TDS: ₹{payroll.statutory.tds}
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-400">
-                            TDS: ₹0
-                          </span>
+                      {/* ATTENDANCE & ADVANCES BREAKDOWN */}
+                      <div className="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono tabular-nums">
+                        <span>{payroll.attendanceSummary.presentDays} Present</span>
+                        <span aria-hidden="true" className="text-slate-300">·</span>
+                        <span>{payroll.attendanceSummary.halfDays} Half</span>
+                        <span aria-hidden="true" className="text-slate-300">·</span>
+                        <span>{payroll.attendanceSummary.absentDays} Absent</span>
+                        {payroll.attendanceSummary.paidLeaves > 0 && (
+                          <>
+                            <span aria-hidden="true" className="text-slate-300">·</span>
+                            <span className="text-blue-600">{payroll.attendanceSummary.paidLeaves} Leave</span>
+                          </>
                         )}
                       </div>
 
-                      {(payroll.statutory.notionalWageAddition || 0) > 0 && (
-                        <div className="mt-1.5 p-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-mono space-y-0.5">
-                          <div className="flex items-center justify-between gap-2 flex-wrap text-amber-950 font-bold">
-                            <span>Notional Wage Addition (50% Rule):</span>
-                            <span>+₹{payroll.statutory.notionalWageAddition!.toLocaleString('en-IN')}</span>
-                          </div>
-                          <div className="text-[10px] text-amber-900 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                            <span>
-                              PF Base: ₹{(payroll.statutory.originalPfWageBase ?? payroll.earnings.basic).toLocaleString('en-IN')} → <strong>₹{payroll.statutory.pfWageBase.toLocaleString('en-IN')}</strong>
+                      {/* EARNINGS VS ADVANCE DEDUCTIONS */}
+                      <div className="mt-3 p-2.5 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between flex-wrap gap-2 text-xs font-mono tabular-nums">
+                        <span className="text-slate-600">
+                          Gross: <strong className="text-slate-900 font-bold">₹{payroll.earnings.gross.toLocaleString('en-IN')}</strong>
+                        </span>
+                        <span className="text-rose-600">
+                          Kharchi: <strong className="font-bold">-₹{payroll.deductions.advances.toLocaleString('en-IN')}</strong>
+                        </span>
+                      </div>
+
+                      {payroll.fnfSummary?.isFnF && (
+                        <div className="mt-2 p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between gap-2 text-xs font-mono tabular-nums">
+                          <div className="text-emerald-950">
+                            <span className="font-bold">FnF Gratuity Settlement</span>
+                            <span className="block text-[10px] text-emerald-800">
+                              {payroll.fnfSummary.roundedYears} yrs · Exit {payroll.fnfSummary.exitDate}
+                              {payroll.fnfSummary.deathInService ? ' · DEATH_IN_SERVICE' : ''}
+                              {payroll.fnfSummary.ceilingApplied ? ' · ₹20L Cap' : ''}
                             </span>
-                            {payroll.statutory.isEsiApplicable && (
-                              <span>
-                                ESI Base: ₹{(payroll.statutory.originalEsiWageBase ?? payroll.earnings.gross).toLocaleString('en-IN')} → <strong>₹{payroll.statutory.esiWageBase.toLocaleString('en-IN')}</strong>
-                              </span>
-                            )}
-                            {(payroll.statutory.gratuityImpact?.annualIncrease || 0) > 0 && (
-                              <span className="text-rose-700 font-bold">
-                                Gratuity: +₹{payroll.statutory.gratuityImpact!.monthlyIncrease}/mo (+₹{payroll.statutory.gratuityImpact!.annualIncrease}/yr)
-                              </span>
-                            )}
+                          </div>
+                          <span className="font-bold text-emerald-800">
+                            +₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* STATUTORY DEDUCTIONS SUMMARY */}
+                      {payroll.statutory && (
+                        <div className="mt-2.5 p-2.5 bg-slate-50/70 rounded-xl border border-slate-200/90 space-y-1.5">
+                          <div className="flex items-center justify-between flex-wrap gap-1 text-[11px]">
+                            <span className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">
+                              Statutory Deductions (EE)
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-600 font-semibold">
+                              {payroll.statutory.state} PT · {payroll.statutory.taxRegime} Regime
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono tabular-nums text-slate-700">
+                            <div>EPF: <strong className="text-slate-900">₹{payroll.statutory.employeePf}</strong></div>
+                            <div>
+                              ESI:{' '}
+                              <strong className="text-slate-900">
+                                {payroll.statutory.isEsiApplicable ? `₹${payroll.statutory.employeeEsi}` : 'Exempt'}
+                              </strong>
+                            </div>
+                            <div>PT: <strong className="text-slate-900">₹{payroll.statutory.professionalTax}</strong></div>
+                            <div>
+                              LWF/TDS:{' '}
+                              <strong className="text-slate-900">
+                                ₹{payroll.statutory.employeeLwf || 0} / ₹{payroll.statutory.tds}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between flex-wrap gap-1 text-[11px] text-slate-500 font-mono">
+                            <span>ER Stat: +₹{payroll.statutory.totalEmployerStatutory.toLocaleString('en-IN')}</span>
+                            <span className="font-bold text-slate-900">
+                              CTC: ₹{(payroll.employerCostToCompany || (payroll.earnings.gross + payroll.statutory.totalEmployerStatutory)).toLocaleString('en-IN')}
+                            </span>
                           </div>
                         </div>
                       )}
 
-                      <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500 font-mono">
-                        <span>Employer Stat (PF+ESI+LWF): +₹{payroll.statutory.totalEmployerStatutory.toLocaleString()}</span>
-                        <span className="font-bold text-slate-900">CTC: ₹{(payroll.employerCostToCompany || (payroll.earnings.gross + payroll.statutory.totalEmployerStatutory)).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 50% RULE & MINIMUM WAGE CARD FLAG */}
-                  {(() => {
-                    const cardAudit =
-                      serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
-                      payroll.wageStructureAudit;
-                    if (!cardAudit || !cardAudit.hasAnyViolation) return null;
-                    const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
-                    return (
-                      <div
-                        onClick={(e) => e.stopPropagation()}
-                        className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5"
-                      >
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {cardAudit.isFiftyPercentNonCompliant && (
-                              <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white font-mono tabular-nums font-bold text-[10px]">
-                                NON_COMPLIANT · Gap ₹{cardAudit.gapAmount.toLocaleString('en-IN')}
+                      {/* 50% RULE & MINIMUM WAGE CARD FLAG */}
+                      {(() => {
+                        const cardAudit =
+                          serverValidation?.allResults.find((r) => r.workerId === payroll.workerId) ||
+                          payroll.wageStructureAudit;
+                        if (!cardAudit || !cardAudit.hasAnyViolation) return null;
+                        const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
+                        return (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="text-[10px] font-mono font-bold text-rose-800">
+                                {cardAudit.isMinimumWageViolation
+                                  ? `MINIMUM_WAGE_VIOLATION · Gap ₹${cardAudit.minimumWageGap.toLocaleString('en-IN')}`
+                                  : `NON_COMPLIANT · Gap ₹${cardAudit.gapAmount.toLocaleString('en-IN')}`}
                               </span>
-                            )}
-                            {cardAudit.isMinimumWageViolation && (
-                              <span className="px-2 py-0.5 rounded-md bg-rose-800 text-white font-mono tabular-nums font-bold text-[10px]">
-                                MINIMUM_WAGE_VIOLATION · Gap ₹{cardAudit.minimumWageGap.toLocaleString('en-IN')}
-                              </span>
+                              {workerObj && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingWageWorker(workerObj)}
+                                  className="text-[11px] font-bold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Edit3 size={11} /> Fix Structure
+                                </button>
+                              )}
+                            </div>
+                            {cardAudit.warningMessage && (
+                              <p className="text-[11px] text-rose-800 font-medium">{cardAudit.warningMessage}</p>
                             )}
                           </div>
-                          {workerObj && (
-                            <button
-                              type="button"
-                              onClick={() => setEditingWageWorker(workerObj)}
-                              className="text-[11px] font-bold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer"
-                            >
-                              <Edit3 size={11} /> Fix Structure
-                            </button>
-                          )}
-                        </div>
-                        {cardAudit.warningMessage && (
-                          <p className="text-[11px] text-rose-800 font-medium">
-                            {cardAudit.warningMessage}
-                          </p>
-                        )}
-                        {cardAudit.isMinimumWageViolation && (
-                          <p className="text-[11px] text-rose-950 font-mono tabular-nums font-semibold">
-                            {cardAudit.state} ({cardAudit.wageZone}) · Floor ₹{cardAudit.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo · Notif. {cardAudit.minimumWageNotificationDate}
-                            {cardAudit.isOnProbation ? ' · Probation Active (No Exemption)' : ''}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* BOTTOM ACTION BUTTONS */}
-                <div className="p-3 bg-slate-50/60 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      onClick={() => {
-                        if (!limits?.payslipEnabled) {
-                          toast.info("Generating Detailed Payslips is available on Pro & Enterprise plans.");
-                          return;
-                        }
-                        setSelectedPayroll(payroll);
-                      }}
-                      className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-slate-200/70 transition-colors"
-                      title="View printable payslip"
-                    >
-                      <FileText size={14} className="text-slate-500" />
-                      <span>Payslip</span>
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTracePayroll(payroll);
-                      }}
-                      className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                      title="Show audited mathematical calculation derivation"
-                    >
-                      <Calculator size={13} />
-                      <span>Show Calculation</span>
-                    </button>
-
-                    {(() => {
-                      const workerObj = workers.find(w => w.id === payroll.workerId);
-                      return (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTaxDeclarationWorker(workerObj || null);
-                            }}
-                            className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                            title="Configure state PT slabs, tax regime (Old vs New) & 80C declarations"
-                          >
-                            <Shield size={13} />
-                            <span>Tax / State</span>
-                          </button>
-
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setForm16Worker(workerObj || null);
-                            }}
-                            className="text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-200/70 border border-slate-300 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
-                            title="Generate official Form 16 Part B Certificate"
-                          >
-                            <FileCheck size={13} />
-                            <span>Form 16</span>
-                          </button>
-                        </>
-                      );
-                    })()}
-                  </div>
-
-                  <div>
-                    {(() => {
-                      const workerConflict = unresolvedConflicts.find(c => c.workerId === payroll.workerId);
-                      const workerMinWageAudit =
-                        serverValidation?.allResults.find(r => r.workerId === payroll.workerId) ||
-                        payroll.wageStructureAudit;
-                      if (payroll.status === 'PAID') {
-                        return (
-                          <span className="text-xs font-semibold text-emerald-700 flex items-center gap-1 px-2 py-1">
-                            <CheckCircle size={13} />
-                            <span>Settled</span>
-                          </span>
                         );
-                      }
-                      if (workerConflict) {
-                        return (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setIsConflictModalOpen(true);
-                            }}
-                            className="min-h-[38px] text-xs font-black text-rose-700 bg-rose-100 hover:bg-rose-200 border-2 border-rose-300 px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                            title="Click to resolve attendance conflict blocking this payroll"
-                          >
-                            <AlertCircle size={13} />
-                            <span>Resolve Conflict</span>
-                          </button>
-                        );
-                      }
-                      if (workerMinWageAudit?.isMinimumWageViolation) {
-                        return (
-                          <button
-                            type="button"
-                            onClick={(e) => handleMarkAsPaid(payroll, e)}
-                            className="text-xs font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                            title="MINIMUM_WAGE_VIOLATION: Payout blocked until Basic Pay meets state minimum wage"
-                          >
-                            <Lock size={12} />
-                            <span>Blocked: Min Wage</span>
-                          </button>
-                        );
-                      }
-                      return (
-                        <button 
-                          onClick={(e) => handleMarkAsPaid(payroll, e)}
-                          className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 px-3.5 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                      })()}
+                    </div>
+
+                    {/* BOTTOM ACTION BUTTONS (Touch-safe >= 44px targets on mobile) */}
+                    <div className="p-3 bg-slate-50/60 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => openPayslip(payroll)}
+                          className="min-h-[40px] text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-slate-200/70 transition-colors cursor-pointer"
                         >
-                          Mark Paid
+                          <FileText size={14} className="text-slate-500" />
+                          <span>Payslip</span>
                         </button>
-                      );
-                    })()}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTracePayroll(payroll);
+                          }}
+                          className="min-h-[40px] text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Calculator size={13} />
+                          <span>Calc</span>
+                        </button>
+                        {(() => {
+                          const workerObj = workers.find((w) => w.id === payroll.workerId);
+                          return (
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setTaxDeclarationWorker(workerObj || null);
+                                }}
+                                className="min-h-[40px] text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Shield size={13} />
+                                <span>Tax</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setForm16Worker(workerObj || null);
+                                }}
+                                className="min-h-[40px] text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-200/70 border border-slate-300 flex items-center gap-1 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <FileCheck size={13} />
+                                <span>Form 16</span>
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      <div>{renderPayrollStatusAction(payroll, false)}</div>
+                    </div>
                   </div>
-                </div>
-
-              </div>
-            ))}
-
-            {payrolls.length === 0 && !loading && (
-              <div className="col-span-full text-center py-12 bg-white rounded-2xl border border-dashed border-slate-200">
-                <IndianRupee className="mx-auto mb-2 text-slate-300" size={24} />
-                <p className="text-sm font-semibold text-slate-700">No personnel records found for salary generation</p>
-                <p className="text-xs text-slate-400 mt-1">Workers must be registered in the directory to compute payroll.</p>
-              </div>
-            )}
-          </div>
+                )}
+              />
+            );
+          })()}
         </>
       )}
 

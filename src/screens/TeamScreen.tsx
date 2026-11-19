@@ -4,6 +4,7 @@ import { UserPlus, Shield, Trash2, Lock, Users, AlertTriangle, Loader2 } from 'l
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
+import { TruncatedText } from '../components/TruncatedText';
 
 export const TeamScreen: React.FC = () => {
   const { profile, limits } = useAuth();
@@ -94,10 +95,10 @@ export const TeamScreen: React.FC = () => {
   return (
     <div className="space-y-6 pb-12">
       {/* TOOLBAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Supervisors & Permissions</h1>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Supervisors &amp; Permissions</h1>
+          <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
             <span>Manage factory floor managers and shift operators</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
             <span className="font-mono tabular-nums text-slate-600">{seatsUsed} of {maxSeats} seats active</span>
@@ -172,22 +173,35 @@ export const TeamScreen: React.FC = () => {
               team.map((member, i) => (
                 <div 
                   key={i} 
-                  className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between gap-4 hover:border-slate-300 transition-all"
+                  className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between gap-3 hover:border-slate-300 transition-all min-w-0"
                 >
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center font-bold text-sm shrink-0">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center font-bold text-fluid-sm shrink-0">
                       {member.name ? member.name.charAt(0).toUpperCase() : 'M'}
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-bold text-sm text-slate-900 truncate">{member.name}</p>
-                      <p className="text-xs text-slate-500 truncate mt-0.5">{member.email}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="min-w-0">
+                        <TruncatedText
+                          text={member.name || 'Floor Supervisor'}
+                          modalTitle="Supervisor Details"
+                          details={[
+                            { label: 'Work Email', value: member.email || '—', breakAnywhere: true },
+                            { label: 'Role', value: 'Floor Supervisor' },
+                          ]}
+                          className="font-bold text-fluid-sm text-slate-900"
+                        />
+                      </div>
+                      <p className="text-fluid-xs text-slate-500 break-all [overflow-wrap:anywhere] mt-0.5">
+                        {member.email}
+                      </p>
                     </div>
                   </div>
                   
                   <button 
                     onClick={() => setMemberToRemove(member)} 
-                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0" 
+                    className="p-2 min-w-[2.5rem] min-h-[2.5rem] flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0 cursor-pointer" 
                     title="Revoke Access"
+                    aria-label={`Revoke access for ${member.name || member.email}`}
                   >
                     <Trash2 size={16} />
                   </button>
@@ -206,9 +220,10 @@ export const TeamScreen: React.FC = () => {
               <AlertTriangle size={24} />
             </div>
             
-            <h2 className="text-base font-bold text-center text-slate-900 mb-1">Revoke Supervisor Access?</h2>
-            <p className="text-xs text-slate-500 text-center mb-5 leading-relaxed">
-              Are you sure you want to remove <strong>{memberToRemove.name}</strong> ({memberToRemove.email})? They will no longer be able to log in or record attendance.
+            <h2 className="text-fluid-lg font-bold text-center text-slate-900 mb-1">Revoke Supervisor Access?</h2>
+            <p className="text-fluid-xs text-slate-500 text-center mb-5 leading-relaxed break-words">
+              Are you sure you want to remove <strong>{memberToRemove.name}</strong>{' '}
+              (<span className="break-all [overflow-wrap:anywhere] font-mono">{memberToRemove.email}</span>)? They will no longer be able to log in or record attendance.
             </p>
 
             <div className="flex gap-2.5">

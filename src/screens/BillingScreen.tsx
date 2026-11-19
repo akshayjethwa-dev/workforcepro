@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import {
-  Check, X, ShieldCheck, Info, CreditCard,
-  Building2, ArrowRight, AlertCircle, RefreshCw, Layers, Calendar,
+import { 
+  Check, X, ShieldCheck, Info, CreditCard, 
+  Building2, ArrowRight, AlertCircle, RefreshCw, Layers, Calendar, 
   Tag, HelpCircle, CheckCircle2 
 } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -12,15 +11,14 @@ import { planCatalogService } from '../services/planCatalogService';
 import { Plan, PlanVersion, Subscription, CATALOG_FEATURE_FLAGS } from '../types/planCatalog';
 import { employeeCapGuard, EmployeeCapStatus } from '../services/employeeCapGuard';
 import { dbService } from '../services/db';
-import { db } from '../lib/firebase';
+import { entitlementService } from '../services/entitlementService';
 import {
-  CashfreeOrder,
-  CashfreePaymentVerification,
-  cashfreePaymentService
-} from '../services/cashfreePaymentService';
+  razorpayPaymentService,
+  RazorpayCheckoutDismissedError
+} from '../services/razorpayPaymentService';
 
 export const BillingScreen: React.FC = () => {
-  const { user, profile, tenantPlan, trialDaysLeft, limits, refreshTenantData } = useAuth();
+  const { profile, tenantPlan, trialDaysLeft, limits } = useAuth();
   const { toast } = useToast();
   const { branding } = useTheme();
 
@@ -29,6 +27,12 @@ export const BillingScreen: React.FC = () => {
   const [billingInterval, setBillingInterval] = useState<'MONTHLY' | 'ANNUAL'>('ANNUAL');
   const [tenantSub, setTenantSub] = useState<Subscription | null>(null);
   const [capStatus, setCapStatus] = useState<EmployeeCapStatus | null>(null);
+  const [isRazorpayCheckoutLoading, setIsRazorpayCheckoutLoading] = useState(false);
+  const [verifiedPayment, setVerifiedPayment] = useState<{
+    planCode: string;
+    planVersion: number;
+    interval: 'MONTHLY' | 'ANNUAL';
+  } | null>(null);
   
   const [showPaymentModal, setShowPaymentModal] = useState<{
     show: boolean;
@@ -36,7 +40,6 @@ export const BillingScreen: React.FC = () => {
     planCode: string;
     version: number;
     price: string;
-    baseAmount: number;
     interval: 'MONTHLY' | 'ANNUAL';
     gstRate: number;
   }>({
@@ -45,17 +48,9 @@ export const BillingScreen: React.FC = () => {
     planCode: '',
     version: 1,
     price: '',
-    baseAmount: 0,
     interval: 'ANNUAL',
     gstRate: 18
   });
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [isPaying, setIsPaying] = useState(false);
-  const [pendingCashfreeOrder, setPendingCashfreeOrder] = useState<CashfreeOrder | null>(null);
-  const [requiresPriceConfirmation, setRequiresPriceConfirmation] = useState(false);
-  const [returnOrderId, setReturnOrderId] = useState<string | null>(() =>
-    typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('order_id')
-  );
 
   const adminPhone = "918460852903"; 
 
@@ -69,19 +64,11 @@ export const BillingScreen: React.FC = () => {
   const loadPricingData = async () => {
     try {
       setLoading(true);
-      const [plans, localSubscription, cap] = await Promise.all([
+      const [plans, sub, cap] = await Promise.all([
         planCatalogService.getPublicPlans(),
         planCatalogService.getTenantSubscription(tenantId),
         employeeCapGuard.getTenantCapStatus(tenantId)
       ]);
-      let sub = localSubscription;
-      if (!tenantId.startsWith('demo-')) {
-        const tenantSnapshot = await getDoc(doc(db, 'tenants', tenantId));
-        const remoteSubscription = tenantSnapshot.data()?.cashfreeSubscription;
-        if (remoteSubscription?.provider === 'CASHFREE' && remoteSubscription.status === 'ACTIVE') {
-          sub = remoteSubscription as Subscription;
-        }
-      }
       setPublicPlans(plans);
       setTenantSub(sub);
       setCapStatus(cap);
@@ -118,18 +105,10 @@ Current Plan: ${currentDisplayPlan}`;
       window.open(whatsappEnterpriseUrl, '_blank');
       return;
     }
-    if ((plan.code !== 'GROWTH' && plan.code !== 'PRO') || version.version !== 1) {
-      const message = `Hi, I am interested in the ${plan.name} Plan (${plan.code}, v${version.version}) for WorkForcePro. Please help me with checkout.${orgDetails}`;
-      window.open(`https://wa.me/${adminPhone}?text=${encodeURIComponent(message)}`, '_blank');
-      return;
-    }
 
     const price = billingInterval === 'ANNUAL'
       ? (version.annualPrice !== null ? version.annualPrice.toLocaleString('en-IN') : (version.monthlyPrice! * 10).toLocaleString('en-IN'))
       : version.monthlyPrice!.toLocaleString('en-IN');
-    const baseAmount = billingInterval === 'ANNUAL'
-      ? (version.annualPrice !== null ? version.annualPrice : version.monthlyPrice! * 10)
-      : version.monthlyPrice!;
 
     setShowPaymentModal({
       show: true,
@@ -137,26 +116,64 @@ Current Plan: ${currentDisplayPlan}`;
       planCode: plan.code,
       version: version.version,
       price,
-      baseAmount,
       interval: billingInterval,
       gstRate: version.gstRate || 18
     });
-    setPendingCashfreeOrder(null);
-    setRequiresPriceConfirmation(false);
   };
 
-  const handleFreePlanSelection = async () => {
-    if (profile?.role !== 'FACTORY_OWNER') {
-      toast.error('Only a factory owner can change the organization plan.');
-      return;
-    }
+  const handleRazorpayCheckout = async () => {
+    try {
+      setIsRazorpayCheckoutLoading(true);
+      const displayedBasePrice = Number(showPaymentModal.price.replace(/,/g, ''));
+      const displayedTotalInPaise = Math.round(
+        displayedBasePrice * (1 + showPaymentModal.gstRate / 100) * 100
+      );
+      const order = await razorpayPaymentService.createOrder({
+        planCode: showPaymentModal.planCode,
+        planVersion: showPaymentModal.version,
+        billingInterval: showPaymentModal.interval,
+        amount: displayedTotalInPaise,
+        currency: 'INR'
+      });
+      if (order.amount !== displayedTotalInPaise) {
+        throw new Error('The plan price has changed. Close this window and select the plan again.');
+      }
 
+      const payment = await razorpayPaymentService.openCheckout(order, {
+        name: branding?.appName || 'WorkForcePro',
+        description: `${showPaymentModal.planName} Plan`
+      });
+      const verification = await razorpayPaymentService.verifyPayment(payment);
+      if (!verification.verified) {
+        throw new Error('Payment could not be verified. Please contact support before retrying.');
+      }
+
+      setVerifiedPayment({
+        planCode: showPaymentModal.planCode,
+        planVersion: showPaymentModal.version,
+        interval: showPaymentModal.interval
+      });
+      toast.success('Payment verified. Activating your plan...');
+      await handleImmediateActivation(showPaymentModal.planCode, showPaymentModal.version);
+    } catch (err) {
+      if (err instanceof RazorpayCheckoutDismissedError) {
+        toast.info('Payment cancelled. You can try again when ready.');
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Razorpay checkout failed. Please try again.');
+      }
+    } finally {
+      setIsRazorpayCheckoutLoading(false);
+    }
+  };
+
+  const handleImmediateActivation = async (planCode: string, planVersion: number): Promise<boolean> => {
     try {
       setLoading(true);
-      await dbService.updateTenantPlan(tenantId, 'FREE');
+      await dbService.updateTenantPlan(tenantId, planCode as any);
+      await entitlementService.handlePlanUpgrade(tenantId, planCode as any);
       await planCatalogService.subscribeTenant(
         tenantId,
-        'FREE',
+        planCode,
         billingInterval,
         {
           uid: profile?.uid || 'user-admin',
@@ -164,105 +181,21 @@ Current Plan: ${currentDisplayPlan}`;
           role: profile?.role || 'FACTORY_OWNER'
         }
       );
-      await refreshTenantData();
-      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
-      toast.success('Switched to the Free Starter plan.');
+      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', interval: 'ANNUAL', gstRate: 18 });
+      toast.success(`Plan upgraded to ${planCode}! All features unlocked immediately.`);
       await loadPricingData();
+      return true;
     } catch (err: any) {
       toast.error(err.message || 'Failed to update plan');
+      return false;
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifiedPayment = async (verification: CashfreePaymentVerification) => {
-    if (verification.status === 'PAID' && verification.activated) {
-      await refreshTenantData();
-      await loadPricingData();
-      setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
-      setPendingCashfreeOrder(null);
-      setRequiresPriceConfirmation(false);
-      toast.success(`Cashfree confirmed your ${verification.planCode || 'plan'} payment.`);
-      return;
-    }
-
-    if (verification.status === 'PAID_REVIEW_REQUIRED') {
-      toast.error('Payment was received, but plan activation needs support review. Please contact Aapa Capital.');
-      return;
-    }
-
-    toast.info('Payment is not confirmed yet. No plan changes were made; you can retry checkout.');
-  };
-
-  const handleCashfreeCheckout = async () => {
-    if (!user || user.uid.startsWith('demo-') || profile?.role !== 'FACTORY_OWNER') {
-      toast.error('Sign in as a factory owner to make a plan payment.');
-      return;
-    }
-
-    const normalizedPhone = customerPhone.replace(/\D/g, '');
-    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
-      toast.error('Enter a valid 10-digit Indian mobile number.');
-      return;
-    }
-
-    setIsPaying(true);
-    try {
-      let order = pendingCashfreeOrder;
-      if (!order) {
-        order = await cashfreePaymentService.createOrder({
-          planCode: showPaymentModal.planCode,
-          planVersion: showPaymentModal.version,
-          billingInterval: showPaymentModal.interval,
-          customerPhone: normalizedPhone
-        });
-        setPendingCashfreeOrder(order);
-
-        const expectedGst = Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100;
-        const expectedTotal = Math.round((showPaymentModal.baseAmount + expectedGst) * 100) / 100;
-        if (Math.abs(order.totalAmount - expectedTotal) > 0.01) {
-          setRequiresPriceConfirmation(true);
-          return;
-        }
-      } else if (requiresPriceConfirmation) {
-        setRequiresPriceConfirmation(false);
-      }
-
-      const outcome = await cashfreePaymentService.openCheckout(order);
-      if (!outcome.redirected) {
-        await handleVerifiedPayment(outcome);
-      }
-    } catch (err: any) {
-      toast.error(err.message || 'Could not start Cashfree checkout.');
-    } finally {
-      setIsPaying(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!returnOrderId || !user || user.uid.startsWith('demo-')) return;
-    let cancelled = false;
-
-    cashfreePaymentService.verifyOrder(returnOrderId)
-      .then(async (verification) => {
-        if (!cancelled) await handleVerifiedPayment(verification);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) toast.error(err.message || 'Could not verify the Cashfree payment.');
-      })
-      .finally(() => {
-        if (cancelled) return;
-        const url = new URL(window.location.href);
-        url.searchParams.delete('order_id');
-        url.searchParams.delete('screen');
-        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-        setReturnOrderId(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [returnOrderId, user?.uid]);
+  const hasVerifiedPayment = verifiedPayment?.planCode === showPaymentModal.planCode &&
+    verifiedPayment.planVersion === showPaymentModal.version &&
+    verifiedPayment.interval === showPaymentModal.interval;
 
   // Check if tenant has a grandfathered price
   const isTenantGrandfathered = tenantSub && publicPlans.some(p => {
@@ -446,7 +379,8 @@ Current Plan: ${currentDisplayPlan}`;
 
           return (
             <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
-              <table className="w-full text-left divide-y divide-slate-200">
+              <div className="w-full max-w-full overflow-x-auto">
+              <table className="w-full min-w-[440px] text-left divide-y divide-slate-200">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500">
                   <tr>
                     <th className="py-2.5 px-4">Line Item</th>
@@ -527,6 +461,7 @@ Current Plan: ${currentDisplayPlan}`;
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
           );
         })()}
@@ -584,8 +519,6 @@ Current Plan: ${currentDisplayPlan}`;
 
                 const isQuote = currentVersion.monthlyPrice === null;
                 const isFree = currentVersion.monthlyPrice === 0;
-                const hasCashfreeCheckout =
-                  (plan.code === 'GROWTH' || plan.code === 'PRO') && currentVersion.version === 1;
 
                 const displayPrice = isQuote 
                   ? 'Custom' 
@@ -726,10 +659,9 @@ Current Plan: ${currentDisplayPlan}`;
                         </div>
                       ) : (
                         <button
-                                  disabled={profile?.role !== 'FACTORY_OWNER'}
                           onClick={() => {
                             if (isFree) {
-                                      handleFreePlanSelection();
+                              handleImmediateActivation('FREE', currentVersion.version);
                             } else {
                               handleUpgradeClick(plan, currentVersion);
                             }
@@ -738,9 +670,9 @@ Current Plan: ${currentDisplayPlan}`;
                             isPopular
                               ? 'bg-blue-600 text-white hover:bg-blue-700'
                               : 'bg-slate-900 text-white hover:bg-slate-800'
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                          }`}
                         >
-                          <span>{isQuote ? 'Contact for Quote' : isFree ? 'Select Free Starter' : hasCashfreeCheckout ? `Upgrade to ${plan.name}` : 'Contact to Purchase'}</span>
+                          <span>{isQuote ? 'Contact for Quote' : isFree ? 'Select Free Starter' : `Upgrade to ${plan.name}`}</span>
                           <ArrowRight size={14} />
                         </button>
                       )}
@@ -753,16 +685,12 @@ Current Plan: ${currentDisplayPlan}`;
         </div>
       )}
 
-      {/* CASHFREE CHECKOUT MODAL */}
+      {/* RAZORPAY CHECKOUT MODAL */}
       {showPaymentModal.show && !isResellerManaged && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
             <button 
-              onClick={() => {
-                setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', baseAmount: 0, interval: 'ANNUAL', gstRate: 18 });
-                setPendingCashfreeOrder(null);
-                setRequiresPriceConfirmation(false);
-              }}
+              onClick={() => setShowPaymentModal({ show: false, planName: '', planCode: '', version: 1, price: '', interval: 'ANNUAL', gstRate: 18 })} 
               className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full text-gray-500 hover:bg-gray-200 transition-colors"
             >
               <X size={18} />
@@ -776,20 +704,10 @@ Current Plan: ${currentDisplayPlan}`;
               <p className="text-xs text-gray-500 mt-1">
                 Plan Code: <strong className="font-mono text-gray-800">{showPaymentModal.planCode}</strong> (v{showPaymentModal.version})
               </p>
-              <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-100 inline-block text-left font-mono">
-                <div className="text-xs text-slate-600">Base price: ₹{showPaymentModal.price}</div>
-                <div className="text-xs text-slate-600">
-                  GST ({pendingCashfreeOrder?.gstRate ?? showPaymentModal.gstRate}%): ₹{(
-                    pendingCashfreeOrder?.gstAmount ??
-                    Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100
-                  ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </div>
-                <div className="mt-1 border-t border-slate-200 pt-1 text-sm font-extrabold text-slate-900">
-                  Total due: ₹{(
-                    pendingCashfreeOrder?.totalAmount ??
-                    showPaymentModal.baseAmount + Math.round(showPaymentModal.baseAmount * showPaymentModal.gstRate) / 100
-                  ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </div>
+              <div className="mt-3 p-2 bg-slate-50 rounded-xl border border-slate-100 inline-block font-mono">
+                <span className="text-xs text-slate-500">Base Price: </span>
+                <span className="text-base font-extrabold text-slate-900">₹{showPaymentModal.price}</span>
+                <span className="text-xs text-slate-500"> + {showPaymentModal.gstRate}% GST</span>
               </div>
             </div>
 
@@ -801,46 +719,33 @@ Current Plan: ${currentDisplayPlan}`;
                 </p>
               </div>
 
-              <label className="block text-xs font-semibold text-slate-700">
-                Mobile number for payment
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  autoComplete="tel"
-                  value={customerPhone}
-                  onChange={(event) => setCustomerPhone(event.target.value)}
-                  placeholder="10-digit Indian mobile number"
-                  className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-              </label>
-
-              {requiresPriceConfirmation && pendingCashfreeOrder && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                  The server-confirmed total is ₹{pendingCashfreeOrder.totalAmount.toLocaleString('en-IN', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                  })}, which differs from the displayed catalog price. Review the amount above and confirm to continue.
-                </div>
-              )}
-
-              <div className="text-[11px] leading-relaxed text-slate-500">
-                Cashfree will securely collect this one-time plan payment. Payment must be verified by WorkForcePro before access changes; renewals are manual.
+              {/* Step 1: Open Razorpay Standard Checkout */}
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1.5">Step 1</p>
+                <p className="text-xs text-gray-700 mb-2">
+                  {hasVerifiedPayment
+                    ? 'Your payment is verified. Retry plan activation without paying again.'
+                    : 'Pay securely via UPI, Credit/Debit card, or NetBanking. Your plan activates after the payment signature is verified.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => hasVerifiedPayment
+                    ? handleImmediateActivation(showPaymentModal.planCode, showPaymentModal.version)
+                    : handleRazorpayCheckout()}
+                  disabled={isRazorpayCheckoutLoading}
+                  className="w-full bg-[#3395FF] hover:bg-[#2083ef] text-white py-2 rounded-lg font-bold text-xs flex items-center justify-center transition-colors shadow-xs"
+                >
+                  {isRazorpayCheckoutLoading
+                    ? 'Processing...'
+                    : hasVerifiedPayment
+                      ? 'Retry Plan Activation'
+                      : `Pay ₹${showPaymentModal.price} + GST via Razorpay`}
+                </button>
               </div>
 
-              <button
-                onClick={handleCashfreeCheckout}
-                disabled={isPaying || profile?.role !== 'FACTORY_OWNER'}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md shadow-blue-500/20"
-              >
-                {isPaying ? (
-                  <>
-                    <RefreshCw size={16} className="animate-spin" />
-                    <span>Connecting to Cashfree...</span>
-                  </>
-                ) : (
-                  <span>{requiresPriceConfirmation ? 'Confirm amount and continue' : 'Continue with Cashfree'}</span>
-                )}
-              </button>
+              <p className="text-[11px] text-slate-500 text-center">
+                The final amount includes {showPaymentModal.gstRate}% GST.
+              </p>
             </div>
           </div>
         </div>

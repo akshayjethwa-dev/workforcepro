@@ -43,6 +43,8 @@ import { FRONTLINE_TOUCH, triggerFrontlineHaptic } from '../utils/frontlineTouch
 import { FrontlineWipeOverlay } from '../components/FrontlineWipeOverlay';
 import { FrontlineErgonomicsModal } from '../components/FrontlineErgonomicsModal';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
+import { TruncatedText } from '../components/TruncatedText';
+import { ResponsiveDataTable, ResponsiveColumn } from '../components/ResponsiveDataTable';
 import { A11yAuditModal } from '../components/A11yAuditModal';
 import { WorkerEwaModal } from '../components/WorkerEwaModal';
 import { ShiftRouteMapModal } from '../components/ShiftRouteMapModal';
@@ -522,18 +524,18 @@ export const AttendanceScreen: React.FC = () => {
       />
 
       {/* TOOLBAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Attendance Register</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="min-w-0">
+          <div className="flex items-center flex-wrap gap-2">
+            <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Attendance Register</h1>
             {isOffline && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-md border border-amber-200" title="Offline Mode Active">
-                <WifiOff size={13} /> Offline Cache
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-700 text-fluid-xs font-semibold rounded-md border border-amber-200 shrink-0" title="Offline Mode Active">
+                <WifiOff size={13} className="shrink-0" /> Offline Cache
               </span>
             )}
           </div>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-            <span>Frontline Glove-Safe Touch Standards (≥56px & 72px Clock Confirm)</span>
+          <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+            <span>Frontline Glove-Safe Touch Standards (≥56px &amp; 72px Clock Confirm)</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
             <span className="font-mono tabular-nums text-slate-600">{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
           </div>
@@ -869,298 +871,701 @@ export const AttendanceScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* RESPONSIVE DUAL-VIEWPORT GRID: 1 column on mobile, 2 columns on desktop */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {filteredWorkers.map(worker => {
-            const record = attendanceMap[worker.id];
-            
-            const sortedTimeline = [...(record?.timeline || [])].sort(
-                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-            );
-            
-            const lastPunch = sortedTimeline[sortedTimeline.length - 1];
-            const isInside = lastPunch?.type === 'IN';
-            const isOnLeave = record?.status === 'ON_LEAVE';
-            const isExpanded = expandedLogs.has(worker.id);
-            const isSelectedForQuickClock = worker.id === selectedQuickWorkerId;
-            
-            let statusLabel = 'NOT IN';
-            let statusTextColor = 'text-slate-600';
-            if (isOnLeave) {
-                statusLabel = record?.leaveInfo?.isPaid ? 'PAID LEAVE' : 'ON LEAVE';
-                statusTextColor = 'text-indigo-700 font-black';
-            } else if (isInside) {
-                statusLabel = 'ON FLOOR (INSIDE)';
-                statusTextColor = 'text-emerald-700 font-black';
-            } else if (record?.status === 'PRESENT') {
-                statusLabel = 'PRESENT (COMPLETED)';
-                statusTextColor = 'text-emerald-700 font-black';
-            } else if (record?.status === 'HALF_DAY') {
-                statusLabel = 'HALF DAY';
-                statusTextColor = 'text-amber-700 font-black';
-            }
+      {/* RESPONSIVE ATTENDANCE REGISTER:
+          - Desktop (md+): 10-column sticky-header <table> with wrapper-only overflow-x-auto
+          - Mobile (< md): Vertical frontline cards showing [Worker Name, Status, Time] + Compact Column Priority view
+          - Load More pagination prevents rendering 500+ rows at once on low-end phones */}
+      {(() => {
+        const getWorkerAttendanceView = (worker: Worker) => {
+          const record = attendanceMap[worker.id];
+          const sortedTimeline = [...(record?.timeline || [])].sort(
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+          const lastPunch = sortedTimeline[sortedTimeline.length - 1];
+          const firstInPunch = sortedTimeline.find((p) => p.type === 'IN');
+          const latestOutPunch = [...sortedTimeline].reverse().find((p) => p.type === 'OUT');
+          const isInside = lastPunch?.type === 'IN';
+          const isOnLeave = record?.status === 'ON_LEAVE';
+          const isExpanded = expandedLogs.has(worker.id);
+          const isSelectedForQuickClock = worker.id === selectedQuickWorkerId;
 
-            return (
-                <div 
-                  key={worker.id}
+          let statusLabel = 'NOT IN';
+          if (isOnLeave) {
+            statusLabel = record?.leaveInfo?.isPaid ? 'PAID LEAVE' : 'ON LEAVE';
+          } else if (isInside) {
+            statusLabel = 'ON FLOOR (INSIDE)';
+          } else if (record?.status === 'PRESENT') {
+            statusLabel = 'PRESENT (COMPLETED)';
+          } else if (record?.status === 'HALF_DAY') {
+            statusLabel = 'HALF DAY';
+          }
+
+          const firstInFormatted = firstInPunch
+            ? new Date(firstInPunch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '--:--';
+
+          const latestOutFormatted = latestOutPunch
+            ? new Date(latestOutPunch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : isInside
+            ? 'Inside Floor'
+            : '--:--';
+
+          const overtimeHours = Math.max(0, (record?.hours?.overtime ?? 0));
+          const hasOutOfGeofence = sortedTimeline.some((p) => p.isOutOfGeofence);
+
+          return {
+            record,
+            sortedTimeline,
+            lastPunch,
+            firstInFormatted,
+            latestOutFormatted,
+            isInside,
+            isOnLeave,
+            isExpanded,
+            isSelectedForQuickClock,
+            statusLabel,
+            overtimeHours,
+            hasOutOfGeofence,
+          };
+        };
+
+        const attendanceColumns: ResponsiveColumn<Worker>[] = [
+          {
+            key: 'worker',
+            header: 'Worker',
+            mobileLabel: 'Worker Name',
+            stickyLeft: true,
+            isPrimary: true,
+            mobilePriority: true,
+            minWidth: 'min-w-[190px]',
+            render: (worker) => {
+              const { record, isInside, isSelectedForQuickClock, statusLabel } =
+                getWorkerAttendanceView(worker);
+              return (
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs text-white shrink-0 overflow-hidden ${
+                      isInside ? 'bg-emerald-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    {worker.photoUrl ? (
+                      <img
+                        src={worker.photoUrl}
+                        alt={worker.name}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <span>{worker.name.charAt(0)}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <TruncatedText
+                        text={worker.name}
+                        modalTitle="Worker Attendance Details"
+                        subtitle={worker.designation || 'Worker'}
+                        details={[
+                          { label: 'Phone', value: worker.phone || 'Not recorded', mono: true },
+                          { label: 'Current Status', value: statusLabel },
+                          ...(record
+                            ? [{ label: 'Net Hours Today', value: `${record.hours.net.toFixed(1)} hrs`, mono: true }]
+                            : []),
+                        ]}
+                        className="font-bold text-slate-900 text-xs"
+                      />
+                      {isSelectedForQuickClock && (
+                        <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[9px] font-mono font-bold shrink-0">
+                          Dock
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            },
+            renderPriority: (worker) => (
+              <div className="min-w-0">
+                <div className="font-bold text-slate-900 text-fluid-xs truncate">{worker.name}</div>
+                <div className="text-[11px] text-slate-500 truncate">{worker.designation || 'Worker'}</div>
+              </div>
+            ),
+          },
+          {
+            key: 'rolePhone',
+            header: 'Role & Phone',
+            minWidth: 'min-w-[155px]',
+            render: (worker) => (
+              <div className="min-w-0">
+                <div className="font-medium text-slate-700 truncate max-w-[150px]">
+                  {worker.designation || 'Worker'}
+                </div>
+                <div className="text-[11px] font-mono tabular-nums text-slate-500">
+                  {worker.phone || '—'}
+                </div>
+              </div>
+            ),
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            mobilePriority: true,
+            minWidth: 'min-w-[140px]',
+            render: (worker) => {
+              const { record, isOnLeave, isInside, statusLabel } = getWorkerAttendanceView(worker);
+              return (
+                <FieldStatusBadge
+                  status={
+                    isOnLeave
+                      ? 'ON_LEAVE'
+                      : isInside
+                      ? 'PENDING'
+                      : record?.status || 'ABSENT'
+                  }
+                  customLabel={statusLabel}
+                  isLate={record?.lateStatus?.isLate}
+                  lateMinutes={record?.lateStatus?.lateByMins}
+                  size="sm"
+                  isCriticalMetric={true}
+                />
+              );
+            },
+            renderPriority: (worker) => {
+              const { isOnLeave, isInside, record } = getWorkerAttendanceView(worker);
+              if (isOnLeave) {
+                return <span className="text-[11px] font-bold text-indigo-700">Leave</span>;
+              }
+              if (isInside) {
+                return <span className="text-[11px] font-bold text-emerald-700">On Floor</span>;
+              }
+              if (record?.status === 'PRESENT') {
+                return <span className="text-[11px] font-bold text-blue-700">Done</span>;
+              }
+              if (record?.status === 'HALF_DAY') {
+                return <span className="text-[11px] font-bold text-amber-700">Half Day</span>;
+              }
+              return <span className="text-[11px] font-semibold text-slate-500">Not In</span>;
+            },
+          },
+          {
+            key: 'firstIn',
+            header: 'First In',
+            align: 'center',
+            numeric: true,
+            minWidth: 'min-w-[90px]',
+            render: (worker) => {
+              const { firstInFormatted } = getWorkerAttendanceView(worker);
+              return (
+                <span className="font-semibold text-slate-800">{firstInFormatted}</span>
+              );
+            },
+          },
+          {
+            key: 'latestOut',
+            header: 'Latest Out',
+            align: 'center',
+            numeric: true,
+            minWidth: 'min-w-[105px]',
+            render: (worker) => {
+              const { latestOutFormatted, isInside } = getWorkerAttendanceView(worker);
+              return (
+                <span className={isInside ? 'text-emerald-700 font-bold font-sans text-[11px]' : 'font-semibold text-slate-800'}>
+                  {latestOutFormatted}
+                </span>
+              );
+            },
+          },
+          {
+            key: 'netHours',
+            header: 'Net Hours',
+            mobileLabel: 'Time',
+            align: 'right',
+            numeric: true,
+            mobilePriority: true,
+            minWidth: 'min-w-[95px]',
+            render: (worker) => {
+              const { record } = getWorkerAttendanceView(worker);
+              return (
+                <span className="font-bold text-slate-900">
+                  {record ? `${record.hours.net.toFixed(1)}h` : '0.0h'}
+                </span>
+              );
+            },
+            renderPriority: (worker) => {
+              const { record, firstInFormatted, isInside } = getWorkerAttendanceView(worker);
+              return (
+                <div className="text-right">
+                  <div className="font-bold text-slate-900 text-xs">
+                    {record ? `${record.hours.net.toFixed(1)}h` : '--'}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {isInside ? `In ${firstInFormatted}` : firstInFormatted !== '--:--' ? firstInFormatted : 'No punch'}
+                  </div>
+                </div>
+              );
+            },
+          },
+          {
+            key: 'overtime',
+            header: 'Overtime',
+            align: 'right',
+            numeric: true,
+            minWidth: 'min-w-[85px]',
+            render: (worker) => {
+              const { overtimeHours } = getWorkerAttendanceView(worker);
+              return overtimeHours > 0 ? (
+                <span className="font-bold text-amber-700">+{overtimeHours.toFixed(1)}h</span>
+              ) : (
+                <span className="text-slate-400">—</span>
+              );
+            },
+          },
+          {
+            key: 'punches',
+            header: 'Punches / Zone',
+            align: 'center',
+            minWidth: 'min-w-[115px]',
+            render: (worker) => {
+              const { sortedTimeline, hasOutOfGeofence } = getWorkerAttendanceView(worker);
+              return (
+                <div className="inline-flex flex-col items-center gap-0.5">
+                  <span className="font-mono tabular-nums text-slate-700 font-semibold">
+                    {sortedTimeline.length} {sortedTimeline.length === 1 ? 'punch' : 'punches'}
+                  </span>
+                  {hasOutOfGeofence && (
+                    <span className="text-[10px] text-amber-700 font-semibold inline-flex items-center gap-0.5">
+                      <MapPin size={10} /> Out of Zone
+                    </span>
+                  )}
+                </div>
+              );
+            },
+          },
+          {
+            key: 'syncEwa',
+            header: 'Sync & EWA',
+            align: 'center',
+            minWidth: 'min-w-[125px]',
+            render: (worker) => {
+              const { record, lastPunch } = getWorkerAttendanceView(worker);
+              return (
+                <div className="inline-flex items-center justify-center gap-1.5">
+                  {record ? (
+                    <SyncStatusBadge
+                      status={record.syncStatus || 'SYNCED'}
+                      offlineTimestamp={record.offlineTimestamp || lastPunch?.offlineTimestamp}
+                      size="sm"
+                    />
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-mono">—</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerFrontlineHaptic('light');
+                      setEwaModalWorker(worker);
+                    }}
+                    className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-[10px] inline-flex items-center gap-0.5 cursor-pointer"
+                    title="Access Accrued Wages (EWA)"
+                  >
+                    <IndianRupee size={10} />
+                    <span>EWA</span>
+                  </button>
+                </div>
+              );
+            },
+          },
+          {
+            key: 'actions',
+            header: 'Quick Punch',
+            align: 'right',
+            isAction: true,
+            minWidth: 'min-w-[215px]',
+            render: (worker) => {
+              const { isInside } = getWorkerAttendanceView(worker);
+              return (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center justify-end gap-1.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handlePunch(worker, 'IN')}
+                    disabled={isInside || actionLoading === worker.id || isScreenLockedForWipe}
+                    className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer ${
+                      isInside
+                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                    }`}
+                  >
+                    {actionLoading === worker.id ? (
+                      <Loader2 className="animate-spin" size={13} />
+                    ) : (
+                      <LogIn size={13} />
+                    )}
+                    <span>In</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePunch(worker, 'OUT')}
+                    disabled={!isInside || actionLoading === worker.id || isScreenLockedForWipe}
+                    className={`min-h-[34px] px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer ${
+                      !isInside
+                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        : 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                    }`}
+                  >
+                    {actionLoading === worker.id ? (
+                      <Loader2 className="animate-spin" size={13} />
+                    ) : (
+                      <LogOut size={13} />
+                    )}
+                    <span>Out</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerFrontlineHaptic('light');
+                      setLeaveModalWorker(worker);
+                      setSelectedLeaveReason('Sick / Medical Leave');
+                      setLeaveDurationDays(1);
+                      setLeaveFieldNotes('');
+                    }}
+                    disabled={isScreenLockedForWipe}
+                    className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors cursor-pointer"
+                    title="Mark Leave"
+                    aria-label={`Mark leave for ${worker.name}`}
+                  >
+                    <Calendar size={14} />
+                  </button>
+                </div>
+              );
+            },
+          },
+        ];
+
+        return (
+          <ResponsiveDataTable
+            data={filteredWorkers}
+            columns={attendanceColumns}
+            keyExtractor={(worker) => worker.id}
+            loading={loading}
+            stickyHeader={true}
+            maxHeightClassName="max-h-[66vh]"
+            tableMinWidthClassName="min-w-[1220px]"
+            paginationMode="loadMore"
+            initialPageSize={20}
+            itemLabel="workers"
+            ariaLabel="Daily workforce attendance register"
+            onRowClick={(worker) => setSelectedQuickWorkerId(worker.id)}
+            getRowClassName={(worker) =>
+              worker.id === selectedQuickWorkerId ? 'bg-blue-50/50 hover:bg-blue-50/80' : ''
+            }
+            emptyState={{
+              icon: <AlertCircle size={24} className="text-slate-400" />,
+              title: 'No personnel found for this view',
+              description: 'Try switching filter tabs, trade chips, or clearing the search box.',
+              action:
+                searchTerm || filterTab !== 'ALL' || selectedDeptFilter !== 'ALL' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchTerm('');
+                      setFilterTab('ALL');
+                      setSelectedDeptFilter('ALL');
+                    }}
+                    className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Reset Filters
+                  </button>
+                ) : undefined,
+            }}
+            renderMobileCard={(worker) => {
+              const {
+                record,
+                sortedTimeline,
+                lastPunch,
+                firstInFormatted,
+                latestOutFormatted,
+                isInside,
+                isOnLeave,
+                isExpanded,
+                isSelectedForQuickClock,
+                statusLabel,
+              } = getWorkerAttendanceView(worker);
+
+              return (
+                <div
                   onClick={() => setSelectedQuickWorkerId(worker.id)}
-                  className={`bg-white p-5 rounded-3xl border-2 transition-all flex flex-col justify-between relative cursor-pointer ${
-                    isSelectedForQuickClock 
-                      ? 'border-blue-600 ring-2 ring-blue-500/20 shadow-md' 
+                  className={`bg-white p-4 sm:p-5 rounded-3xl border-2 transition-all flex flex-col justify-between relative cursor-pointer ${
+                    isSelectedForQuickClock
+                      ? 'border-blue-600 ring-2 ring-blue-500/20 shadow-md'
                       : 'border-slate-200/90 hover:border-slate-300 shadow-xs'
                   }`}
                 >
-                    {/* Visual Audit Dimension Overlay Tag if enabled */}
-                    {isAuditOverlayActive && (
-                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-blue-600 text-white font-mono text-[9px] font-bold z-10 shadow-xs">
-                        56px Targets + 14px Gap
-                      </div>
-                    )}
-
-                    <div>
-                      {/* HEADER ROW */}
-                      <div className="flex justify-between items-start gap-3">
-                          <div className="flex items-center gap-3.5 min-w-0">
-                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-base text-white shrink-0 overflow-hidden relative shadow-xs ${isInside ? 'bg-emerald-600 border-2 border-emerald-400' : 'bg-slate-700 border-2 border-slate-500'}`}>
-                                {worker.photoUrl ? (
-                                  <img 
-                                    src={worker.photoUrl} 
-                                    alt={worker.name} 
-                                    referrerPolicy="no-referrer"
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                      (e.currentTarget as HTMLElement).style.display = 'none';
-                                    }}
-                                  />
-                                ) : (
-                                  <span>{worker.name.charAt(0)}</span>
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <p className="font-extrabold text-sm sm:text-base text-slate-900 truncate">{worker.name}</p>
-                                    {isSelectedForQuickClock && (
-                                      <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-mono font-bold shrink-0">
-                                        Quick Dock
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-slate-500 truncate flex items-center gap-1.5 mt-0.5">
-                                      <span className="font-medium">{worker.designation || 'Worker'}</span>
-                                      <span aria-hidden="true" className="text-slate-300">·</span>
-                                      <span className="font-mono tabular-nums">{worker.phone}</span>
-                                  </div>
-                              </div>
-                          </div>
-                          
-                          <div className="flex flex-col items-end gap-1.5 shrink-0">
-                              <div className="flex items-center gap-1.5">
-                                <FieldStatusBadge
-                                  status={
-                                    isOnLeave 
-                                      ? 'ON_LEAVE' 
-                                      : isInside 
-                                        ? 'PENDING' 
-                                        : record?.status || 'ABSENT'
-                                  }
-                                  customLabel={statusLabel}
-                                  isLate={record?.lateStatus?.isLate}
-                                  lateMinutes={record?.lateStatus?.lateByMins}
-                                  size="md"
-                                  isCriticalMetric={true}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    triggerFrontlineHaptic('light');
-                                    setEwaModalWorker(worker);
-                                  }}
-                                  className="h-7 px-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
-                                  title="Access Accrued Wages (EWA)"
-                                >
-                                  <IndianRupee size={11} className="text-emerald-700" />
-                                  <span>EWA</span>
-                                </button>
-                              </div>
-                              {record && (
-                                <SyncStatusBadge
-                                  status={record.syncStatus || 'SYNCED'}
-                                  offlineTimestamp={record.offlineTimestamp || lastPunch?.offlineTimestamp}
-                                  size="sm"
-                                />
-                              )}
-                          </div>
-                      </div>
-
-                      {/* TIMELINE PREVIEW */}
-                      {record && !isOnLeave && sortedTimeline.length > 0 && (
-                          <div className="bg-slate-50 p-3.5 rounded-2xl text-xs mt-4 border border-slate-100">
-                             <div 
-                                className={`flex justify-between items-center text-slate-700 font-bold cursor-pointer ${isExpanded ? 'border-b border-slate-200 pb-2 mb-2' : ''}`}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleExpand(worker.id);
-                                }}
-                             >
-                                 <div className="flex items-center gap-2">
-                                     <span className="font-mono tabular-nums font-bold text-slate-900">
-                                       Net: {record.hours.net.toFixed(1)} hrs
-                                     </span>
-                                     <span className="text-[11px] text-slate-500 font-mono">
-                                       · {sortedTimeline.length} punches
-                                     </span>
-                                 </div>
-                                 <div className="flex items-center text-blue-600 text-xs">
-                                     <span className="mr-1 text-[11px]">{isExpanded ? 'Hide' : 'Timeline'}</span>
-                                     {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                                 </div>
-                             </div>
-
-                             {!isExpanded ? (
-                                 <div className="flex justify-between items-center text-slate-600 mt-2 font-mono tabular-nums text-xs">
-                                     <div>
-                                         <span className="text-[10px] uppercase text-slate-400 block font-sans">First Punch In</span>
-                                         <span className="font-bold text-slate-800">
-                                             {sortedTimeline.find(p => p.type === 'IN') 
-                                                  ? new Date(sortedTimeline.find(p => p.type === 'IN')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-                                                  : '--:--'}
-                                         </span>
-                                     </div>
-                                     <ArrowRight size={14} className="text-slate-300"/>
-                                     <div className="text-right">
-                                         <span className="text-[10px] uppercase text-slate-400 block font-sans">Latest Status</span>
-                                         <span className="font-bold text-slate-800">
-                                              {sortedTimeline.slice().reverse().find(p => p.type === 'OUT')
-                                                  ? new Date(sortedTimeline.slice().reverse().find(p => p.type === 'OUT')!.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-                                                  : <span className="text-emerald-700 font-bold">Inside Floor</span>}
-                                         </span>
-                                     </div>
-                                 </div>
-                             ) : (
-                                 <div className="space-y-1.5 mt-2 max-h-48 overflow-y-auto">
-                                     {sortedTimeline.map((punch, idx) => {
-                                         const isRegulated = punch.device === 'MANUAL_OVERRIDE_BY_ADMIN' || punch.device.includes('Admin');
-                                         return (
-                                             <div key={idx} className="flex justify-between items-center text-slate-600 bg-white p-2.5 rounded-xl border border-slate-100 text-xs font-mono tabular-nums">
-                                                  <div className="flex items-center gap-1.5">
-                                                      <span className={`w-2.5 h-2.5 rounded-full ${punch.type === 'IN' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                                                      <span className="font-bold font-sans uppercase text-[11px]">{punch.type}</span>
-                                                      {isRegulated && (
-                                                          <span className="text-[10px] text-blue-600 font-sans">· Admin</span>
-                                                      )}
-                                                      {punch.isOutOfGeofence && (
-                                                          <span className="text-[10px] text-amber-600 font-sans flex items-center gap-0.5">
-                                                              <MapPin size={10} /> Out of Zone
-                                                          </span>
-                                                      )}
-                                                      {punch.isSupervisorOverridden && (
-                                                          <span className="text-[10px] text-indigo-600 font-sans flex items-center gap-0.5 bg-indigo-50 px-1 py-0.5 rounded font-bold" title="Supervisor In-Person Override (LineageOS / Custom ROM)">
-                                                              <ShieldCheck size={10} /> Override
-                                                          </span>
-                                                      )}
-                                                      {punch.integrityLevel === 'STRONG_INTEGRITY' && (
-                                                          <span className="text-[10px] text-emerald-600 font-sans flex items-center gap-0.5 bg-emerald-50 px-1 py-0.5 rounded" title="Play Integrity MEETS_STRONG_INTEGRITY Verified">
-                                                              <ShieldCheck size={10} /> Play Protect
-                                                          </span>
-                                                      )}
-                                                      {punch.integrityLevel === 'LOW_INTEGRITY' && (
-                                                          <span className="text-[10px] text-slate-500 font-sans flex items-center gap-0.5 bg-slate-100 px-1 py-0.5 rounded" title="Legacy Device Fingerprint Fallback">
-                                                              <ShieldCheck size={10} /> Basic API
-                                                          </span>
-                                                      )}
-                                                  </div>
-                                                  <span className="font-bold text-slate-800">
-                                                      {new Date(punch.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                                                  </span>
-                                             </div>
-                                         );
-                                     })}
-                                 </div>
-                             )}
-                          </div>
-                      )}
+                  {isAuditOverlayActive && (
+                    <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-blue-600 text-white font-mono text-[9px] font-bold z-10 shadow-xs">
+                      56px Targets + 14px Gap
                     </div>
+                  )}
 
-                    {/* FRONTLINE ACTIONS STRIP (≥56px Minimum Touch Target, ≥12px Spacing between adjacent buttons) */}
-                    <div className="grid grid-cols-5 gap-3.5 mt-4 pt-3.5 border-t border-slate-100">
-                        {/* PUNCH IN: Minimum 56px height, high-contrast emerald */}
-                        <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePunch(worker, 'IN');
-                            }}
-                            disabled={isInside || actionLoading === worker.id || isScreenLockedForWipe} 
-                            className={`col-span-2 min-h-[56px] flex items-center justify-center px-3 py-3 rounded-2xl text-xs sm:text-sm font-black transition-all active:scale-95 cursor-pointer border-2 ${
-                                isInside
-                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-                                 : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-md active:bg-emerald-800'
-                            }`}
-                            title="Punch In (Frontline safe 56px touch target)"
+                  <div className="min-w-0">
+                    {/* MOBILE CARD HEADER: Worker Name + Status + Time Summary */}
+                    <div className="flex justify-between items-start gap-2.5 flex-wrap xs:flex-nowrap min-w-0">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div
+                          className={`w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-fluid-base text-white shrink-0 overflow-hidden relative shadow-xs ${
+                            isInside ? 'bg-emerald-600 border-2 border-emerald-400' : 'bg-slate-700 border-2 border-slate-500'
+                          }`}
                         >
-                            {actionLoading === worker.id ? (
-                              <Loader2 className="animate-spin" size={20}/>
-                            ) : (
-                              <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide">
-                                <LogIn size={18} strokeWidth={2.5}/> 
-                                Check In
+                          {worker.photoUrl ? (
+                            <img
+                              src={worker.photoUrl}
+                              alt={worker.name}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <span>{worker.name.charAt(0)}</span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div className="min-w-0 flex-1">
+                              <TruncatedText
+                                text={worker.name}
+                                modalTitle="Worker Attendance Details"
+                                subtitle={worker.designation || 'Worker'}
+                                details={[
+                                  { label: 'Phone', value: worker.phone || 'Not recorded', mono: true },
+                                  { label: 'Current Status', value: statusLabel },
+                                  ...(record
+                                    ? [{ label: 'Net Hours Today', value: `${record.hours.net.toFixed(1)} hrs`, mono: true }]
+                                    : []),
+                                ]}
+                                className="font-extrabold text-fluid-base text-slate-900"
+                              />
+                            </div>
+                            {isSelectedForQuickClock && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-mono font-bold shrink-0">
+                                Quick Dock
                               </span>
                             )}
-                        </button>
+                          </div>
+                          <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-1.5 gap-y-0.5 mt-0.5 min-w-0">
+                            <span className="font-medium truncate max-w-full">{worker.designation || 'Worker'}</span>
+                            <span aria-hidden="true" className="text-slate-300">·</span>
+                            <span className="font-mono tabular-nums break-all [overflow-wrap:anywhere]">{worker.phone}</span>
+                          </div>
+                        </div>
+                      </div>
 
-                        {/* PUNCH OUT: Minimum 56px height, high-contrast rose */}
-                        <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePunch(worker, 'OUT');
-                            }}
-                            disabled={!isInside || actionLoading === worker.id || isScreenLockedForWipe}
-                            className={`col-span-2 min-h-[56px] flex items-center justify-center px-3 py-3 rounded-2xl text-xs sm:text-sm font-black transition-all active:scale-95 cursor-pointer border-2 ${
-                                !isInside
-                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-                                : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-500 shadow-md active:bg-rose-800'
-                            }`}
-                            title="Punch Out (Frontline safe 56px touch target)"
-                        > 
-                            {actionLoading === worker.id ? (
-                              <Loader2 className="animate-spin" size={20}/>
-                            ) : (
-                              <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide">
-                                <LogOut size={18} strokeWidth={2.5}/> 
-                                Check Out
-                              </span>
-                            )}
-                        </button>
-                        
-                        {/* MARK LEAVE: Minimum 56px height, minimum 56px width */}
-                        <button 
+                      <div className="flex flex-col items-end gap-1.5 shrink-0 ml-auto">
+                        <div className="flex items-center flex-wrap justify-end gap-1.5">
+                          <FieldStatusBadge
+                            status={
+                              isOnLeave
+                                ? 'ON_LEAVE'
+                                : isInside
+                                ? 'PENDING'
+                                : record?.status || 'ABSENT'
+                            }
+                            customLabel={statusLabel}
+                            isLate={record?.lateStatus?.isLate}
+                            lateMinutes={record?.lateStatus?.lateByMins}
+                            size="md"
+                            isCriticalMetric={true}
+                          />
+                          <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               triggerFrontlineHaptic('light');
-                              setLeaveModalWorker(worker);
-                              setSelectedLeaveReason('Sick / Medical Leave');
-                              setLeaveDurationDays(1);
-                              setLeaveFieldNotes('');
+                              setEwaModalWorker(worker);
                             }}
-                            disabled={isScreenLockedForWipe}
-                            className="col-span-1 min-h-[56px] min-w-[56px] flex items-center justify-center rounded-2xl text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border-2 border-slate-300 transition-colors active:scale-95 cursor-pointer shadow-xs"
-                            title="Constrained Leave / Note Entry (No typing)"
-                        >
-                            <Calendar size={20} strokeWidth={2.2} />
-                        </button>
+                            className="min-h-[1.75rem] px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 border border-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                            title="Access Accrued Wages (EWA)"
+                          >
+                            <IndianRupee size={11} className="text-emerald-700 shrink-0" />
+                            <span>EWA</span>
+                          </button>
+                        </div>
+                        {record && (
+                          <SyncStatusBadge
+                            status={record.syncStatus || 'SYNCED'}
+                            offlineTimestamp={record.offlineTimestamp || lastPunch?.offlineTimestamp}
+                            size="sm"
+                          />
+                        )}
+                      </div>
                     </div>
-                </div>
-            );
-        })}
 
-        {filteredWorkers.length === 0 && !loading && (
-            <div className="col-span-full text-center py-16 bg-white rounded-3xl border border-dashed border-slate-300">
-                <AlertCircle className="mx-auto mb-3 text-slate-300" size={32} />
-                <p className="text-base font-bold text-slate-800">No personnel found for this view</p>
-                <p className="text-xs text-slate-400 mt-1">Try switching filter tabs or clearing the search box.</p>
-            </div>
-        )}
-      </div>
+                    {/* STACKED KEY-VALUE TIME SUMMARY [First In | Latest Out | Net Time] */}
+                    <div className="bg-slate-50 p-3.5 rounded-2xl text-xs mt-3.5 border border-slate-100">
+                      <div
+                        className={`flex justify-between items-center text-slate-700 font-bold cursor-pointer ${
+                          isExpanded && sortedTimeline.length > 0 ? 'border-b border-slate-200 pb-2 mb-2' : ''
+                        }`}
+                        onClick={(e) => {
+                          if (sortedTimeline.length === 0) return;
+                          e.stopPropagation();
+                          toggleExpand(worker.id);
+                        }}
+                      >
+                        <div className="flex items-center gap-2 font-mono tabular-nums">
+                          <span className="font-bold text-slate-900">
+                            Time: {record ? `${record.hours.net.toFixed(1)} hrs` : '0.0 hrs'}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            · {sortedTimeline.length} punches
+                          </span>
+                        </div>
+                        {sortedTimeline.length > 0 && (
+                          <div className="flex items-center text-blue-600 text-xs">
+                            <span className="mr-1 text-[11px]">{isExpanded ? 'Hide' : 'Timeline'}</span>
+                            {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                          </div>
+                        )}
+                      </div>
+
+                      {!isExpanded || sortedTimeline.length === 0 ? (
+                        <div className="flex justify-between items-center text-slate-600 mt-2 font-mono tabular-nums text-xs">
+                          <div>
+                            <span className="text-[10px] uppercase text-slate-400 block font-sans">First In</span>
+                            <span className="font-bold text-slate-800">{firstInFormatted}</span>
+                          </div>
+                          <ArrowRight size={14} className="text-slate-300" />
+                          <div className="text-right">
+                            <span className="text-[10px] uppercase text-slate-400 block font-sans">Latest Out</span>
+                            <span className={isInside ? 'text-emerald-700 font-bold font-sans' : 'font-bold text-slate-800'}>
+                              {latestOutFormatted}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 mt-2 max-h-48 overflow-y-auto">
+                          {sortedTimeline.map((punch, idx) => {
+                            const isRegulated =
+                              punch.device === 'MANUAL_OVERRIDE_BY_ADMIN' || punch.device.includes('Admin');
+                            return (
+                              <div
+                                key={idx}
+                                className="flex justify-between items-center text-slate-600 bg-white p-2.5 rounded-xl border border-slate-100 text-xs font-mono tabular-nums"
+                              >
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span
+                                    className={`w-2.5 h-2.5 rounded-full ${
+                                      punch.type === 'IN' ? 'bg-emerald-500' : 'bg-rose-500'
+                                    }`}
+                                  />
+                                  <span className="font-bold font-sans uppercase text-[11px]">{punch.type}</span>
+                                  {isRegulated && <span className="text-[10px] text-blue-600 font-sans">· Admin</span>}
+                                  {punch.isOutOfGeofence && (
+                                    <span className="text-[10px] text-amber-600 font-sans flex items-center gap-0.5">
+                                      <MapPin size={10} /> Out of Zone
+                                    </span>
+                                  )}
+                                  {punch.isSupervisorOverridden && (
+                                    <span
+                                      className="text-[10px] text-indigo-600 font-sans flex items-center gap-0.5 bg-indigo-50 px-1 py-0.5 rounded font-bold"
+                                      title="Supervisor In-Person Override"
+                                    >
+                                      <ShieldCheck size={10} /> Override
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="font-bold text-slate-800">
+                                  {new Date(punch.timestamp).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* FRONTLINE ACTIONS STRIP (≥56px Minimum Touch Target) */}
+                  <div className="flex flex-wrap sm:grid sm:grid-cols-5 gap-2.5 sm:gap-3 mt-4 pt-3.5 border-t border-slate-100">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePunch(worker, 'IN');
+                      }}
+                      disabled={isInside || actionLoading === worker.id || isScreenLockedForWipe}
+                      className={`flex-1 min-w-[7.5rem] sm:min-w-0 sm:col-span-2 min-h-[3.5rem] flex items-center justify-center px-3 py-2.5 rounded-2xl text-fluid-sm font-black transition-all active:scale-95 cursor-pointer border-2 ${
+                        isInside
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-md active:bg-emerald-800'
+                      }`}
+                      title="Punch In (Frontline safe 56px touch target)"
+                    >
+                      {actionLoading === worker.id ? (
+                        <Loader2 className="animate-spin" size={20} />
+                      ) : (
+                        <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide min-w-0">
+                          <LogIn size={18} strokeWidth={2.5} className="shrink-0" />
+                          <span className="truncate">Check In</span>
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePunch(worker, 'OUT');
+                      }}
+                      disabled={!isInside || actionLoading === worker.id || isScreenLockedForWipe}
+                      className={`flex-1 min-w-[7.5rem] sm:min-w-0 sm:col-span-2 min-h-[3.5rem] flex items-center justify-center px-3 py-2.5 rounded-2xl text-fluid-sm font-black transition-all active:scale-95 cursor-pointer border-2 ${
+                        !isInside
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                          : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-500 shadow-md active:bg-rose-800'
+                      }`}
+                      title="Punch Out (Frontline safe 56px touch target)"
+                    >
+                      {actionLoading === worker.id ? (
+                        <Loader2 className="animate-spin" size={20} />
+                      ) : (
+                        <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide min-w-0">
+                          <LogOut size={18} strokeWidth={2.5} className="shrink-0" />
+                          <span className="truncate">Check Out</span>
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        triggerFrontlineHaptic('light');
+                        setLeaveModalWorker(worker);
+                        setSelectedLeaveReason('Sick / Medical Leave');
+                        setLeaveDurationDays(1);
+                        setLeaveFieldNotes('');
+                      }}
+                      disabled={isScreenLockedForWipe}
+                      className="sm:col-span-1 min-h-[3.5rem] min-w-[3.5rem] flex-none flex items-center justify-center rounded-2xl text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border-2 border-slate-300 transition-colors active:scale-95 cursor-pointer shadow-xs"
+                      title="Constrained Leave / Note Entry (No typing)"
+                      aria-label={`Mark leave for ${worker.name}`}
+                    >
+                      <Calendar size={20} strokeWidth={2.2} className="shrink-0" />
+                    </button>
+                  </div>
+                </div>
+              );
+            }}
+          />
+        );
+      })()}
 
       {/* ANCHORED FRONTLINE THUMB-ZONE QUICK CLOCK BAR (AC 1, AC 4, AC 6)
           - Anchored in the bottom 1/3 of the screen for natural thumb ergonomics

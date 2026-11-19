@@ -7,6 +7,8 @@ import { Worker, INDIAN_STATES, PtExemptionStatus } from '../types/index';
 import { dbService } from '../services/db';
 import { useToast } from '../contexts/ToastContext';
 import { resolveStateLwfRule } from '../services/ptLwfDatabase';
+import { KeyboardAwareFormContainer } from './KeyboardAwareFormContainer';
+import { ModalDatePicker } from './ModalDatePicker';
 
 interface Props {
   isOpen: boolean;
@@ -170,11 +172,34 @@ export const TaxDeclarationModal: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Scrollable Form */}
-        <form onSubmit={handleSave} className="overflow-y-auto py-4 space-y-4 pr-1">
+        {/* Keyboard-Aware Scrollable Form */}
+        <KeyboardAwareFormContainer
+          onSubmit={handleSave}
+          extraBottomPadding={40}
+          className="py-4 space-y-4 pr-1 flex-1"
+          footerClassName="pt-3 border-t border-slate-200 bg-white"
+          stickyFooter={
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="h-11 px-4 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="h-11 px-5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl shadow-xs transition-colors flex items-center gap-2"
+              >
+                {saving ? 'Saving...' : 'Save Declarations'}
+              </button>
+            </div>
+          }
+        >
           {/* Regime Selection Box */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                 Income Tax Regime (Section 115BAC)
               </span>
@@ -186,7 +211,7 @@ export const TaxDeclarationModal: React.FC<Props> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => handleRegimeChange('NEW')}
@@ -247,7 +272,7 @@ export const TaxDeclarationModal: React.FC<Props> = ({
               Work Location State &amp; Transfer (PT &amp; LWF Jurisdiction)
             </span>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   Employee Work Location State
@@ -267,11 +292,12 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   State Transfer Effective Date (Optional)
                 </label>
-                <input
-                  type="date"
+                <ModalDatePicker
+                  fieldName="stateEffectiveDate"
+                  label="State Transfer Effective Date"
+                  placeholder="Select transfer date"
                   value={stateEffectiveDate}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setStateEffectiveDate(e.target.value)}
-                  className="w-full h-11 px-3 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  onChange={(iso) => setStateEffectiveDate(iso)}
                 />
               </div>
             </div>
@@ -323,17 +349,18 @@ export const TaxDeclarationModal: React.FC<Props> = ({
               </label>
 
               {ptExempt && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pl-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 md:pl-6">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                       Previous Employer Name
                     </label>
                     <input
                       type="text"
+                      enterKeyHint="next"
                       value={prevEmployerName}
                       onChange={(e) => setPrevEmployerName(e.target.value)}
                       placeholder="e.g. Apex Textile Mills"
-                      className="w-full h-9 px-2.5 text-xs rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                      className="w-full h-11 px-2.5 text-xs rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                     />
                   </div>
                   <div>
@@ -342,21 +369,23 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                     </label>
                     <input
                       type="text"
+                      enterKeyHint="next"
                       value={prevEmployerRef}
                       onChange={(e) => setPrevEmployerRef(e.target.value)}
                       placeholder="e.g. PT-DECL-2026-04"
-                      className="w-full h-9 px-2.5 text-xs font-mono rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                      className="w-full h-11 px-2.5 text-xs font-mono rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                       Declaration Date
                     </label>
-                    <input
-                      type="date"
+                    <ModalDatePicker
+                      fieldName="prevEmployerDate"
+                      label="PT Declaration Date"
+                      placeholder="Select date"
                       value={prevEmployerDate}
-                      onChange={(e) => setPrevEmployerDate(e.target.value)}
-                      className="w-full h-9 px-2.5 text-xs font-mono rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                      onChange={(iso) => setPrevEmployerDate(iso)}
                     />
                   </div>
                 </div>
@@ -365,7 +394,7 @@ export const TaxDeclarationModal: React.FC<Props> = ({
 
             {/* LWF Contractor Tag & Employment Type */}
             <div className="pt-3 border-t border-slate-200 space-y-2.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Employment Classification (Gratuity &amp; LWF)
@@ -424,7 +453,7 @@ export const TaxDeclarationModal: React.FC<Props> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   Section 80C (PPF, ELSS, LIC)
@@ -433,6 +462,8 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                   <span className="absolute left-3 top-3 text-xs text-slate-400 font-bold">₹</span>
                   <input
                     type="number"
+                    inputMode="numeric"
+                    enterKeyHint="next"
                     disabled={regime === 'NEW'}
                     max={150000}
                     placeholder="Max 1,50,000"
@@ -451,6 +482,8 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                   <span className="absolute left-3 top-3 text-xs text-slate-400 font-bold">₹</span>
                   <input
                     type="number"
+                    inputMode="numeric"
+                    enterKeyHint="next"
                     disabled={regime === 'NEW'}
                     max={100000}
                     placeholder="Max 50,000"
@@ -469,6 +502,8 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                   <span className="absolute left-3 top-3 text-xs text-slate-400 font-bold">₹</span>
                   <input
                     type="number"
+                    inputMode="numeric"
+                    enterKeyHint="next"
                     disabled={regime === 'NEW'}
                     placeholder="e.g., 60,000"
                     value={hra || ''}
@@ -486,6 +521,8 @@ export const TaxDeclarationModal: React.FC<Props> = ({
                   <span className="absolute left-3 top-3 text-xs text-slate-400 font-bold">₹</span>
                   <input
                     type="number"
+                    inputMode="numeric"
+                    enterKeyHint="done"
                     disabled={regime === 'NEW'}
                     placeholder="e.g., 50,000"
                     value={other || ''}
@@ -504,31 +541,13 @@ export const TaxDeclarationModal: React.FC<Props> = ({
               id="lock-declarations"
               checked={isLocked}
               onChange={(e) => setIsLocked(e.target.checked)}
-              className="rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+              className="rounded border-slate-400 text-indigo-600 focus:ring-indigo-500 shrink-0"
             />
             <label htmlFor="lock-declarations" className="font-semibold cursor-pointer">
               Lock tax declarations and regime choice for the remainder of this Financial Year
             </label>
           </div>
-
-          {/* Actions */}
-          <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-11 px-4 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="h-11 px-5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl shadow-xs transition-colors flex items-center gap-2"
-            >
-              {saving ? 'Saving...' : 'Save Declarations'}
-            </button>
-          </div>
-        </form>
+        </KeyboardAwareFormContainer>
       </div>
     </div>
   );

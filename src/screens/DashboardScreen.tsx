@@ -20,6 +20,7 @@ import { breadcrumbService } from '../services/breadcrumbService';
 import { safetyCheckInService } from '../services/safetyCheckInService';
 import { evaluateFnfDeadline, syncFnfBreachAlerts } from '../services/fnfService';
 import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
+import { TruncatedText } from '../components/TruncatedText';
 
 interface Props {
   onOpenKiosk: (branchId: string) => void;
@@ -229,20 +230,20 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
   };
 
   const StatCard = ({ icon: Icon, value, label, subLabel, accentColor }: any) => (
-    <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between min-h-[120px] relative">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
-        <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${accentColor}`}>
+    <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between min-h-[7.25rem] min-w-0 relative">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <span className="text-fluid-xs font-semibold text-slate-500 uppercase tracking-wider min-w-0 break-words">{label}</span>
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${accentColor}`}>
           <Icon size={17} />
         </div>
       </div>
-      <div className="mt-2">
-        <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight">
+      <div className="mt-2 min-w-0">
+        <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight break-words">
           {value}
         </div>
         {subLabel && (
-          <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-            <span>{subLabel}</span>
+          <div className="text-fluid-xs text-slate-500 mt-1 flex items-center flex-wrap gap-1.5 min-w-0">
+            <span className="break-words">{subLabel}</span>
           </div>
         )}
       </div>
@@ -250,7 +251,7 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
   );
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 min-w-0">
         {/* PERSISTENT EMPLOYEE CAP BANNER */}
         <EmployeeCapBanner 
           tenantId={profile?.tenantId || 'demo-tenant-id'} 
@@ -258,32 +259,32 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
         />
 
         {/* PAGE TOOLBAR */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
                 {branding?.logoUrl ? (
                     <img 
                         src={branding.logoUrl} 
                         alt="Logo"
-                        className="h-10 w-auto max-w-[100px] object-contain bg-white p-1 rounded-xl border border-slate-200 shadow-xs" 
+                        className="h-10 w-auto max-w-[100px] object-contain bg-white p-1 rounded-xl border border-slate-200 shadow-xs shrink-0" 
                     />
                 ) : (
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
                         {profile?.companyName ? profile.companyName.charAt(0).toUpperCase() : 'W'}
                     </div>
                 )}
-                <div>
-                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+                <div className="min-w-0 flex-1">
+                    <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">
                         {branding?.appName || profile?.companyName || 'Factory Dashboard'}
                     </h1>
-                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                        <span>Live Attendance & Shift Status</span>
+                    <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+                        <span>Live Attendance &amp; Shift Status</span>
                         <span aria-hidden="true" className="text-slate-300">·</span>
                         <span className="font-mono tabular-nums text-slate-600">{stats.total} Active Personnel</span>
                     </div>
                 </div>
             </div>
             
-            <div className="flex items-center gap-2.5 self-start sm:self-auto">
+            <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
                 {orgSettings?.branches && orgSettings.branches.length > 1 && (
                     <select 
                        className="bg-white border border-slate-200 text-xs font-semibold text-slate-700 py-2 px-3 rounded-xl shadow-xs outline-none hover:border-slate-300 transition-colors"
@@ -377,15 +378,20 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                       </span>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 min-w-0">
                     {fnfAlerts.slice(0, 3).map((rec) => (
-                      <div key={rec.id} className="inline-flex items-center gap-2 bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-xs">
-                        <span className="font-bold text-slate-900">{rec.workerName}</span>
+                      <div key={rec.id} className="inline-flex items-center flex-wrap gap-2 max-w-full bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-fluid-xs">
+                        <TruncatedText
+                          text={rec.workerName}
+                          modalTitle="FnF Settlement Worker"
+                          subtitle={`${rec.designation || 'Employee'} · Exit ${rec.exitDate}`}
+                          className="font-bold text-slate-900 max-w-[11rem]"
+                        />
                         <FnfDeadlineBadge record={rec} orgSettings={orgSettings} compact />
                       </div>
                     ))}
                     {fnfAlerts.length > 3 && (
-                      <span className="text-xs font-mono font-bold self-center">
+                      <span className="text-fluid-xs font-mono font-bold self-center">
                         +{fnfAlerts.length - 3} more
                       </span>
                     )}
@@ -393,21 +399,21 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                 </div>
               </div>
               {onNavigate && (
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center flex-wrap gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => onNavigate('GRATUITY')}
-                    className={`px-3.5 py-2.5 rounded-xl font-bold text-xs text-white cursor-pointer flex items-center gap-1.5 ${
+                    className={`min-h-[2.5rem] px-3.5 py-2 rounded-xl font-bold text-fluid-xs text-white cursor-pointer flex items-center gap-1.5 ${
                       isBreachPresent ? 'bg-rose-700 hover:bg-rose-800' : 'bg-amber-700 hover:bg-amber-800'
                     }`}
                   >
                     <span>Review &amp; Settle FnF</span>
-                    <ArrowRight size={14} />
+                    <ArrowRight size={14} className="shrink-0" />
                   </button>
                   <button
                     type="button"
                     onClick={() => onNavigate('PAYROLL')}
-                    className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 cursor-pointer"
+                    className="min-h-[2.5rem] px-3.5 py-2 rounded-xl font-bold text-fluid-xs bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 cursor-pointer"
                   >
                     Off-Cycle Payroll
                   </button>
@@ -599,8 +605,8 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
         )} 
         */}
 
-        {/* RESPONSIVE METRIC KPIS: 2 columns mobile, 4 columns desktop */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* RESPONSIVE METRIC KPIS: 1 col on ultra-small 320px/200% zoom, 2 cols on >=360px, 4 cols on desktop */}
+        <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
             <StatCard 
                 icon={CheckCircle} 
                 value={stats.present + stats.halfDay} 
@@ -665,34 +671,48 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                     else if (record.computedStatus === 'ABSENT') { statusTextColor = 'text-rose-700 font-semibold'; statusLabel = 'Absent (<4h)'; }
 
                     return (
-                        <div key={record.id} className="p-4 sm:px-6 flex items-center justify-between gap-4 hover:bg-slate-50/70 transition-colors">
-                            <div className="flex items-center gap-3.5 min-w-0">
-                                <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-sm border border-slate-200 shrink-0">
+                        <div key={record.id} className="p-3.5 sm:px-6 flex items-center justify-between gap-3 flex-wrap xs:flex-nowrap hover:bg-slate-50/70 transition-colors min-w-0">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-fluid-sm border border-slate-200 shrink-0">
                                     {record.workerName.charAt(0)}
                                 </div>
-                                <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <p className="text-sm font-bold text-slate-900 truncate">{record.workerName}</p>
-                                        <FieldStatusBadge
-                                          status={record.computedStatus}
-                                          isLate={record.isLate}
-                                          size="sm"
-                                        />
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <div className="min-w-0 flex-1">
+                                          <TruncatedText
+                                            text={record.workerName}
+                                            modalTitle="Attendance Activity"
+                                            subtitle={`${isOut ? 'Check Out' : 'Check In'} at ${new Date(timeStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                                            details={[
+                                              { label: 'Status', value: statusLabel },
+                                              { label: 'Logged Hours', value: `${record.currentHours.toFixed(1)} hrs`, mono: true },
+                                              ...(record.isLate ? [{ label: 'Punctuality', value: 'Late Arrival' }] : []),
+                                            ]}
+                                            className="text-fluid-sm font-bold text-slate-900"
+                                          />
+                                        </div>
+                                        <div className="shrink-0">
+                                          <FieldStatusBadge
+                                            status={record.computedStatus}
+                                            isLate={record.isLate}
+                                            size="sm"
+                                          />
+                                        </div>
                                     </div>
-                                    <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 font-mono tabular-nums">
+                                    <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5 font-mono tabular-nums">
                                         <span>{isOut ? 'Check Out' : 'Check In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                                         {record.isLate && <span className="text-rose-600 font-bold">· LATE</span>}
                                         {lastPunch?.isOutOfGeofence && (
                                             <span className="text-amber-600 flex items-center gap-0.5" title="Punched outside factory radius">
-                                                <MapPin size={11} /> Outside Geofence
+                                                <MapPin size={11} className="shrink-0" /> Outside Geofence
                                             </span>
                                         )}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="text-right shrink-0">
-                                <span className="font-mono text-sm font-semibold tabular-nums text-slate-900">
+                            <div className="text-right shrink-0 ml-auto">
+                                <span className="font-mono text-fluid-sm font-semibold tabular-nums text-slate-900">
                                     {record.currentHours.toFixed(1)} hrs
                                 </span>
                             </div>

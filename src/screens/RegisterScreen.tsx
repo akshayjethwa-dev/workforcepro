@@ -1,10 +1,17 @@
 // src/screens/RegisterScreen.tsx
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { dbService } from '../services/db';
 import { Factory, Mail, Lock, User, Phone, Loader2, ArrowRight, Eye, EyeOff, X, Building2 } from 'lucide-react';
+import { InlineFieldError } from '../components/InlineFieldError';
+import {
+  advanceToNextFormField,
+  scrollElementAboveKeyboard,
+  scrollToFirstInvalidField,
+  useKeyboardAwareLayout,
+} from '../hooks/useKeyboardAwareLayout';
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7;
 
@@ -22,6 +29,9 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const { keyboardHeight } = useKeyboardAwareLayout();
   
   const [showPassword, setShowPassword] = useState(false);
   
@@ -29,6 +39,15 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
+
+  const clearFieldError = (field: string) => {
+    setFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
 
   const validatePassword = (password: string) => {
     const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
@@ -39,16 +58,24 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
     e.preventDefault();
     setError('');
 
-    // If there's an invite, they don't NEED a company name (we'll use the invited one), 
-    // but they still need to provide one if it's a public signup.
-    if (!formData.name.trim()) return setError("Your Name is required.");
-    if (!formData.phone.trim() || !/^\d{10}$/.test(formData.phone)) return setError("Valid 10-digit Phone Number is required.");
-    if (!formData.email.trim()) return setError("Email Address is required.");
+    const errors: Record<string, string> = {};
+    if (!formData.name.trim()) errors.name = 'Your Name is required.';
+    if (!formData.phone.trim() || !/^\d{10}$/.test(formData.phone)) {
+      errors.phone = 'Valid 10-digit Phone Number is required.';
+    }
+    if (!formData.email.trim()) errors.email = 'Email Address is required.';
     if (!validatePassword(formData.password)) {
-      return setError("Password must be at least 8 characters long, contain one uppercase letter, one lowercase letter, one number, and one special character.");
+      errors.password = 'Password must be at least 8 characters with uppercase, lowercase, number, and special character.';
     }
     if (!agreedToTerms) {
-      return setError("You must agree to the Terms & Conditions and Privacy Policy to continue.");
+      errors.terms = 'You must agree to the Terms & Conditions and Privacy Policy to continue.';
+    }
+
+    setFieldErrors(errors);
+    const errKeys = Object.keys(errors);
+    if (errKeys.length > 0) {
+      window.requestAnimationFrame(() => scrollToFirstInvalidField(scrollRef.current, errKeys[0]));
+      return;
     }
 
     setLoading(true);
@@ -60,7 +87,9 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
       // 2. Enforce Company Name for public signups
       if (!inviteData && !formData.companyName.trim()) {
           setLoading(false);
-          return setError("Company Name is required for new public registrations.");
+          setFieldErrors({ companyName: 'Company Name is required for new public registrations.' });
+          window.requestAnimationFrame(() => scrollToFirstInvalidField(scrollRef.current, 'companyName'));
+          return;
       }
 
       // 3. Create Firebase Auth User
@@ -197,117 +226,185 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
   };
 
   return (
-    <div className="min-h-dvh bg-gray-50 flex flex-col items-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8 my-auto shrink-0 mb-6 mt-6">
+    <div
+      ref={scrollRef}
+      onFocusCapture={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')) {
+          scrollElementAboveKeyboard(target, scrollRef.current, keyboardHeight);
+        }
+      }}
+      style={{
+        paddingBottom: `calc(2rem + var(--keyboard-height, 0px) + env(safe-area-inset-bottom, 0px))`,
+      }}
+      className="min-h-dvh bg-gray-50 flex flex-col items-center p-4 overflow-y-auto"
+    >
+      <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 sm:p-8 my-auto shrink-0 mb-6 mt-6">
         <div className="text-center mb-8">
           <div className="mx-auto w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 mb-4">
              <Building2 className="text-white" size={32} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Setup Your Account</h1>
+          <h1 className="text-fluid-2xl font-bold text-gray-900">Setup Your Account</h1>
           <p className="text-gray-500 text-sm mt-1">Start your {FREE_TRIAL_DAYS}-day free trial today</p>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-100 text-red-600 p-3 rounded-lg text-xs mb-6 text-center font-medium">
+          <div role="alert" className="bg-red-50 border border-red-100 text-red-600 p-3 rounded-lg text-xs mb-6 text-center font-medium">
             {error}
           </div>
         )}
 
-        <form onSubmit={handleRegister} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Company Name</label>
+        <form
+          onSubmit={handleRegister}
+          noValidate
+          onKeyDownCapture={(e) => {
+            if (e.key === 'Enter' && e.target instanceof HTMLElement && e.target.tagName === 'INPUT') {
+              const hint = e.target.getAttribute('enterkeyhint');
+              if (hint === 'next') {
+                e.preventDefault();
+                advanceToNextFormField(e.target, scrollRef.current);
+              }
+            }
+          }}
+          className="space-y-4"
+        >
+          <div data-field="companyName">
+            <label htmlFor="reg-company" className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Company Name</label>
             <div className="relative">
               <Factory className="absolute left-3 top-3.5 text-gray-400" size={18} />
-              <input 
-                className="w-full pl-10 pr-4 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
+              <input
+                id="reg-company"
+                type="text"
+                autoComplete="organization"
+                enterKeyHint="next"
+                aria-invalid={Boolean(fieldErrors.companyName)}
+                className={`w-full pl-10 pr-4 py-3.5 border rounded-lg focus:ring-2 outline-none min-h-12 ${
+                  fieldErrors.companyName ? 'border-rose-400 focus:ring-rose-500' : 'border-gray-200 focus:ring-blue-500'
+                }`}
                 placeholder="Ex: Jethwa Industries (Optional if invited)"
                 value={formData.companyName}
-                onChange={e => setFormData({...formData, companyName: e.target.value})}
+                onChange={e => { setFormData({...formData, companyName: e.target.value}); clearFieldError('companyName'); }}
               />
             </div>
+            <InlineFieldError message={fieldErrors.companyName} />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Your Name *</label>
+          <div data-field="name">
+            <label htmlFor="reg-name" className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Your Name *</label>
             <div className="relative">
               <User className="absolute left-3 top-3.5 text-gray-400" size={18} />
-              <input 
-                className="w-full pl-10 pr-4 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
+              <input
+                id="reg-name"
+                type="text"
+                autoComplete="name"
+                enterKeyHint="next"
+                aria-invalid={Boolean(fieldErrors.name)}
+                className={`w-full pl-10 pr-4 py-3.5 border rounded-lg focus:ring-2 outline-none min-h-12 ${
+                  fieldErrors.name ? 'border-rose-400 focus:ring-rose-500' : 'border-gray-200 focus:ring-blue-500'
+                }`}
                 placeholder="Full Name"
                 value={formData.name}
-                onChange={e => setFormData({...formData, name: e.target.value})}
+                onChange={e => { setFormData({...formData, name: e.target.value}); clearFieldError('name'); }}
               />
             </div>
+            <InlineFieldError message={fieldErrors.name} />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Phone Number *</label>
+          <div data-field="phone">
+            <label htmlFor="reg-phone" className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Phone Number *</label>
             <div className="relative">
               <Phone className="absolute left-3 top-3.5 text-gray-400" size={18} />
-              <input 
+              <input
+                id="reg-phone"
                 type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                enterKeyHint="next"
                 maxLength={10}
-                className="w-full pl-10 pr-4 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
+                aria-invalid={Boolean(fieldErrors.phone)}
+                className={`w-full pl-10 pr-4 py-3.5 border rounded-lg focus:ring-2 outline-none min-h-12 font-mono ${
+                  fieldErrors.phone ? 'border-rose-400 focus:ring-rose-500' : 'border-gray-200 focus:ring-blue-500'
+                }`}
                 placeholder="10-digit mobile number"
                 value={formData.phone}
-                onChange={e => setFormData({...formData, phone: e.target.value.replace(/\D/g, '')})}
+                onChange={e => { setFormData({...formData, phone: e.target.value.replace(/\D/g, '')}); clearFieldError('phone'); }}
               />
             </div>
+            <InlineFieldError message={fieldErrors.phone} />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Email Address *</label>
+          <div data-field="email">
+            <label htmlFor="reg-email" className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Email Address *</label>
             <div className="relative">
               <Mail className="absolute left-3 top-3.5 text-gray-400" size={18} />
-              <input 
+              <input
+                id="reg-email"
                 type="email"
-                className="w-full pl-10 pr-4 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
+                inputMode="email"
+                autoComplete="email"
+                enterKeyHint="next"
+                aria-invalid={Boolean(fieldErrors.email)}
+                className={`w-full pl-10 pr-4 py-3.5 border rounded-lg focus:ring-2 outline-none min-h-12 ${
+                  fieldErrors.email ? 'border-rose-400 focus:ring-rose-500' : 'border-gray-200 focus:ring-blue-500'
+                }`}
                 placeholder="admin@company.com"
                 value={formData.email}
-                onChange={e => setFormData({...formData, email: e.target.value})}
+                onChange={e => { setFormData({...formData, email: e.target.value}); clearFieldError('email'); }}
               />
             </div>
+            <InlineFieldError message={fieldErrors.email} />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Password *</label>
+          <div data-field="password">
+            <label htmlFor="reg-password" className="block text-xs font-bold text-gray-700 uppercase mb-1 ml-1">Password *</label>
             <div className="relative">
               <Lock className="absolute left-3 top-3.5 text-gray-400" size={18} />
-              <input 
+              <input
+                id="reg-password"
                 type={showPassword ? "text" : "password"} 
-                className="w-full pl-10 pr-12 py-3.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-12"
+                autoComplete="new-password"
+                enterKeyHint="done"
+                aria-invalid={Boolean(fieldErrors.password)}
+                className={`w-full pl-10 pr-12 py-3.5 border rounded-lg focus:ring-2 outline-none min-h-12 ${
+                  fieldErrors.password ? 'border-rose-400 focus:ring-rose-500' : 'border-gray-200 focus:ring-blue-500'
+                }`}
                 placeholder="••••••••"
                 value={formData.password}
-                onChange={e => setFormData({...formData, password: e.target.value})}
+                onChange={e => { setFormData({...formData, password: e.target.value}); clearFieldError('password'); }}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-1 top-1 w-11 h-11 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none transition-colors"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <p className="text-[10px] text-gray-400 mt-1.5 leading-tight ml-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char.</p>
+            <InlineFieldError message={fieldErrors.password} />
+            <p className="text-[10px] text-gray-500 mt-1.5 leading-tight ml-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char.</p>
           </div>
 
           {/* Legal Checkbox */}
-          <div className="flex items-start mt-6 mb-2">
-            <div className="flex items-center h-5 mt-0.5">
-              <input
-                id="terms"
-                type="checkbox"
-                checked={agreedToTerms}
-                onChange={(e) => setAgreedToTerms(e.target.checked)}
-                className="w-4 h-4 border border-gray-300 rounded bg-gray-50 focus:ring-3 focus:ring-blue-300 accent-blue-600 cursor-pointer"
-              />
+          <div data-field="terms" className="mt-6 mb-2">
+            <div className="flex items-start">
+              <div className="flex items-center h-5 mt-0.5">
+                <input
+                  id="terms"
+                  type="checkbox"
+                  checked={agreedToTerms}
+                  onChange={(e) => { setAgreedToTerms(e.target.checked); clearFieldError('terms'); }}
+                  className="w-4 h-4 border border-gray-300 rounded bg-gray-50 focus:ring-3 focus:ring-blue-300 accent-blue-600 cursor-pointer"
+                />
+              </div>
+              <label htmlFor="terms" className="ml-2 text-sm text-gray-600 cursor-pointer">
+                I agree to the{' '}
+                <button type="button" onClick={(e) => { e.preventDefault(); setShowTermsModal(true); }} className="text-blue-600 font-semibold hover:underline">Terms &amp; Conditions</button>
+                {' '}and{' '}
+                <button type="button" onClick={(e) => { e.preventDefault(); setShowPrivacyModal(true); }} className="text-blue-600 font-semibold hover:underline">Privacy Policy</button>.
+              </label>
             </div>
-            <label htmlFor="terms" className="ml-2 text-sm text-gray-600 cursor-pointer">
-              I agree to the{' '}
-              <button type="button" onClick={(e) => { e.preventDefault(); setShowTermsModal(true); }} className="text-blue-600 font-semibold hover:underline">Terms & Conditions</button>
-              {' '}and{' '}
-              <button type="button" onClick={(e) => { e.preventDefault(); setShowPrivacyModal(true); }} className="text-blue-600 font-semibold hover:underline">Privacy Policy</button>.
-            </label>
+            <InlineFieldError message={fieldErrors.terms} />
           </div>
 
           <button 

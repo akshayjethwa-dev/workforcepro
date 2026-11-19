@@ -385,7 +385,7 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans pb-12 print:bg-white print:p-0">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip bg-slate-100/70 text-slate-900 flex flex-col font-sans pb-12 print:bg-white print:p-0">
       
       {/* GRACEFUL REVOCATION OVERLAY (EDGE CASE 1: TOKEN REVOKED WHILE WORKER ON VIEW) */}
       {isRevokedGracefully && (
@@ -394,11 +394,11 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
             <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4 border border-rose-100 shadow-sm">
               <Lock size={28} />
             </div>
-            <h3 className="text-base sm:text-lg font-bold text-slate-900">This link has expired.</h3>
-            <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+            <h3 className="text-fluid-lg font-bold text-slate-900">This link has expired.</h3>
+            <p className="text-fluid-xs text-slate-600 mt-2 leading-relaxed">
               This link has expired. Contact your manager.
             </p>
-            <div className="mt-5 p-3 rounded-xl bg-slate-50 text-[11px] text-slate-500 font-mono">
+            <div className="mt-5 p-3 rounded-xl bg-slate-50 text-fluid-2xs text-slate-500 font-mono">
               Status: ACCESS_REVOKED
             </div>
           </div>
@@ -407,27 +407,28 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
 
       {/* SOFT PWA PROMPT FOR FIRST-TIME USERS */}
       {showPwaPrompt && (
-        <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white px-4 py-2.5 text-xs flex items-center justify-between shadow-md print:hidden">
-          <div className="flex items-center gap-2.5">
+        <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white px-3 sm:px-4 py-2.5 text-fluid-xs flex items-center justify-between flex-wrap gap-2 shadow-md print:hidden">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
               <Smartphone size={15} className="text-white" />
             </div>
-            <div>
+            <div className="min-w-0 break-words">
               <span className="font-bold">Add to Home Screen / Install App</span>
               <span className="hidden sm:inline text-slate-300 ml-1.5">— Access your slips and schedule anytime offline</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button 
               onClick={() => {
-                alert('To install:\n• On Android Chrome: Tap Menu (⋮) → "Install app" or "Add to Home screen"\n• On iOS Safari: Tap Share (⬆) → "Add to Home Screen"');
+                setShowPwaPrompt(false);
               }}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-[11px] transition-colors"
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-fluid-2xs transition-colors"
             >
-              Install
+              Got it
             </button>
             <button 
               onClick={() => setShowPwaPrompt(false)}
+              aria-label="Dismiss install prompt"
               className="text-slate-400 hover:text-white p-1"
             >
               <X size={14} />
@@ -437,27 +438,27 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
       )}
 
       {/* TOP HEADER: TENANT BRANDING ONLY (E5-S2 RESTRICTION) */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:static print:border-none">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:static print:border-none w-full max-w-full">
+        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between gap-2 flex-wrap min-w-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
             <div 
-              className="w-10 h-10 rounded-2xl flex items-center justify-center text-white font-black text-lg shadow-sm"
+              className="w-10 h-10 rounded-2xl flex items-center justify-center text-white font-black text-fluid-lg shadow-sm shrink-0"
               style={{ backgroundColor: tenantBranding.primaryColor }}
             >
               {tenantBranding.appName.charAt(0)}
             </div>
-            <div>
-              <h1 className="font-bold text-slate-900 text-sm sm:text-base leading-tight">
+            <div className="min-w-0 flex-1">
+              <h1 className="font-bold text-slate-900 text-fluid-base leading-tight truncate" title={tenantBranding.appName}>
                 {tenantBranding.appName}
               </h1>
-              <span className="text-[10px] text-slate-500 font-medium flex items-center gap-1">
-                <ShieldCheck size={11} className="text-emerald-600" />
-                <span>Verified Worker Portal • Read-Only</span>
+              <span className="text-fluid-2xs text-slate-500 font-medium flex items-center gap-1 min-w-0">
+                <ShieldCheck size={11} className="text-emerald-600 shrink-0" />
+                <span className="truncate">Verified Worker Portal • Read-Only</span>
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 print:hidden">
+          <div className="flex items-center gap-2 shrink-0 print:hidden">
             <button
               onClick={handlePrint}
               className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs"
