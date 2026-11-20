@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "workforcepro-saas"
-  }
+  },
+  "targets": {
+    "workforcepro-saas": {
+      "hosting": {
+        "app": [
+          "workforcepro-saas"
+        ],
+        "marketing": [
+          "workforcepro-marketing"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
