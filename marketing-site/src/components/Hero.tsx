@@ -16,7 +16,7 @@ export default function Hero() {
             Workers punch in via a WhatsApp link. You get 100% accurate, geofenced attendance and automated PF/ESI-compliant payroll in one dashboard.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <a href="#demo" className="bg-brand-blue hover:bg-blue-800 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
+            <a href="https://workforcepro-saas.web.app/" className="bg-brand-blue hover:bg-blue-800 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
               Start Free Trial
             </a>
             <a href="#video" className="bg-white border-2 border-slate-200 hover:border-brand-blue text-slate-700 px-8 py-4 rounded-xl font-bold text-lg transition-all flex items-center justify-center gap-2">

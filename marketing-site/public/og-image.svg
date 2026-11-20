@@ -1,0 +1,71 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A" />
+      <stop offset="55%" stop-color="#1E3A8A" />
+      <stop offset="100%" stop-color="#1E40AF" />
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bgGrad)" />
+  <circle cx="1060" cy="110" r="240" fill="#10B981" fill-opacity="0.12" />
+  <circle cx="140" cy="560" r="210" fill="#3B82F6" fill-opacity="0.15" />
+
+  <!-- Left Content Column -->
+  <!-- Brand Mark -->
+  <rect x="76" y="72" width="54" height="54" rx="14" fill="#10B981" />
+  <text x="103" y="109" text-anchor="middle" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="30" font-weight="800">W</text>
+  <text x="148" y="108" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="30" font-weight="700">WorkforcePro</text>
+
+  <!-- Pill Badge -->
+  <rect x="76" y="156" width="356" height="38" rx="19" fill="#10B981" fill-opacity="0.18" stroke="#34D399" stroke-opacity="0.45" />
+  <text x="254" y="181" text-anchor="middle" fill="#6EE7B7" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="16" font-weight="700" letter-spacing="0.5">BUILT FOR INDIAN SMBs & CAs</text>
+
+  <!-- Main Headline -->
+  <text x="76" y="256" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="52" font-weight="800">Attendance & Payroll</text>
+  <text x="76" y="318" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="52" font-weight="800">for Growing SMBs.</text>
+
+  <!-- Subheadline -->
+  <text x="76" y="376" fill="#CBD5E1" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="24" font-weight="500">Workers punch in via WhatsApp. Zero hardware.</text>
+  <text x="76" y="410" fill="#CBD5E1" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="24" font-weight="500">Automated PF, ESI, PT & 50% Wage Rule checks.</text>
+
+  <!-- Bottom Price / Trial Strip -->
+  <rect x="76" y="468" width="540" height="78" rx="16" fill="#FFFFFF" fill-opacity="0.1" stroke="#FFFFFF" stroke-opacity="0.2" />
+  <text x="104" y="502" fill="#6EE7B7" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="16" font-weight="700">FREE 14-DAY TRIAL • NO CREDIT CARD</text>
+  <text x="104" y="530" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="20" font-weight="700">Plans starting at ₹0 • Growth at ₹1,999/mo</text>
+
+  <!-- Right Mock Dashboard Preview Card -->
+  <rect x="680" y="96" width="444" height="438" rx="24" fill="#FFFFFF" />
+  <rect x="708" y="126" width="170" height="14" rx="7" fill="#1E3A8A" />
+  <rect x="708" y="150" width="240" height="10" rx="5" fill="#94A3B8" />
+  <rect x="1008" y="124" width="88" height="32" rx="16" fill="url(#badgeGrad)" />
+  <text x="1052" y="145" text-anchor="middle" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700">98% On-Site</text>
+
+  <!-- KPI Row inside Dashboard Card -->
+  <rect x="708" y="186" width="186" height="92" rx="14" fill="#EFF6FF" />
+  <text x="726" y="216" fill="#1E3A8A" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="14" font-weight="600">WhatsApp Punches</text>
+  <text x="726" y="256" fill="#0F172A" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="30" font-weight="800">48 / 49</text>
+
+  <rect x="910" y="186" width="186" height="92" rx="14" fill="#ECFDF5" />
+  <text x="928" y="216" fill="#047857" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="14" font-weight="600">50% Wage Rule</text>
+  <text x="928" y="256" fill="#065F46" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="26" font-weight="800">Compliant</text>
+
+  <!-- Statutory Checklist Rows inside Card -->
+  <rect x="708" y="302" width="388" height="60" rx="12" fill="#F8FAFC" stroke="#E2E8F0" />
+  <circle cx="736" cy="332" r="11" fill="#10B981" />
+  <path d="M731 332L734.5 335.5L741.5 328.5" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="760" y="337" fill="#0F172A" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="17" font-weight="700">PF, ESI & PT Auto-Calculated</text>
+
+  <rect x="708" y="376" width="388" height="60" rx="12" fill="#F8FAFC" stroke="#E2E8F0" />
+  <circle cx="736" cy="406" r="11" fill="#10B981" />
+  <path d="M731 406L734.5 409.5L741.5 402.5" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="760" y="411" fill="#0F172A" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="17" font-weight="700">Anti-Spoofing Geofence Verified</text>
+
+  <rect x="708" y="450" width="388" height="56" rx="12" fill="#1E3A8A" />
+  <text x="902" y="484" text-anchor="middle" fill="#FFFFFF" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="17" font-weight="700">1-Click Statutory Payroll Ready</text>
+</svg>
