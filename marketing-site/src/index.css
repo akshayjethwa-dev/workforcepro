@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    /* Sets the default background and text color for the whole site */
+    @apply bg-slate-50 text-slate-800 antialiased;
+    
+    /* Ensures no weird spacing issues from default browser styles */
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+
+  /* Optional: We add a default font family here. 
+     Tailwind will use its default system fonts unless you change this. */
+  #root {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+}

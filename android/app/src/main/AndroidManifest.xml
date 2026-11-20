@@ -4,8 +4,16 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Hardware features -->
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+
+    <!-- 👇 NEW: mark portrait screen as optional so Google Play does not
+         filter devices that don't support portrait orientation -->
+    <uses-feature
+        android:name="android.hardware.screen.portrait"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
