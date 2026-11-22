@@ -2,6 +2,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, app } from '../lib/firebase';
 import {
   INDIAN_STATES,
+  OneNumberSalaryCalculation,
   OrgSettings,
   PayrollServerValidationResult,
   SalaryStructureAuditReport,
@@ -69,6 +70,199 @@ export const STATE_MINIMUM_WAGES: Record<string, StateMinimumWageEntry> = Object
 
 export const FIFTY_PERCENT_RULE_WARNING =
   'Your basic pay is less than 50% of CTC. This will increase PF/Gratuity liabilities.';
+
+export const PF_STATUTORY_CEILING = 15000;
+
+export const ONE_NUMBER_MIN_WAGE_WARNING =
+  'This is below the state minimum wage. Please increase the salary.';
+
+export const PF_LIABILITY_SHIFT_STATEMENT =
+  'I understand this may violate PF compliance.';
+
+export interface OneNumberSalaryOptions {
+  state?: string;
+  wageZone?: string;
+  skillCategory?: WorkerSkillCategory;
+  scheduledEmployment?: string;
+  evaluationDate?: string;
+  orgSettings?: OrgSettings;
+  branchId?: string;
+}
+
+/**
+ * Deterministic "One-Number" Salary Calculator:
+ * Takes a single total monthly salary and auto-computes a Code on Wages compliant
+ * 50% Basic / 20% HRA / 30% Allowances split, enforces state minimum wage, and
+ * caps PF math at the statutory ₹15,000 ceiling.
+ */
+export function calculateOneNumberSalaryBreakdown(
+  rawMonthlySalary: number,
+  options: OneNumberSalaryOptions = {}
+): OneNumberSalaryCalculation {
+  const monthlySalary = Number.isFinite(rawMonthlySalary) && rawMonthlySalary > 0
+    ? Math.round(rawMonthlySalary)
+    : 0;
+
+  const resolvedLoc = resolveWorkerWorkLocation(
+    {
+      state: options.state,
+      wageZone: options.wageZone,
+      scheduledEmployment: options.scheduledEmployment,
+      branchId: options.branchId,
+    },
+    options.orgSettings
+  );
+
+  const skillCategory: WorkerSkillCategory = options.skillCategory || 'UNSKILLED';
+  const minWage = resolveMinimumWageFloor({
+    state: resolvedLoc.state,
+    zone: resolvedLoc.wageZone,
+    scheduledEmployment: resolvedLoc.scheduledEmployment,
+    skillCategory,
+    evaluationDate: options.evaluationDate,
+    customRevisions: options.orgSettings?.compliance?.minimumWageRevisions,
+  });
+
+  // 50% Basic (ceil ensures odd rupee totals never dip below 50.0%), 20% HRA, 30% Allowances
+  const basic = monthlySalary > 0 ? Math.ceil(monthlySalary * 0.5) : 0;
+  const hra = monthlySalary > 0 ? Math.round(monthlySalary * 0.2) : 0;
+  const allowances = monthlySalary > 0 ? Math.max(0, monthlySalary - basic - hra) : 0;
+  const basicPercentage = monthlySalary > 0 ? Math.round((basic / monthlySalary) * 1000) / 10 : 0;
+  const isFiftyPercentCompliant = monthlySalary > 0 && basic >= monthlySalary * 0.5;
+
+  // Minimum wage check against total monthly salary vs applicable state statutory floor
+  const isBelowMinimumWage = monthlySalary > 0 && monthlySalary < minWage.monthlyFloor;
+  const minimumWageShortfall = isBelowMinimumWage
+    ? Math.max(0, minWage.monthlyFloor - monthlySalary)
+    : 0;
+
+  // Automatic PF statutory ceiling cap at ₹15,000
+  const pfQualifyingWage = Math.min(basic, PF_STATUTORY_CEILING);
+  const isPfCappedAtCeiling = basic >= PF_STATUTORY_CEILING;
+  const isBasicAbovePfCeiling = basic > PF_STATUTORY_CEILING;
+
+  const employeePfMonthly = Math.round(pfQualifyingWage * 0.12);
+  const employerEpsMonthly = Math.round(pfQualifyingWage * 0.0833);
+  const employerEpfMonthly = Math.max(0, employeePfMonthly - employerEpsMonthly);
+  const employerEdliMonthly = Math.round(pfQualifyingWage * 0.005);
+  const employerAdminMonthly = Math.round(pfQualifyingWage * 0.005);
+  const employerPfTotalMonthly =
+    employerEpfMonthly + employerEpsMonthly + employerEdliMonthly + employerAdminMonthly;
+  const estimatedGratuityMonthly = Math.round((basic * 15) / 26 / 12);
+
+  return {
+    monthlySalary,
+    basic,
+    hra,
+    allowances,
+    basicPercentage,
+    isFiftyPercentCompliant,
+    state: minWage.state,
+    wageZone: minWage.zone,
+    skillCategory,
+    scheduledEmployment: minWage.scheduledEmployment,
+    stateMinimumWageMonthly: minWage.monthlyFloor,
+    stateMinimumWageDaily: minWage.dailyFloor,
+    notificationDate: minWage.notificationDate,
+    isBelowMinimumWage,
+    minimumWageShortfall,
+    minimumWageWarning: isBelowMinimumWage ? ONE_NUMBER_MIN_WAGE_WARNING : undefined,
+    pfStatutoryCeiling: PF_STATUTORY_CEILING,
+    pfQualifyingWage,
+    isPfCappedAtCeiling,
+    isBasicAbovePfCeiling,
+    employeePfMonthly,
+    employerEpsMonthly,
+    employerEpfMonthly,
+    employerEdliMonthly,
+    employerAdminMonthly,
+    employerPfTotalMonthly,
+    estimatedGratuityMonthly,
+    canSave: monthlySalary > 0 && !isBelowMinimumWage,
+  };
+}
+
+/**
+ * Builds a complete, Code on Wages compliant WageConfig from a single monthly salary input.
+ */
+export function buildOneNumberWageConfig(
+  monthlySalary: number,
+  existingConfig?: Partial<WageConfig>,
+  options: OneNumberSalaryOptions = {}
+): { wageConfig: WageConfig; calculation: OneNumberSalaryCalculation } {
+  const calc = calculateOneNumberSalaryBreakdown(monthlySalary, options);
+
+  const wageConfig: WageConfig = {
+    ...(existingConfig || {}),
+    type: 'MONTHLY',
+    salaryInputMode: 'ONE_NUMBER',
+    amount: calc.monthlySalary,
+    basicPercentage: 50,
+    workingDaysPerMonth: existingConfig?.workingDaysPerMonth || 26,
+    overtimeEligible: existingConfig?.overtimeEligible ?? false,
+    overtimeRatePerHour: existingConfig?.overtimeRatePerHour,
+    pfCapAtStatutoryCeiling: true,
+    pfWageCeiling: calc.pfStatutoryCeiling,
+    pfQualifyingWage: calc.pfQualifyingWage,
+    allowances: existingConfig?.allowances || { travel: 0, food: 0, nightShift: 0 },
+    monthlyBreakdown: {
+      basic: calc.basic,
+      da: 0,
+      retainingAllowance: 0,
+      hra: calc.hra,
+      travel: 0,
+      medical: 0,
+      others: calc.allowances,
+      employerPf: calc.employerEpfMonthly + calc.employerEpsMonthly,
+      employerGratuity: calc.estimatedGratuityMonthly,
+    },
+    complianceStatus: 'COMPLIANT',
+    complianceFlags: calc.isBelowMinimumWage ? ['MINIMUM_WAGE_VIOLATION'] : [],
+    acknowledgedNonCompliant: false,
+  };
+
+  return { wageConfig, calculation: calc };
+}
+
+/**
+ * Validates and computes One-Number salary breakdown + ₹15,000 PF ceiling math via Backend Cloud Function
+ * (`validateOneNumberSalary`), with deterministic local fallback for offline/demo environments.
+ */
+export async function validateOneNumberSalaryOnServer(
+  tenantId: string,
+  monthlySalary: number,
+  options: OneNumberSalaryOptions = {}
+): Promise<OneNumberSalaryCalculation> {
+  const localCalc = calculateOneNumberSalaryBreakdown(monthlySalary, options);
+
+  if (tenantId && tenantId !== 'demo-tenant-id' && auth.currentUser) {
+    try {
+      const functions = getFunctions(app, 'asia-south1');
+      const validateFn = httpsCallable(functions, 'validateOneNumberSalary');
+      const response = await validateFn({
+        tenantId,
+        monthlySalary,
+        state: localCalc.state,
+        wageZone: localCalc.wageZone,
+        skillCategory: localCalc.skillCategory,
+        scheduledEmployment: localCalc.scheduledEmployment,
+        minimumWageRevisions: options.orgSettings?.compliance?.minimumWageRevisions,
+      });
+      const data = response.data as Partial<OneNumberSalaryCalculation> | undefined;
+      if (data && typeof data.basic === 'number' && typeof data.pfQualifyingWage === 'number') {
+        return { ...localCalc, ...data };
+      }
+    } catch (err: any) {
+      // If backend explicitly rejected for minimum wage violation, rethrow so caller blocks save
+      if (err?.code === 'functions/failed-precondition' || String(err?.message || '').includes('minimum wage')) {
+        throw new Error(ONE_NUMBER_MIN_WAGE_WARNING);
+      }
+      console.warn('[OneNumberSalary] Cloud Function fallback to deterministic engine:', err);
+    }
+  }
+
+  return localCalc;
+}
 
 export function getStateMinimumWage(
   stateName?: string,
@@ -324,15 +518,22 @@ export function validateWorkerWageStructure(
     ? Math.round(estimatedAdditionalGratuityAnnual / 12)
     : 0;
 
-  // State Statutory Minimum Wage Check against calculated Basic Pay (monthly & daily * 26)
+  // State Statutory Minimum Wage Check
+  // For One-Number auto-split salaries (50% Basic / 20% HRA / 30% Allowances), compare total monthly salary
+  // against the applicable state statutory minimum wage floor; for custom manual breakdowns, compare Basic Pay.
   // Probation employees are strictly NOT exempt from minimum wage enforcement.
   const isOnProbation = Boolean(worker.isOnProbation);
   const probationExemptionBlockedNote = isOnProbation
     ? 'Employee is on probation — statutory minimum wage applies without exemption.'
     : undefined;
 
-  const isMinimumWageViolation = totalRemuneration > 0 && basicPay < monthlyFloor;
-  const minimumWageGap = isMinimumWageViolation ? round2(monthlyFloor - basicPay) : 0;
+  const usesMonthlyTotalMinWageFloor =
+    wageType === 'MONTHLY' &&
+    (activeWageConfig?.salaryInputMode === 'ONE_NUMBER' ||
+      activeWageConfig?.salaryInputMode === 'CUSTOM_BREAKDOWN');
+  const minWageComparableAmount = usesMonthlyTotalMinWageFloor ? totalRemuneration : basicPay;
+  const isMinimumWageViolation = totalRemuneration > 0 && minWageComparableAmount < monthlyFloor;
+  const minimumWageGap = isMinimumWageViolation ? round2(monthlyFloor - minWageComparableAmount) : 0;
 
   const complianceFlags: WageComplianceFlag[] = [];
   if (isFiftyPercentNonCompliant) complianceFlags.push('NON_COMPLIANT');
@@ -344,7 +545,9 @@ export function validateWorkerWageStructure(
     : '';
   const probationTag = isOnProbation ? ' (Probation active — no exemption)' : '';
   const minimumWageWarning = isMinimumWageViolation
-    ? `MINIMUM_WAGE_VIOLATION: Basic Pay (₹${basicPay.toLocaleString('en-IN')}/mo) is below ${activeState} · ${minWageResolved.zone} (${scheduledEmployment}, ${SKILL_LEVEL_LABELS[skillCategory]}) floor of ₹${monthlyFloor.toLocaleString('en-IN')}/mo. Shortfall: ₹${minimumWageGap.toLocaleString('en-IN')}/mo · Notification Date: ${minWageResolved.notificationDate}.${revisionTag}${probationTag}`
+    ? usesMonthlyTotalMinWageFloor
+      ? `${ONE_NUMBER_MIN_WAGE_WARNING} (Monthly Salary ₹${totalRemuneration.toLocaleString('en-IN')}/mo is below ${activeState} · ${minWageResolved.zone} floor of ₹${monthlyFloor.toLocaleString('en-IN')}/mo).`
+      : `MINIMUM_WAGE_VIOLATION: Basic Pay (₹${basicPay.toLocaleString('en-IN')}/mo) is below ${activeState} · ${minWageResolved.zone} (${scheduledEmployment}, ${SKILL_LEVEL_LABELS[skillCategory]}) floor of ₹${monthlyFloor.toLocaleString('en-IN')}/mo. Shortfall: ₹${minimumWageGap.toLocaleString('en-IN')}/mo · Notification Date: ${minWageResolved.notificationDate}.${revisionTag}${probationTag}`
     : undefined;
 
   return {

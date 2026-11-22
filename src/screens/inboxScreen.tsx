@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Inbox, CheckCircle2, XCircle, AlertTriangle, Clock, MapPin, 
-  IndianRupee, ShieldAlert, ArrowRight, Filter, RefreshCw, 
-  ChevronRight, Sparkles, UserCheck, Eye, X, Check, FileCheck,
-  Calendar, Phone, ExternalLink, ShieldCheck, UserX, ArrowUpRight
+  IndianRupee, ShieldAlert, Filter, RefreshCw, 
+  ChevronRight, Sparkles, UserCheck, Eye, X, FileCheck,
+  Calendar, ShieldCheck, ArrowUpRight, Smartphone, Navigation, Cpu, Shield
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -13,14 +13,29 @@ import {
 } from '../types/index';
 import { inboxService, ManagerDelegation } from '../services/inboxService';
 import { TruncatedText } from '../components/TruncatedText';
+import {
+  canAccessTechnicalInboxDetails,
+  formatDistanceShort,
+  getSimplifiedInboxPresentation
+} from '../utils/attendanceAnomalyFormatter';
 
 interface Props {
   onNavigate?: (screen: ScreenName) => void;
 }
 
 export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
-  const { profile } = useAuth();
+  const { profile, isImpersonating } = useAuth();
   const { toast } = useToast();
+
+  // Role-gated access: ONLY CA or Super Admin (or impersonating Super Admin/Partner) can view raw GPS & map details
+  const hasRoleTechnicalAccess = canAccessTechnicalInboxDetails(profile, isImpersonating);
+  const isDemoWorkspace = profile?.tenantId === 'demo-tenant-id';
+  const [demoRoleMode, setDemoRoleMode] = useState<'MANAGER' | 'CA_SUPER_ADMIN'>(
+    hasRoleTechnicalAccess ? 'CA_SUPER_ADMIN' : 'MANAGER'
+  );
+  const canViewTechnicalDetails = isDemoWorkspace
+    ? demoRoleMode === 'CA_SUPER_ADMIN'
+    : hasRoleTechnicalAccess;
 
   const [activeTab, setActiveTab] = useState<'PENDING' | 'DONE'>('PENDING');
   const [pendingItems, setPendingItems] = useState<InboxItem[]>([]);
@@ -106,7 +121,8 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         profile.email || 'Supervisor',
         customNotes || 'Approved via frontline one-tap'
       );
-      toast.success(`Approved ${item.title}`);
+      const simplifiedHeadline = getSimplifiedInboxPresentation(item).headline;
+      toast.success(`Approved: ${simplifiedHeadline}`);
       if (reviewingItem?.id === item.id) {
         setReviewingItem(null);
       }
@@ -130,7 +146,8 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         profile.email || 'Supervisor',
         customNotes || 'Rejected by supervisor'
       );
-      toast.info(`Rejected ${item.title}`);
+      const simplifiedHeadline = getSimplifiedInboxPresentation(item).headline;
+      toast.info(`Rejected: ${simplifiedHeadline}`);
       if (reviewingItem?.id === item.id) {
         setReviewingItem(null);
       }
@@ -200,17 +217,19 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
   const getActionTypeLabel = (type: InboxActionType) => {
     switch (type) {
       case 'ADVANCE_APPROVAL':
-        return { label: 'Kharchi / Advance', icon: IndianRupee, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
+        return { label: 'Advance Request', icon: IndianRupee, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
       case 'ATTENDANCE_EXCEPTION':
-        return { label: 'Attendance Exception', icon: AlertTriangle, color: 'text-amber-700 bg-amber-50 border-amber-200' };
+        return { label: 'Attendance Alert', icon: AlertTriangle, color: 'text-amber-700 bg-amber-50 border-amber-200' };
+      case 'OVERTIME_APPROVAL':
+        return { label: 'Overtime Approval', icon: Clock, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' };
       case 'CONFLICT_RESOLUTION':
-        return { label: 'Sync Conflict', icon: ShieldAlert, color: 'text-purple-700 bg-purple-50 border-purple-200' };
+        return { label: 'Punch Conflict', icon: ShieldAlert, color: 'text-purple-700 bg-purple-50 border-purple-200' };
       case 'PAYROLL_SIGNOFF':
-        return { label: 'Payroll Sign-off', icon: FileCheck, color: 'text-blue-700 bg-blue-50 border-blue-200' };
+        return { label: 'Payroll Review', icon: FileCheck, color: 'text-blue-700 bg-blue-50 border-blue-200' };
       case 'LEAVE_REQUEST':
         return { label: 'Leave Request', icon: Calendar, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' };
       case 'FNF_DEADLINE_BREACH':
-        return { label: 'FnF Sec 17(2) Breach', icon: AlertTriangle, color: 'text-rose-800 bg-rose-50 border-rose-300' };
+        return { label: 'Final Settlement', icon: AlertTriangle, color: 'text-rose-800 bg-rose-50 border-rose-300' };
     }
   };
 
@@ -227,24 +246,56 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center flex-wrap gap-2">
                   <h1 className="text-fluid-xl font-black text-slate-900 tracking-tight break-words">
-                    Unified Action Inbox
+                    Action Inbox
                   </h1>
                   {pendingItems.length > 0 && (
-                    <span className="px-2.5 py-0.5 rounded-full text-fluid-2xs font-extrabold bg-rose-600 text-white animate-pulse shrink-0">
+                    <span className="px-2.5 py-0.5 rounded-full text-fluid-2xs font-extrabold bg-rose-600 text-white shrink-0">
                       {pendingItems.length} Pending
                     </span>
                   )}
                 </div>
                 <p className="text-fluid-xs text-slate-500 font-medium break-words">
-                  One-tap approvals, attendance exceptions, and shift escalations
+                  Simple attendance alerts, overtime approvals, and requests — approve or reject in one tap
                 </p>
               </div>
             </div>
 
             <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto">
+              {/* Demo-only role switcher so testers can preview Manager vs CA / Super Admin access */}
+              {isDemoWorkspace && (
+                <div className="inline-flex items-center p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDemoRoleMode('MANAGER');
+                      setReviewingItem(null);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                      demoRoleMode === 'MANAGER'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Manager View
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDemoRoleMode('CA_SUPER_ADMIN')}
+                    className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                      demoRoleMode === 'CA_SUPER_ADMIN'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <Shield size={12} />
+                    <span>CA / Super Admin</span>
+                  </button>
+                </div>
+              )}
+
               <button
                 onClick={() => setShowDelegationModal(true)}
-                className="h-10 px-3 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-colors"
+                className="h-10 px-3 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
                 title="Configure leave delegation"
               >
                 <UserCheck size={16} className="text-blue-600" />
@@ -257,7 +308,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               <button
                 onClick={loadData}
                 disabled={loading}
-                className="h-10 px-3 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-colors"
+                className="h-10 px-3 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <RefreshCw size={15} className={loading ? 'animate-spin text-blue-600' : 'text-slate-500'} />
                 <span>Refresh</span>
@@ -364,11 +415,12 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 </span>
                 {[
                   { id: 'ALL', label: 'All' },
-                  { id: 'FNF_DEADLINE_BREACH', label: 'FnF Breach' },
+                  { id: 'ATTENDANCE_EXCEPTION', label: 'Attendance' },
+                  { id: 'OVERTIME_APPROVAL', label: 'Overtime' },
                   { id: 'ADVANCE_APPROVAL', label: 'Advances' },
-                  { id: 'ATTENDANCE_EXCEPTION', label: 'Exceptions' },
                   { id: 'CONFLICT_RESOLUTION', label: 'Conflicts' },
-                  { id: 'PAYROLL_SIGNOFF', label: 'Payroll' }
+                  { id: 'PAYROLL_SIGNOFF', label: 'Payroll' },
+                  { id: 'FNF_DEADLINE_BREACH', label: 'Settlements' }
                 ].map(f => (
                   <button
                     key={f.id}
@@ -442,22 +494,50 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               <div className="space-y-3">
                 {paginatedPending.map(item => {
                   const typeMeta = getActionTypeLabel(item.actionType);
-                  const Icon = typeMeta.icon;
+                  const view = getSimplifiedInboxPresentation(item);
                   const isProcessing = actionLoadingId === item.id;
+                  const isSecurityFlag =
+                    view.anomalyKind === 'ROOTED_DEVICE' ||
+                    view.anomalyKind === 'EMULATOR' ||
+                    view.anomalyKind === 'MOCK_GPS' ||
+                    view.anomalyKind === 'CUSTOM_ROM';
+                  const isLocationFlag = view.anomalyKind === 'GEOFENCE';
+                  const isOvertime = view.anomalyKind === 'OVERTIME';
+
+                  const BadgeIcon = isSecurityFlag
+                    ? ShieldAlert
+                    : isLocationFlag
+                    ? MapPin
+                    : isOvertime
+                    ? Clock
+                    : typeMeta.icon;
+
+                  const badgeStyle = isSecurityFlag
+                    ? 'text-rose-700 bg-rose-50 border-rose-200'
+                    : isLocationFlag
+                    ? 'text-amber-800 bg-amber-50 border-amber-200'
+                    : isOvertime
+                    ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                    : typeMeta.color;
 
                   return (
                     <div
                       key={item.id}
                       className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row md:items-center justify-between gap-4"
                     >
-                      {/* Left Details */}
+                      {/* Left: Simple Plain-English Explanation */}
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
-                          <span className={`px-2.5 py-1 text-xs font-extrabold rounded-md border flex items-center gap-1 ${typeMeta.color}`}>
-                            <Icon size={14} />
-                            <span>{typeMeta.label}</span>
+                          <span className={`px-2.5 py-1 text-xs font-extrabold rounded-md border flex items-center gap-1 ${badgeStyle}`}>
+                            <BadgeIcon size={13} />
+                            <span>{view.categoryLabel}</span>
                           </span>
-                          {getUrgencyBadge(item.urgency)}
+                          {view.overtimeBadge && (
+                            <span className="px-2.5 py-1 text-xs font-black rounded-md bg-indigo-600 text-white shadow-2xs">
+                              {view.overtimeBadge}
+                            </span>
+                          )}
+                          {(item.urgency === 'URGENT' || item.urgency === 'HIGH') && getUrgencyBadge(item.urgency)}
                           {item.isLowRisk && (
                             <span className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
                               Low Risk (&lt; ₹500)
@@ -465,24 +545,24 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                           )}
                           {item.isWaitingSync && (
                             <span className="px-2.5 py-1 text-xs font-bold rounded-md bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
-                              ⏳ Waiting for Sync
+                              Waiting for Sync
                             </span>
                           )}
                           <span className="text-xs font-medium text-slate-400 flex items-center gap-1 ml-auto sm:ml-0">
                             <Clock size={12} />
-                            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                           </span>
                         </div>
 
-                        {/* Title and Worker Info */}
+                        {/* Plain-English Headline (no raw GPS or technical codes) */}
                         <h4 className="text-base sm:text-lg font-bold text-slate-900 mb-1 leading-snug">
-                          {item.title}
+                          {view.headline}
                         </h4>
-                        <p className="text-xs sm:text-sm text-slate-600 mb-3 leading-relaxed">
-                          {item.description}
+                        <p className="text-xs sm:text-sm text-slate-600 mb-2.5 leading-relaxed">
+                          {view.subtext}
                         </p>
 
-                        {/* EWA Accrued-Wage & Payroll Impact Callout (AC requirement) */}
+                        {/* EWA Accrued-Wage & Payroll Impact Callout */}
                         {item.details?.isEwa && (
                           <div className="mb-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -492,7 +572,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                               </span>
                               {item.details.payrollImpact?.isFnF && (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
-                                  Full & Final Settlement (FnF)
+                                  Full & Final Settlement
                                 </span>
                               )}
                             </div>
@@ -511,56 +591,20 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                                 <span className="text-sm font-black text-blue-700 font-mono">₹{item.details.payrollImpact?.remainingAccrual?.toLocaleString()}</span>
                               </div>
                             </div>
-
-                            {item.details.payrollImpact?.deductionLineItem && (
-                              <div className="text-[11px] text-emerald-900 bg-white/70 p-2 rounded-lg border border-emerald-100">
-                                <strong className="text-slate-800">Payroll Impact:</strong> Deducted as distinct line item{' '}
-                                <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[10px]">
-                                  {item.details.payrollImpact.deductionLineItem}
-                                </code>
-                              </div>
-                            )}
-
-                            {item.details.ewaDetails?.providerName && (
-                              <div className="text-[10px] text-slate-500 flex items-center justify-between">
-                                <span>Disbursement Partner: <strong>{item.details.ewaDetails.providerName}</strong></span>
-                                {item.details.ewaDetails.feeAmount > 0 && (
-                                  <span>Partner Fee: ₹{item.details.ewaDetails.feeAmount}</span>
-                                )}
-                              </div>
-                            )}
                           </div>
                         )}
 
-                        {/* FnF Section 17(2) Deadline Breach Callout */}
+                        {/* FnF Deadline Breach Callout */}
                         {item.actionType === 'FNF_DEADLINE_BREACH' && item.details?.fnfSettlement && (
                           <div className="mb-3 p-3 bg-rose-50 border border-rose-300 rounded-xl space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                              <span className="font-extrabold text-rose-900 uppercase tracking-wider flex items-center gap-1">
+                              <span className="font-extrabold text-rose-900 flex items-center gap-1">
                                 <AlertTriangle size={13} className="text-rose-700" />
-                                <span>Section 17(2) 2-Working-Day Legal Breach</span>
+                                <span>Final Settlement Overdue</span>
                               </span>
                               <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
                                 +{item.details.overdueDays || 1}d Overdue
                               </span>
-                            </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs font-mono">
-                              <div className="p-2 bg-white rounded-lg border border-rose-200">
-                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">Wage FnF (2d)</span>
-                                <span className="font-black text-slate-900">
-                                  ₹{(item.details.fnfSettlement.fnfWageNetPayable ?? item.details.fnfSettlement.netFnfPayable).toLocaleString('en-IN')}
-                                </span>
-                              </div>
-                              <div className="p-2 bg-white rounded-lg border border-rose-200">
-                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">12% p.a. Interest Cost</span>
-                                <span className="font-black text-rose-700">
-                                  ₹{(item.details.interestPenalty || 0).toLocaleString('en-IN')}
-                                </span>
-                              </div>
-                              <div className="p-2 bg-white rounded-lg border border-rose-200 col-span-2 sm:col-span-1">
-                                <span className="text-[10px] font-sans text-slate-500 font-semibold uppercase block">Exit Date</span>
-                                <span className="font-bold text-slate-800">{item.details.fnfSettlement.exitDate}</span>
-                              </div>
                             </div>
                             {onNavigate && (
                               <button
@@ -573,74 +617,68 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                                 }}
                                 className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-800 hover:text-rose-950 underline cursor-pointer"
                               >
-                                <span>Open FnF Statement &amp; Off-Cycle Payout Center</span>
+                                <span>Open Settlement Center</span>
                                 <ArrowUpRight size={13} />
                               </button>
                             )}
                           </div>
                         )}
 
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-fluid-xs text-slate-500 font-medium min-w-0">
+                        {/* Worker Identity + Role-Gated "View technical details" Link (CA / Super Admin only) */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-fluid-xs text-slate-500 font-medium min-w-0">
                           <span className="flex items-center gap-1.5 text-slate-800 font-bold min-w-0 max-w-full">
                             <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold shrink-0">
                               {item.workerName.charAt(0)}
                             </span>
                             <TruncatedText
                               text={item.workerName}
-                              modalTitle="Action Request Worker"
-                              subtitle={item.workerDesignation || item.title}
+                              modalTitle="Worker Details"
+                              subtitle={item.workerDesignation || view.categoryLabel}
                               details={[
                                 ...(item.workerPhone ? [{ label: 'Phone', value: item.workerPhone, mono: true }] : []),
-                                { label: 'Request Type', value: typeMeta.label },
+                                { label: 'Category', value: view.categoryLabel },
                               ]}
                               className="font-bold text-slate-800 text-fluid-xs max-w-[14rem]"
                             />
                           </span>
                           {item.workerDesignation && (
-                            <span className="break-words">• {item.workerDesignation}</span>
+                            <span className="break-words text-slate-500">• {item.workerDesignation}</span>
                           )}
-                          {item.workerPhone && (
-                            <span className="flex items-center gap-1 font-mono tabular-nums break-all [overflow-wrap:anywhere]">
-                              <Phone size={11} className="text-slate-400 shrink-0" />
-                              {item.workerPhone}
-                            </span>
-                          )}
-                          {item.details?.distanceMeters && (
-                            <span className="flex items-center gap-1 text-amber-700 font-bold">
-                              <MapPin size={12} className="shrink-0" />
-                              {item.details.distanceMeters}m outside geofence
-                            </span>
+
+                          {/* Advanced View Link — strictly visible ONLY to CA or Super Admin */}
+                          {canViewTechnicalDetails && view.hasTechnicalDetails && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReviewNotes('');
+                                setReviewingItem(item);
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 underline underline-offset-2 cursor-pointer ml-auto sm:ml-1"
+                            >
+                              <span>View technical details</span>
+                              <ChevronRight size={13} />
+                            </button>
                           )}
                         </div>
                       </div>
 
-                      {/* Right Action Buttons (Anchored, >= 56px touch target, flex-wrap safe) */}
-                      <div className="flex flex-wrap items-center gap-2 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
-                        {/* Review Button */}
+                      {/* Right: Exactly Two Simple Action Buttons — Approve & Reject */}
+                      <div className="flex items-center gap-2.5 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
                         <button
-                          onClick={() => setReviewingItem(item)}
-                          className="flex-1 sm:flex-none min-h-[3.25rem] min-w-[3.5rem] px-3.5 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-800 font-bold text-fluid-xs flex items-center justify-center gap-1.5 transition-colors"
-                          title="Open detailed side inspection drawer"
-                        >
-                          <Eye size={17} className="text-slate-600 shrink-0" />
-                          <span>Review</span>
-                        </button>
-
-                        {/* Reject Button */}
-                        <button
+                          type="button"
                           disabled={isProcessing}
                           onClick={() => handleReject(item)}
-                          className="flex-1 sm:flex-none min-h-[3.25rem] min-w-[3.5rem] px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 font-bold text-fluid-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                          className="flex-1 md:flex-none min-h-[3rem] min-w-[6.5rem] px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 font-bold text-sm flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                         >
                           <XCircle size={17} className="shrink-0" />
                           <span>Reject</span>
                         </button>
 
-                        {/* Primary Approve Button (>= 56px, high-contrast) */}
                         <button
+                          type="button"
                           disabled={isProcessing || item.isWaitingSync}
                           onClick={() => handleApprove(item)}
-                          className={`flex-1 sm:flex-none min-h-[3.25rem] sm:min-w-[7rem] px-4 py-2 rounded-xl font-black text-fluid-sm text-white shadow-sm flex items-center justify-center gap-1.5 transition-transform active:scale-98 ${
+                          className={`flex-1 md:flex-none min-h-[3rem] min-w-[7.25rem] px-5 py-2 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer ${
                             item.isWaitingSync
                               ? 'bg-slate-400 cursor-not-allowed'
                               : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
@@ -745,8 +783,26 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         )}
       </div>
 
-      {/* Slide-Over Review Drawer */}
-      {reviewingItem && (
+      {/* Technical Details Slide-Over Drawer (CA & Super Admin Only) */}
+      {canViewTechnicalDetails && reviewingItem && (() => {
+        const reviewView = getSimplifiedInboxPresentation(reviewingItem);
+        const baseLoc = reviewingItem.details?.baseLocation;
+        const punchLoc = reviewingItem.details?.punchLocation || reviewingItem.details?.punch?.location;
+        const distanceMeters = reviewingItem.details?.distanceMeters;
+        const hasGpsOrMap = Boolean(reviewingItem.details?.geofenceViolation || baseLoc || punchLoc || distanceMeters);
+        const hasDeviceTelemetry = Boolean(
+          reviewingItem.details?.isRootedDevice ||
+          reviewingItem.details?.isMockGps ||
+          reviewingItem.details?.isEmulator ||
+          reviewingItem.details?.isCustomRom ||
+          reviewingItem.details?.deviceIntegrityFailed ||
+          reviewingItem.details?.deviceModel ||
+          reviewingItem.details?.deviceFingerprint ||
+          reviewingItem.details?.attestationSummary
+        );
+        const hasOvertimeMath = Boolean(reviewingItem.details?.overtimeHours && reviewingItem.details.overtimeHours > 0);
+
+        return (
         <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
           <div 
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
@@ -755,24 +811,29 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
 
           <div className="relative w-full max-w-xl bg-white shadow-2xl flex flex-col h-full z-10 animate-in slide-in-from-right duration-200">
             {/* Drawer Header */}
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold">
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
                   <Eye size={20} />
                 </div>
-                <div>
-                  <h3 className="text-base font-black text-slate-900">
-                    Inspection: {reviewingItem.workerName}
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">
-                    {reviewingItem.title}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-white truncate">
+                      Technical Details
+                    </h3>
+                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-200 border border-blue-400/30 text-[10px] font-bold uppercase">
+                      CA / Super Admin
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 font-medium truncate">
+                    {reviewView.headline}
                   </p>
                 </div>
               </div>
 
               <button
                 onClick={() => setReviewingItem(null)}
-                className="w-10 h-10 rounded-xl hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-900 transition-colors"
+                className="w-10 h-10 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
               >
                 <X size={20} />
               </button>
@@ -794,44 +855,180 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 </div>
               </div>
 
-              {/* Geofence Map / Distance Section if Geofence Exception */}
-              {reviewingItem.details?.geofenceViolation && (
+              {/* Geofence Map & Raw GPS Coordinates */}
+              {hasGpsOrMap && (
                 <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3">
-                  <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
-                    <MapPin size={18} className="text-amber-700" />
-                    <span>Geofence Boundary Violation</span>
-                  </div>
-                  <div className="text-xs text-amber-800 leading-relaxed">
-                    Worker recorded punch at <strong>{reviewingItem.details.distanceMeters} meters</strong> away from the authorized factory perimeter.
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-amber-950 font-bold text-sm">
+                      <Navigation size={16} className="text-amber-700" />
+                      <span>Site Map &amp; Raw GPS Coordinates</span>
+                    </div>
+                    {typeof distanceMeters === 'number' && distanceMeters > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-rose-600 text-white font-mono text-[11px] font-bold">
+                        {formatDistanceShort(distanceMeters)} ({distanceMeters.toLocaleString('en-IN')}m)
+                      </span>
+                    )}
                   </div>
 
-                  {/* Geofence Visualizer Canvas / Map Mock */}
-                  <div className="h-44 bg-slate-900 rounded-xl relative overflow-hidden flex items-center justify-center border border-slate-700">
-                    {/* Simulated Factory Perimeter */}
-                    <div className="w-32 h-32 rounded-full border-2 border-dashed border-emerald-400 bg-emerald-500/10 flex items-center justify-center">
-                      <div className="text-[10px] text-emerald-300 font-bold text-center">
-                        Factory Zone<br/>(100m Radius)
+                  {/* Geofence Map Visualizer */}
+                  <div className="h-48 bg-slate-900 rounded-xl relative overflow-hidden flex items-center justify-center border border-slate-700">
+                    {/* Subtle coordinate grid */}
+                    <div
+                      className="absolute inset-0 opacity-15"
+                      style={{
+                        backgroundImage:
+                          'linear-gradient(to right, #94a3b8 1px, transparent 1px), linear-gradient(to bottom, #94a3b8 1px, transparent 1px)',
+                        backgroundSize: '24px 24px'
+                      }}
+                    />
+                    {/* Authorized Site Perimeter */}
+                    <div className="w-28 h-28 rounded-full border-2 border-dashed border-emerald-400 bg-emerald-500/15 flex flex-col items-center justify-center relative z-10">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 mb-1" />
+                      <div className="text-[10px] text-emerald-200 font-bold text-center leading-tight px-2">
+                        Site Geofence<br />({baseLoc?.radius || 100}m radius)
                       </div>
                     </div>
-                    {/* Punch Out-of-bounds marker */}
-                    <div className="absolute top-4 right-8 flex flex-col items-center animate-bounce">
-                      <div className="w-6 h-6 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg font-bold text-xs">
-                        !
+                    {/* Punch Marker */}
+                    {reviewingItem.details?.geofenceViolation || (distanceMeters && distanceMeters > (baseLoc?.radius || 100)) ? (
+                      <div className="absolute top-4 right-6 flex flex-col items-center z-10">
+                        <div className="w-7 h-7 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-lg font-black text-xs border-2 border-white">
+                          !
+                        </div>
+                        <span className="text-[10px] text-rose-200 font-mono font-bold bg-slate-950/90 px-2 py-0.5 rounded mt-1 border border-rose-500/40">
+                          Punch (+{formatDistanceShort(distanceMeters || 0)})
+                        </span>
                       </div>
-                      <span className="text-[10px] text-rose-300 font-bold bg-slate-950/80 px-1.5 py-0.5 rounded mt-1">
-                        Punch (+145m)
+                    ) : (
+                      <div className="absolute bottom-3 right-3 text-[10px] font-mono text-emerald-300 bg-slate-950/80 px-2 py-1 rounded border border-emerald-500/30 z-10">
+                        Inside Site Radius
+                      </div>
+                    )}
+                    {baseLoc?.address && (
+                      <div className="absolute bottom-2.5 left-3 text-[10px] text-slate-300 bg-slate-950/80 px-2 py-0.5 rounded max-w-[70%] truncate z-10">
+                        {baseLoc.address}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Raw GPS Telemetry Readout */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Authorized Site GPS</span>
+                      <span className="font-mono text-slate-900 font-semibold">
+                        {baseLoc ? `${baseLoc.lat.toFixed(5)}° N, ${baseLoc.lng.toFixed(5)}° E` : 'Not configured'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Recorded Punch GPS</span>
+                      <span className="font-mono text-slate-900 font-semibold">
+                        {punchLoc ? `${punchLoc.lat.toFixed(5)}° N, ${punchLoc.lng.toFixed(5)}° E` : 'Unavailable'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">GPS Accuracy</span>
+                      <span className="font-mono text-slate-900 font-semibold">
+                        {typeof reviewingItem.details?.gpsAccuracyMeters === 'number'
+                          ? `±${reviewingItem.details.gpsAccuracyMeters}m`
+                          : '±15m'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-amber-200">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Mock GPS Detection</span>
+                      <span className={`font-mono font-bold ${reviewingItem.details?.isMockGps ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {reviewingItem.details?.isMockGps ? 'MOCK_LOCATION = TRUE' : 'MOCK_LOCATION = FALSE'}
                       </span>
                     </div>
                   </div>
+                </div>
+              )}
 
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="p-2 bg-white rounded border border-amber-200">
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Authorized Center</span>
-                      <span className="font-mono text-slate-800">19.0760° N, 72.8777° E</span>
+              {/* Device Integrity & Security Telemetry */}
+              {hasDeviceTelemetry && (
+                <div className="p-4 bg-slate-900 text-slate-100 rounded-xl space-y-3 border border-slate-700">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-bold text-white">
+                      <Smartphone size={16} className="text-rose-400" />
+                      <span>Device Integrity &amp; Attestation Telemetry</span>
                     </div>
-                    <div className="p-2 bg-white rounded border border-amber-200">
-                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Punch Location</span>
-                      <span className="font-mono text-slate-800">19.0772° N, 72.8785° E</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                      reviewingItem.details?.deviceIntegrityFailed || reviewingItem.details?.isRootedDevice || reviewingItem.details?.isMockGps
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    }`}>
+                      {reviewingItem.details?.isRootedDevice
+                        ? 'ROOTED / UNSAFE'
+                        : reviewingItem.details?.isMockGps
+                        ? 'SPOOFED GPS'
+                        : reviewingItem.details?.isEmulator
+                        ? 'EMULATOR'
+                        : 'CHECKED'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 bg-slate-800/80 rounded-lg border border-slate-700">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Device Model</span>
+                      <span className="font-mono text-white font-semibold">
+                        {reviewingItem.details?.deviceModel || reviewingItem.details?.punch?.device || 'Unknown device'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-slate-800/80 rounded-lg border border-slate-700">
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">OS / Bootloader</span>
+                      <span className="font-mono text-white font-semibold">
+                        {reviewingItem.details?.deviceOs || (reviewingItem.details?.isRootedDevice ? 'Rooted / Bootloader Unlocked' : 'Standard OS')}
+                      </span>
+                    </div>
+                    {reviewingItem.details?.deviceFingerprint && (
+                      <div className="p-2.5 bg-slate-800/80 rounded-lg border border-slate-700 sm:col-span-2">
+                        <span className="text-slate-400 block text-[10px] uppercase font-bold">Hardware Fingerprint</span>
+                        <span className="font-mono text-blue-300 text-[11px] break-all">
+                          {reviewingItem.details.deviceFingerprint}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {reviewingItem.details?.attestationSummary && (
+                    <div className="p-2.5 bg-slate-950 rounded-lg border border-slate-700 font-mono text-[11px] text-amber-300 flex items-start gap-2">
+                      <Cpu size={14} className="shrink-0 mt-0.5 text-amber-400" />
+                      <span>{reviewingItem.details.attestationSummary}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Overtime Calculation & Raw Punch Window */}
+              {hasOvertimeMath && (
+                <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-black text-indigo-950 flex items-center gap-1.5">
+                      <Clock size={16} className="text-indigo-700" />
+                      <span>Overtime Raw Punch &amp; Pay Breakdown</span>
+                    </span>
+                    {reviewView.overtimeBadge && (
+                      <span className="px-2.5 py-0.5 rounded bg-indigo-600 text-white text-xs font-black">
+                        {reviewView.overtimeBadge}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 bg-white rounded-lg border border-indigo-200">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Scheduled Shift End</span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {reviewingItem.details?.shiftEndTime || '06:00 PM'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-indigo-200">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Actual Punch Out</span>
+                      <span className="font-mono font-bold text-indigo-800">
+                        {reviewingItem.details?.actualPunchOutTime || '08:00 PM'}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-indigo-200 col-span-2">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Formula Applied</span>
+                      <span className="font-mono font-bold text-slate-900">
+                        {reviewingItem.details?.overtimeHours} hrs × ₹{reviewingItem.details?.overtimeHourlyRate || 100}/hr × {reviewingItem.details?.overtimeMultiplier || 1.5}x = ₹{(reviewingItem.details?.overtimePayableAmount || reviewingItem.amount || 0).toLocaleString('en-IN')}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1059,21 +1256,23 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               </button>
 
               <button
+                type="button"
                 disabled={reviewingItem.isWaitingSync}
                 onClick={() => handleApprove(reviewingItem, reviewNotes)}
-                className={`flex-1 h-14 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-2 ${
+                className={`flex-1 h-14 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-2 cursor-pointer ${
                   reviewingItem.isWaitingSync
                     ? 'bg-slate-400 cursor-not-allowed'
                     : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
                 }`}
               >
                 <CheckCircle2 size={18} />
-                <span>Approve & Settle</span>
+                <span>Approve</span>
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Delegation Modal */}
       {showDelegationModal && (

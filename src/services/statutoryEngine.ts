@@ -936,7 +936,10 @@ export class StatutoryEngine {
     const [yStr, mStr] = (currentMonthStr || new Date().toISOString().slice(0, 7)).split('-');
     const lastDay = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate() || 28;
     const evalDate = `${currentMonthStr}-${String(lastDay).padStart(2, '0')}`;
-    const capPf = orgSettings?.compliance?.capPfDeduction !== false;
+    const capPf =
+      worker.wageConfig?.pfCapAtStatutoryCeiling === true
+        ? true
+        : orgSettings?.compliance?.capPfDeduction !== false;
 
     // 0. Evaluate Labour Code Effective Date & 50% Rule Excess Allowance Add-Back
     const effectiveCheck = this.isLabourCodeEffective(currentMonthStr, payrollRunDate);

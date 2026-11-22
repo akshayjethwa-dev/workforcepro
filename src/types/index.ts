@@ -46,6 +46,7 @@ export type IndianStateName = typeof INDIAN_STATES[number];
 
 export type Role = 
   | 'SUPER_ADMIN'   // SaaS Owner
+  | 'CA'            // Chartered Accountant / Statutory Auditor
   | 'RESELLER'      // NEW: Channel Partner / Agency
   | 'FACTORY_OWNER' // Tenant Admin
   | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
@@ -529,13 +530,48 @@ export interface PayrollServerValidationResult {
   allResults: WageStructureAuditResult[];
 }
 
+export interface OneNumberSalaryCalculation {
+  monthlySalary: number;
+  basic: number;
+  hra: number;
+  allowances: number;
+  basicPercentage: number;
+  isFiftyPercentCompliant: boolean;
+  state: string;
+  wageZone: string;
+  skillCategory: WorkerSkillCategory;
+  scheduledEmployment: string;
+  stateMinimumWageMonthly: number;
+  stateMinimumWageDaily: number;
+  notificationDate: string;
+  isBelowMinimumWage: boolean;
+  minimumWageShortfall: number;
+  minimumWageWarning?: string;
+  pfStatutoryCeiling: number;
+  pfQualifyingWage: number;
+  isPfCappedAtCeiling: boolean;
+  isBasicAbovePfCeiling: boolean;
+  employeePfMonthly: number;
+  employerEpsMonthly: number;
+  employerEpfMonthly: number;
+  employerEdliMonthly: number;
+  employerAdminMonthly: number;
+  employerPfTotalMonthly: number;
+  estimatedGratuityMonthly: number;
+  canSave: boolean;
+}
+
 export interface WageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
+  salaryInputMode?: 'ONE_NUMBER' | 'CUSTOM_BREAKDOWN';
   basicPercentage?: number; 
   dailyMultiplier?: 26 | 30;
   monthlyBreakdown?: WageBreakdownComponents;
   dailyBreakdown?: WageBreakdownComponents;
+  pfCapAtStatutoryCeiling?: boolean;
+  pfWageCeiling?: number;
+  pfQualifyingWage?: number;
   overtimeEligible: boolean;
   overtimeRatePerHour?: number;
   workingDaysPerMonth?: number;
@@ -548,6 +584,16 @@ export interface WageConfig {
   complianceFlags?: WageComplianceFlag[];
   wageAuditSummary?: WageStructureAuditResult;
   acknowledgedNonCompliant?: boolean;
+  pfComplianceLiabilityAcknowledgedAt?: string;
+  pfComplianceLiabilityAcknowledgedBy?: string;
+  pfComplianceLiabilityStatement?: string;
+}
+
+export interface WorkerBankDetails {
+  accountHolderName?: string;
+  accountNumber: string;
+  ifscCode: string;
+  bankName?: string;
 }
 
 export interface Worker {
@@ -571,7 +617,8 @@ export interface Worker {
   noticePeriodDays?: number;
   uan?: string; 
   esicIp?: string; 
-  pan?: string; 
+  pan?: string;
+  bankDetails?: WorkerBankDetails;
   fatherName?: string; 
   dateOfBirth?: string; 
   dateOfJoining?: string; 
@@ -1197,6 +1244,7 @@ export interface ConflictAuditEntry {
 export type InboxActionType = 
   | 'ADVANCE_APPROVAL' 
   | 'ATTENDANCE_EXCEPTION' 
+  | 'OVERTIME_APPROVAL'
   | 'PAYROLL_SIGNOFF' 
   | 'LEAVE_REQUEST' 
   | 'CONFLICT_RESOLUTION'
@@ -1262,6 +1310,25 @@ export interface InboxItem {
     ticketId?: string;
     safetyAlert?: any;
     panicAlert?: any;
+    // Simplified Attendance Anomaly & Device Integrity Telemetry (shown only in Technical Details)
+    isMockGps?: boolean;
+    isRootedDevice?: boolean;
+    isEmulator?: boolean;
+    isCustomRom?: boolean;
+    deviceIntegrityFailed?: boolean;
+    deviceModel?: string;
+    deviceOs?: string;
+    deviceFingerprint?: string;
+    attestationSummary?: string;
+    gpsAccuracyMeters?: number;
+    siteName?: string;
+    // Overtime Approval Edge Case
+    overtimeHours?: number;
+    overtimeMultiplier?: number;
+    overtimeHourlyRate?: number;
+    overtimePayableAmount?: number;
+    shiftEndTime?: string;
+    actualPunchOutTime?: string;
   };
   resolution?: {
     action: 'APPROVE' | 'REJECT' | 'RESOLVE';

@@ -615,7 +615,10 @@ export const deviceAttestationService = {
           details: {
             reason: 'Emulator detected via Play Integrity / hardware signatures',
             deviceModel: params.deviceModel,
-            deviceFingerprint: params.deviceFingerprint
+            deviceFingerprint: params.deviceFingerprint,
+            isEmulator: true,
+            deviceIntegrityFailed: true,
+            attestationSummary: 'Play Integrity: MEETS_STRONG_INTEGRITY = FAILED (Emulator detected)'
           } as any
         });
       } catch {}
@@ -768,7 +771,12 @@ export const deviceAttestationService = {
             reason: isCustomRom ? 'Custom ROM requires supervisor in-person verification' : 'Device integrity check failed',
             deviceModel: params.deviceModel,
             deviceFingerprint: params.deviceFingerprint,
-            isCustomRom
+            isCustomRom,
+            isRootedDevice: isRootedOrJailbroken,
+            deviceIntegrityFailed: true,
+            attestationSummary: isCustomRom
+              ? 'Play Integrity: MEETS_DEVICE_INTEGRITY = FAILED (Custom ROM / LineageOS)'
+              : 'Play Integrity: MEETS_DEVICE_INTEGRITY = FAILED (Rooted / Bootloader Unlocked)'
           } as any
         });
       } catch {}

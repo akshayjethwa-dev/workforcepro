@@ -3,7 +3,7 @@ import { PunchConflict } from '../types/index';
 import { ConflictResolutionModal } from '../components/ConflictResolutionModal';
 import { ShieldAlert, GitMerge, AlertCircle, Sparkles, Calculator, Shield, FileCheck, Building2, Archive } from 'lucide-react';
 import React, { useState, useMemo, useEffect } from 'react';
-import { IndianRupee, FileText, Download, CheckCircle, Clock, AlertTriangle, ChevronRight, User } from 'lucide-react';
+import { IndianRupee, FileText, Download, CheckCircle, Clock, AlertTriangle, ChevronRight, User, Users, LayoutGrid, List } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
@@ -18,6 +18,7 @@ import { StatutoryExportModal } from '../components/StatutoryExportModal';
 import { EcrValidatorModal } from '../components/EcrValidatorModal';
 import { WageStructureEditorModal } from '../components/WageStructureEditorModal';
 import { MinimumWageSchedulePanel } from '../components/MinimumWageSchedulePanel';
+import { MissingKycQuickFixModal, MissingBankDetailsPauseModal } from '../components/PayrollQuickFixModal';
 import { runServerPrePayrollValidation } from '../services/wageStructureValidationService';
 import { getBonusOffCycleRuns, evaluateEightMonthWindow } from '../services/annualBonusService';
 import { BonusOffCycleRun, MinimumWageRevisionRule, PayrollServerValidationResult, ScreenName, WageStructureAuditResult } from '../types/index';
@@ -85,6 +86,14 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
   const [offCycleFnfPayrolls, setOffCycleFnfPayrolls] = useState<MonthlyPayroll[]>([]);
   const [legalHoldTarget, setLegalHoldTarget] = useState<FnfSettlementRecord | null>(null);
   const [processingFnfId, setProcessingFnfId] = useState<string | null>(null);
+
+  // Simplified Payroll Dashboard Summary View (Default)
+  const [viewMode, setViewMode] = useState<'SUMMARY' | 'DETAILED'>('SUMMARY');
+  const [isMissingKycModalOpen, setIsMissingKycModalOpen] = useState(false);
+  const [isMissingBankModalOpen, setIsMissingBankModalOpen] = useState(false);
+  const [runningPayroll, setRunningPayroll] = useState(false);
+  const [pausedBankWorkerIds, setPausedBankWorkerIds] = useState<string[]>([]);
+  const [payslipsJustGenerated, setPayslipsJustGenerated] = useState(false);
 
   const isRetrospectivePeriod = currentMonthStr < StatutoryEngine.LABOUR_CODE_EFFECTIVE_MONTH;
 
@@ -212,7 +221,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
       payroll.wageStructureAudit;
     if (workerAudit?.isMinimumWageViolation) {
       toast.error(
-        `MINIMUM_WAGE_VIOLATION: Payout blocked for ${payroll.workerName}. Shortfall ₹${workerAudit.minimumWageGap.toLocaleString('en-IN')}/mo below ${workerAudit.state} (${workerAudit.wageZone}) floor (Notif. ${workerAudit.minimumWageNotificationDate}).`
+        `Payout paused for ${payroll.workerName}: salary is ₹${workerAudit.minimumWageGap.toLocaleString('en-IN')}/mo below the ${workerAudit.state} minimum wage floor.`
       );
       const workerObj = workers.find((w) => w.id === payroll.workerId) || null;
       if (workerObj) setEditingWageWorker(workerObj);
@@ -279,7 +288,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
       settings
     );
     await refreshFnfData(profile.tenantId);
-    toast.warning(`LEGAL_HOLD placed on ${legalHoldTarget.workerName}. 2-day timer & interest accrual paused.`);
+    toast.warning(`Legal Hold placed on ${legalHoldTarget.workerName}. 2-day timer & interest accrual paused.`);
   };
 
   const handleReleaseFnfHold = async (record: FnfSettlementRecord) => {
@@ -435,7 +444,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
 
       if (validation.minimumWageViolationCount > 0 || validation.isPayrollBlocked) {
         toast.error(
-          `MINIMUM_WAGE_VIOLATION: Payroll blocked for ${validation.minimumWageViolationCount} employee(s) below applicable state minimum wage. Increase Basic Pay and resubmit.`
+          `Payroll paused for ${validation.minimumWageViolationCount} employee(s) below the applicable state minimum wage. Increase salary and resubmit.`
         );
         setIsFinalizationModalOpen(true);
         return;
@@ -463,11 +472,11 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
 
       if (isRetrospectivePeriod) {
         toast.info(
-          `Retrospective payroll finalized for ${currentMonthStr} using legacy rules (pre-21 Nov 2025).`
+          `Retrospective payroll finalized for ${currentMonthStr} using prior-period statutory rules.`
         );
       } else if (validation.hasFlaggedWorkers) {
         toast.warning(
-          `Payroll finalized with ${validation.nonCompliantCount} NON_COMPLIANT add-back recalculation(s) and ${validation.minimumWageViolationCount} minimum wage flag(s).`
+          `Payroll finalized with ${validation.nonCompliantCount} wage structure adjustment(s).`
         );
       } else {
         toast.success(`Payroll finalized for ${currentMonthStr} — all workers compliant!`);
@@ -479,12 +488,120 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
     }
   };
 
+  const workersMissingPanOrUan = useMemo(
+    () => workers.filter((w) => !w.pan?.trim() || !w.uan?.trim()),
+    [workers]
+  );
+
+  const workersMissingBank = useMemo(
+    () =>
+      workers.filter(
+        (w) => !w.bankDetails?.accountNumber?.trim() || !w.bankDetails?.ifscCode?.trim()
+      ),
+    [workers]
+  );
+
+  const readyBankWorkerCount = Math.max(0, workers.length - workersMissingBank.length);
+
+  const executeRunPayrollAndGeneratePayslips = async (options?: {
+    skipMissingBank?: boolean;
+    overrideWorkers?: Worker[];
+  }) => {
+    if (!profile?.tenantId || payrolls.length === 0) {
+      toast.warning('No workers available for this payroll month.');
+      return;
+    }
+
+    const activeWorkers = options?.overrideWorkers || workers;
+    const missingBankList = activeWorkers.filter(
+      (w) => !w.bankDetails?.accountNumber?.trim() || !w.bankDetails?.ifscCode?.trim()
+    );
+
+    // Edge Case: Pause payroll cleanly and list exact workers missing bank accounts instead of failing the run
+    if (!options?.skipMissingBank && missingBankList.length > 0) {
+      setPausedBankWorkerIds(missingBankList.map((w) => w.id));
+      setIsMissingBankModalOpen(true);
+      return;
+    }
+
+    if (unresolvedConflicts.length > 0) {
+      toast.warning(
+        `Please review ${unresolvedConflicts.length} attendance conflict${unresolvedConflicts.length === 1 ? '' : 's'} before running payroll.`
+      );
+      setIsConflictModalOpen(true);
+      return;
+    }
+
+    setRunningPayroll(true);
+    try {
+      const missingBankIds = new Set(missingBankList.map((w) => w.id));
+      const eligiblePayrolls = payrolls.filter((p) => !missingBankIds.has(p.workerId));
+
+      if (eligiblePayrolls.length === 0) {
+        setIsMissingBankModalOpen(true);
+        return;
+      }
+
+      const updatedByWorker = new Map<string, MonthlyPayroll>(
+        savedPayrolls.map((p) => [p.workerId, p])
+      );
+
+      for (const p of eligiblePayrolls) {
+        const nextStatus = p.status === 'PAID' ? 'PAID' : ('LOCKED' as const);
+        const enriched: MonthlyPayroll = {
+          ...p,
+          status: nextStatus,
+        };
+        await dbService.saveMonthlyPayroll(enriched);
+        updatedByWorker.set(p.workerId, enriched);
+      }
+
+      setSavedPayrolls(Array.from(updatedByWorker.values()));
+      setPausedBankWorkerIds(options?.skipMissingBank ? Array.from(missingBankIds) : []);
+      setIsMissingBankModalOpen(false);
+      setPayslipsJustGenerated(true);
+
+      if (options?.skipMissingBank && missingBankList.length > 0) {
+        toast.success(
+          `Generated payslips for ${eligiblePayrolls.length} ready worker${eligiblePayrolls.length === 1 ? '' : 's'}. ${missingBankList.length} worker${missingBankList.length === 1 ? ' remains' : 's remain'} paused until bank details are added.`
+        );
+      } else {
+        toast.success(
+          `Payroll completed and ${eligiblePayrolls.length} payslip${eligiblePayrolls.length === 1 ? '' : 's'} generated for ${new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}!`
+        );
+      }
+    } catch (err: any) {
+      toast.error(`Could not complete payroll run: ${err?.message || 'Unexpected error'}`);
+    } finally {
+      setRunningPayroll(false);
+    }
+  };
+
   const pendingPayout = payrolls.filter(p => p.status !== 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
   const paidPayout = payrolls.filter(p => p.status === 'PAID').reduce((acc, p) => acc + p.netPayable, 0);
+  const totalNetPayout = payrolls.reduce((acc, p) => acc + p.netPayable, 0);
   const totalGross = payrolls.reduce((acc, p) => acc + p.earnings.gross, 0);
+  const totalStatutoryDeductions = payrolls.reduce(
+    (acc, p) =>
+      acc +
+      (p.statutory
+        ? p.statutory.employeePf +
+          p.statutory.employeeEsi +
+          p.statutory.professionalTax +
+          (p.statutory.employeeLwf || 0) +
+          (p.statutory.tds || 0)
+        : 0),
+    0
+  );
   const totalEmployerStatutory = payrolls.reduce((acc, p) => acc + (p.statutory?.totalEmployerStatutory || 0), 0);
   const totalCTC = payrolls.reduce((acc, p) => acc + (p.employerCostToCompany || (p.earnings.gross + (p.statutory?.totalEmployerStatutory || 0))), 0);
   const totalStaffCount = workers.length;
+  const generatedPayrolls = payrolls.filter((p) => p.status === 'LOCKED' || p.status === 'PAID');
+  const allPayrollsGenerated = payrolls.length > 0 && generatedPayrolls.length === payrolls.length;
+  const monthLabel = new Date(currentMonthStr + '-01').toLocaleString('default', {
+    month: 'long',
+    year: 'numeric',
+  });
 
   if (loading) {
     return (
@@ -500,13 +617,11 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
       {/* TOOLBAR */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 min-w-0">
         <div className="min-w-0">
-          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Monthly Payroll &amp; Statutory Compliance</h1>
+          <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">Monthly Payroll</h1>
           <div className="text-fluid-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
-            <span>Automated PF (12%), ESI (0.75%), State PT (all 28 states) &amp; TDS</span>
+            <span className="font-semibold text-slate-700">{monthLabel}</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
-            <span className="font-mono tabular-nums text-slate-600 font-semibold">
-              {new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}
-            </span>
+            <span>{totalStaffCount} {totalStaffCount === 1 ? 'Worker' : 'Workers'}</span>
           </div>
         </div>
 
@@ -517,86 +632,85 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
               type="month"
               value={currentMonthStr}
               onChange={(e) => {
-                if (e.target.value) setCurrentMonthStr(e.target.value);
+                if (e.target.value) {
+                  setCurrentMonthStr(e.target.value);
+                  setPayslipsJustGenerated(false);
+                  setPausedBankWorkerIds([]);
+                }
               }}
               aria-label="Payroll Month"
               className="text-fluid-xs font-mono font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
-              title="Switch payroll month (pre-Nov 2025 triggers retrospective legacy rules)"
             />
           </div>
 
-          <button
-            onClick={() => setIsMinWageModalOpen(true)}
-            className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="View state-wise minimum wage database by zone & skill level, and manage mid-month revisions"
-          >
-            <Scale size={14} className="text-slate-700 shrink-0" />
-            <span>State Min Wages</span>
-          </button>
-
-          <button
-            onClick={() => setIsAuditHistoryOpen(true)}
-            className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Inspect saved WageComplianceAudit records & Gratuity Liability projections"
-          >
-            <History size={14} className="text-indigo-600 shrink-0" />
-            <span>Compliance Audits ({savedAudits.length})</span>
-          </button>
-
-          <button
-            onClick={handleRunServerPreFinalizationCheck}
-            disabled={validatingServer || payrolls.length === 0}
-            className="min-h-[2.5rem] py-2 px-3.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Run server-side 50% Rule & Minimum Wage validation before finalizing payroll"
-          >
-            {validatingServer ? <Loader2 size={15} className="animate-spin shrink-0" /> : <Lock size={14} className="text-emerald-400 shrink-0" />}
-            <span>Audit &amp; Finalize Payroll</span>
-          </button>
-
-          <button
-            onClick={() => setIsExportPackOpen(true)}
-            className="min-h-[2.5rem] py-2 px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Export complete filing pack (.ZIP): EPFO ECR, Form 24Q quarterly return, Form 16 Part A/B certificates"
-          >
-            <Archive size={15} className="shrink-0" />
-            <span>Export Filing Pack (.ZIP)</span>
-          </button>
-
-          <button
-            onClick={handleDownloadECR}
-            className="min-h-[2.5rem] py-2 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Download official EPFO ECR 2.0 file (#~# delimited format) for unified portal upload"
-          >
-            <Download size={15} className="text-blue-600 shrink-0" />
-            <span>EPFO ECR (.txt)</span>
-          </button>
-          
-          <div className="text-fluid-xs text-slate-500 font-mono tabular-nums bg-white border border-slate-200/80 px-3 py-2 rounded-xl shadow-xs">
-            Staff Ledger: <strong className="text-slate-900">{totalStaffCount} Operators</strong>
+          {/* Summary vs Detailed View Switcher */}
+          <div className="inline-flex items-center p-1 bg-slate-100 border border-slate-200 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setViewMode('SUMMARY')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'SUMMARY'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <LayoutGrid size={13} />
+              <span>Summary</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('DETAILED')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'DETAILED'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <List size={13} />
+              <span>Detailed Register</span>
+            </button>
           </div>
         </div>
       </div>
 
-      {/* RETROSPECTIVE PAYROLL WARNING BANNER (PRE-21 NOV 2025) */}
-      {isRetrospectivePeriod && (
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-4 sm:p-5 shadow-xs animate-in fade-in flex items-start gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0">
-            <AlertTriangle size={20} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-black text-amber-950">
-                Retrospective Payroll Period ({currentMonthStr} — Pre-21 Nov 2025)
-              </h3>
-              <span className="px-2 py-0.5 rounded-lg bg-amber-200 text-amber-950 font-mono font-bold text-[10px]">
-                LEGACY EPF/ESIC RULES ACTIVE
-              </span>
-            </div>
-            <p className="text-xs text-amber-900 mt-1 leading-relaxed">
-              This period precedes the effective date of the New Labour Codes (<strong>21 November 2025</strong>). Statutory PF and ESI default to legacy rules without automatic 50% Rule excess allowance add-back.{' '}
-              <strong>Warning:</strong> New Labour Code excess allowance add-back recalculations automatically apply to all current and future payroll periods (Nov 2025 onwards).
+      {/* SIMPLE MISSING PAN/UAN BANNER (SHOWN WHENEVER ANY WORKER IS MISSING PAN OR UAN) */}
+      {!fetchError && workersMissingPanOrUan.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3.5 flex items-center justify-between gap-3 flex-wrap shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertTriangle size={18} className="text-amber-600 shrink-0" />
+            <p className="text-sm font-semibold text-amber-950">
+              {workersMissingPanOrUan.length}{' '}
+              {workersMissingPanOrUan.length === 1 ? 'worker is' : 'workers are'} missing PAN/UAN.
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsMissingKycModalOpen(true)}
+            className="px-3.5 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+          >
+            <span>Fix here</span>
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* SIMPLE ATTENDANCE CONFLICT NOTICE */}
+      {!fetchError && unresolvedConflicts.length > 0 && (
+        <div className="bg-rose-50 border border-rose-300 rounded-2xl px-4 py-3.5 flex items-center justify-between gap-3 flex-wrap shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <ShieldAlert size={18} className="text-rose-600 shrink-0" />
+            <p className="text-sm font-semibold text-rose-950">
+              {unresolvedConflicts.length} attendance {unresolvedConflicts.length === 1 ? 'conflict needs' : 'conflicts need'} quick review before payout.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsConflictModalOpen(true)}
+            className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+          >
+            <GitMerge size={14} />
+            <span>Review Conflicts</span>
+          </button>
         </div>
       )}
 
@@ -610,243 +724,538 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* BLOCKING VALIDATION BANNER FOR PAYROLL FINALISATION CONFLICTS */}
-      {unresolvedConflicts.length > 0 && (
-        <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 sm:p-6 shadow-sm animate-in fade-in">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
-                <ShieldAlert size={28} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-base sm:text-lg font-black text-rose-950">
-                    Payroll Finalisation Blocked
-                  </h3>
-                  <span className="px-2.5 py-0.5 rounded-full bg-rose-200 text-rose-900 font-mono font-black text-xs border border-rose-300 animate-pulse">
-                    {unresolvedConflicts.length} Attendance Conflict(s)
-                  </span>
-                </div>
-                <p className="text-xs text-rose-900 mt-1 leading-relaxed max-w-xl">
-                  Disbursement is locked for <strong>{new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}</strong>. Labor regulations prohibit finalising payroll while conflicting offline and server attendance punches remain unreconciled.
-                </p>
-                <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-mono font-bold text-rose-800 uppercase">Affected Personnel:</span>
-                  {unresolvedConflicts.map(c => (
-                    <span key={c.id} className="px-2.5 py-1 rounded-xl bg-white border-2 border-rose-200 text-rose-900 text-xs font-bold shadow-xs">
-                      {c.workerName}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsConflictModalOpen(true)}
-              className="min-h-[56px] px-5 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs sm:text-sm border-2 border-rose-400 shadow-md active:scale-95 flex items-center justify-center gap-2 transition-all shrink-0 cursor-pointer"
-            >
-              <GitMerge size={20} />
-              <span>Review & Resolve ({unresolvedConflicts.length})</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* HARD BLOCKING BANNER FOR STATE MINIMUM WAGE VIOLATIONS */}
-      {serverValidation && serverValidation.minimumWageViolationCount > 0 && (
-        <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-xs space-y-3 animate-in fade-in">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-rose-700 text-white flex items-center justify-center shrink-0">
-                <Scale size={22} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm sm:text-base font-black text-rose-950 font-mono">
-                    Payroll Blocked: MINIMUM_WAGE_VIOLATION
-                  </h3>
-                  <span className="text-xs font-mono tabular-nums font-bold text-rose-800">
-                    {serverValidation.minimumWageViolationCount} Employee(s) Below State Floor
-                  </span>
-                </div>
-                <p className="text-xs text-rose-900 mt-1 leading-relaxed">
-                  Payroll finalization and payouts are blocked under the Code on Wages. Increase Basic Pay (or Daily Rate × 26) to match the applicable state, zone, and skill minimum wage floor and resubmit.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsMinWageModalOpen(true)}
-                className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-xs cursor-pointer"
-              >
-                Inspect State Floors
-              </button>
-              <button
-                type="button"
-                onClick={handleRunServerPreFinalizationCheck}
-                className="px-4 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs shadow-xs cursor-pointer"
-              >
-                Review Blocked Workers
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-2 border-t border-rose-200/80">
-            {(
-              serverValidation.blockingMinimumWageWorkers ||
-              serverValidation.allResults.filter((r) => r.isMinimumWageViolation)
-            ).map((mw) => {
-              const targetWorker = workers.find((w) => w.id === mw.workerId);
-              return (
+      {/* DEFAULT SUMMARY VIEW FOR SMB OWNERS */}
+      {!fetchError && viewMode === 'SUMMARY' && (
+        <div className="space-y-5 animate-in fade-in">
+          {/* PAYROLL READY HERO CARD */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="px-5 sm:px-7 py-5 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap bg-slate-50/50">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  key={mw.workerId || mw.workerName}
-                  className="bg-white border border-rose-200 rounded-2xl p-3.5 flex items-start justify-between gap-3"
+                  className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
+                    allPayrollsGenerated
+                      ? 'bg-emerald-600 text-white'
+                      : unresolvedConflicts.length > 0
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-emerald-100 text-emerald-700'
+                  }`}
                 >
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-xs text-slate-900">{mw.workerName}</span>
-                      <span className="text-[11px] font-mono tabular-nums text-slate-600">
-                        {mw.state} · {mw.wageZone} · {mw.skillCategory.replace('_', '-')}
-                      </span>
-                    </div>
-                    <div className="text-[11px] font-mono tabular-nums text-slate-700">
-                      Basic ₹{mw.basicPay.toLocaleString('en-IN')}/mo vs Floor ₹{mw.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo ·{' '}
-                      <strong className="text-rose-700">
-                        Gap ₹{mw.minimumWageGap.toLocaleString('en-IN')}/mo
-                      </strong>
-                    </div>
-                    <div className="text-[10px] font-mono tabular-nums text-slate-500">
-                      {mw.scheduledEmployment} · Notif. Date: {mw.minimumWageNotificationDate}
-                      {mw.workLocationSource === 'BRANCH_LOCATION' && ' · Branch Location'}
-                      {mw.isOnProbation && ' · Probation Active (No Exemption)'}
-                    </div>
-                    {mw.midMonthRevisionInfo?.isRevisedInMonth && (
-                      <div className="text-[10px] font-mono tabular-nums text-amber-800">
-                        Mid-Month Pro-Rata ({mw.midMonthRevisionInfo.daysAtPreviousRate}d @ ₹{mw.midMonthRevisionInfo.previousMonthlyFloor.toLocaleString('en-IN')} + {mw.midMonthRevisionInfo.daysAtRevisedRate}d @ ₹{mw.midMonthRevisionInfo.revisedMonthlyFloor.toLocaleString('en-IN')})
-                      </div>
-                    )}
-                  </div>
-                  {targetWorker && (
-                    <button
-                      type="button"
-                      onClick={() => setEditingWageWorker(targetWorker)}
-                      className="px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shrink-0 cursor-pointer"
-                    >
-                      <Edit3 size={11} /> Fix Basic
-                    </button>
+                  {allPayrollsGenerated || unresolvedConflicts.length === 0 ? (
+                    <CheckCircle2 size={24} />
+                  ) : (
+                    <Clock size={22} />
                   )}
                 </div>
-              );
-            })}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
+                      {allPayrollsGenerated
+                        ? 'Payroll Completed'
+                        : unresolvedConflicts.length > 0
+                        ? 'Needs Attendance Review'
+                        : 'Payroll Ready'}
+                    </h2>
+                    <span
+                      className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                        allPayrollsGenerated
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : unresolvedConflicts.length > 0
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      }`}
+                    >
+                      {monthLabel}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+                    {allPayrollsGenerated
+                      ? `Payslips generated for all ${generatedPayrolls.length} workers.`
+                      : 'All attendance and statutory calculations are complete and ready to run.'}
+                  </p>
+                </div>
+              </div>
+
+              {workersMissingBank.length > 0 && !allPayrollsGenerated && (
+                <button
+                  type="button"
+                  onClick={() => setIsMissingBankModalOpen(true)}
+                  className="text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-xl inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Landmark size={14} />
+                  <span>
+                    {workersMissingBank.length} missing bank {workersMissingBank.length === 1 ? 'account' : 'accounts'}
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {/* 4 CORE SUMMARY METRICS */}
+            <div className="p-5 sm:p-7 space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <Users size={15} className="text-slate-400" />
+                    <span>Total Workers</span>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+                    {totalStaffCount}
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <Building2 size={15} className="text-slate-400" />
+                    <span>Total Cost to Company</span>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+                    ₹{Math.round(totalCTC).toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <Shield size={15} className="text-slate-400" />
+                    <span>Total Deductions (PF/ESI/PT)</span>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-slate-900 mt-2">
+                    ₹{Math.round(totalStatutoryDeductions).toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                <div className="p-4 sm:p-5 rounded-2xl bg-emerald-50/70 border-2 border-emerald-200">
+                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-800">
+                    <IndianRupee size={15} className="text-emerald-600" />
+                    <span>Net Payout</span>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-extrabold font-mono tabular-nums text-emerald-950 mt-2">
+                    ₹{Math.round(totalNetPayout).toLocaleString('en-IN')}
+                  </div>
+                </div>
+              </div>
+
+              {/* LARGE PRIMARY CTA BUTTON */}
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  disabled={runningPayroll || payrolls.length === 0}
+                  onClick={() => executeRunPayrollAndGeneratePayslips()}
+                  className="w-full min-h-14 py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-extrabold text-base sm:text-lg shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+                >
+                  {runningPayroll ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" />
+                      <span>Running Payroll &amp; Generating Payslips...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={20} />
+                      <span>Run Payroll &amp; Generate Payslips</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIsExportPackOpen(true)}
+                      className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Archive size={14} className="text-blue-600" />
+                      <span>Download Filing Pack (.ZIP)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadECR}
+                      className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <Download size={14} className="text-slate-600" />
+                      <span>EPFO ECR (.txt)</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('DETAILED')}
+                    className="text-xs font-bold text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>View full worker register &amp; compliance tools</span>
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
+
+          {/* PAUSED WORKERS CARD (WHEN READY WORKERS WERE PAID AND SOME STILL NEED BANK DETAILS) */}
+          {pausedBankWorkerIds.length > 0 && workersMissingBank.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-amber-950 flex items-center gap-2">
+                  <PauseCircle size={16} className="text-amber-700" />
+                  <span>
+                    {workersMissingBank.length} {workersMissingBank.length === 1 ? 'worker' : 'workers'} paused — bank details needed
+                  </span>
+                </h3>
+                <p className="text-xs text-amber-900">
+                  Waiting for bank account details:{' '}
+                  <strong>{workersMissingBank.map((w) => w.name).join(', ')}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMissingBankModalOpen(true)}
+                className="px-4 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold shrink-0 cursor-pointer"
+              >
+                Add Bank Details &amp; Resume
+              </button>
+            </div>
+          )}
+
+          {/* GENERATED PAYSLIPS QUICK LIST */}
+          {(payslipsJustGenerated || generatedPayrolls.length > 0) && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                    Generated Payslips ({generatedPayrolls.length} of {payrolls.length})
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Click any worker to preview, print, or mark salary as paid.
+                  </p>
+                </div>
+                {generatedPayrolls.some((p) => p.status !== 'PAID') && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      for (const p of generatedPayrolls) {
+                        if (p.status !== 'PAID') {
+                          const paidRecord: MonthlyPayroll = {
+                            ...p,
+                            status: 'PAID',
+                            paidAt: new Date().toISOString(),
+                          };
+                          await dbService.saveMonthlyPayroll(paidRecord);
+                        }
+                      }
+                      await loadData();
+                      toast.success(`Marked ${generatedPayrolls.length} payslips as paid.`);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Mark All Generated as Paid
+                  </button>
+                )}
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {generatedPayrolls.map((payroll) => (
+                  <div
+                    key={payroll.id}
+                    className="px-5 py-3.5 flex items-center justify-between gap-3 flex-wrap hover:bg-slate-50/70 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0">
+                        {payroll.workerName.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-slate-900 truncate">{payroll.workerName}</div>
+                        <div className="text-xs text-slate-500 truncate">
+                          {payroll.workerDesignation || 'Worker'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 ml-auto">
+                      <div className="text-right">
+                        <div className="font-extrabold font-mono tabular-nums text-sm text-slate-900">
+                          ₹{Math.round(payroll.netPayable).toLocaleString('en-IN')}
+                        </div>
+                        <div className={`text-[11px] font-semibold ${payroll.status === 'PAID' ? 'text-emerald-700' : 'text-blue-700'}`}>
+                          {payroll.status === 'PAID' ? 'Paid' : 'Payslip Ready'}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!limits?.payslipEnabled) {
+                            toast.info('Generating Detailed Payslips is available on Pro & Enterprise plans.');
+                            return;
+                          }
+                          setSelectedPayroll(payroll);
+                        }}
+                        className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <FileText size={13} className="text-slate-600" />
+                        <span>View Payslip</span>
+                      </button>
+
+                      {payroll.status !== 'PAID' && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleMarkAsPaid(payroll, e)}
+                          className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer"
+                        >
+                          Mark Paid
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 50% WAGE RULE AUDIT ALERT BANNER */}
-      {serverValidation && serverValidation.nonCompliantCount > 0 && (
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-5 shadow-xs animate-in fade-in">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                <AlertTriangle size={22} />
+      {/* DETAILED REGISTER VIEW (OPT-IN FOR CA / HR MANAGERS) */}
+      {!fetchError && viewMode === 'DETAILED' && (
+        <>
+          {/* ADVANCED COMPLIANCE TOOLS BAR */}
+          <div className="flex items-center justify-between gap-2 flex-wrap bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setIsMinWageModalOpen(true)}
+                className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Scale size={14} className="text-slate-700 shrink-0" />
+                <span>State Min Wages</span>
+              </button>
+
+              <button
+                onClick={() => setIsAuditHistoryOpen(true)}
+                className="min-h-[2.5rem] py-2 px-3 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <History size={14} className="text-indigo-600 shrink-0" />
+                <span>Compliance Audits ({savedAudits.length})</span>
+              </button>
+
+              <button
+                onClick={handleRunServerPreFinalizationCheck}
+                disabled={validatingServer || payrolls.length === 0}
+                className="min-h-[2.5rem] py-2 px-3.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                {validatingServer ? <Loader2 size={15} className="animate-spin shrink-0" /> : <Lock size={14} className="text-emerald-400 shrink-0" />}
+                <span>Audit &amp; Finalize Payroll</span>
+              </button>
+
+              <button
+                onClick={() => setIsExportPackOpen(true)}
+                className="min-h-[2.5rem] py-2 px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-fluid-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Archive size={15} className="shrink-0" />
+                <span>Export Filing Pack (.ZIP)</span>
+              </button>
+
+              <button
+                onClick={handleDownloadECR}
+                className="min-h-[2.5rem] py-2 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-fluid-xs font-bold text-slate-800 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Download size={15} className="text-blue-600 shrink-0" />
+                <span>EPFO ECR (.txt)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* RETROSPECTIVE PAYROLL NOTICE (PRE-21 NOV 2025) */}
+          {isRetrospectivePeriod && (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-4 sm:p-5 shadow-xs animate-in fade-in flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm sm:text-base font-black text-amber-950">
-                    Wage Structure Compliance Alert (50% Rule Audit)
+                  <h3 className="text-sm font-black text-amber-950">
+                    Prior-Period Payroll ({monthLabel})
                   </h3>
-                  <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white font-mono font-bold text-[10px]">
-                    {serverValidation.nonCompliantCount} NON_COMPLIANT
+                  <span className="px-2 py-0.5 rounded-lg bg-amber-200 text-amber-950 font-semibold text-[10px]">
+                    Pre-Nov 2025 Rules Active
                   </span>
                 </div>
                 <p className="text-xs text-amber-900 mt-1 leading-relaxed">
-                  Your basic pay is less than 50% of CTC for <strong>{serverValidation.nonCompliantCount}</strong> worker(s). This will increase PF/Gratuity liabilities. Total monthly compliance gap:{' '}
-                  <strong className="font-mono tabular-nums text-rose-700">
-                    ₹{serverValidation.totalGapAmount.toLocaleString('en-IN')}
-                  </strong>
+                  This period precedes 21 November 2025. Standard statutory rules apply for this historical month.
                 </p>
-                <div className="mt-2.5 flex flex-wrap gap-2">
-                  {serverValidation.flaggedWorkers
-                    .filter((fw) => fw.isFiftyPercentNonCompliant)
-                    .map((fw) => {
-                      const targetWorker = workers.find((w) => w.id === fw.workerId);
-                      return (
-                        <button
-                          key={fw.workerId || fw.workerName}
-                          type="button"
-                          onClick={() => targetWorker && setEditingWageWorker(targetWorker)}
-                          className="px-2.5 py-1 rounded-xl bg-white hover:bg-amber-100 border border-amber-300 text-xs font-bold text-amber-950 flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <span>{fw.workerName}</span>
-                          {fw.gapAmount > 0 && (
-                            <span className="font-mono tabular-nums text-rose-700">
-                              (Gap ₹{fw.gapAmount.toLocaleString('en-IN')})
-                            </span>
-                          )}
-                          <Edit3 size={11} className="text-blue-600" />
-                        </button>
-                      );
-                    })}
+              </div>
+            </div>
+          )}
+
+          {/* STATE MINIMUM WAGE REVIEW BANNER */}
+          {serverValidation && serverValidation.minimumWageViolationCount > 0 && (
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-xs space-y-3 animate-in fade-in">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-rose-700 text-white flex items-center justify-center shrink-0">
+                    <Scale size={22} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm sm:text-base font-black text-rose-950">
+                        Minimum Wage Review Needed
+                      </h3>
+                      <span className="text-xs font-mono tabular-nums font-bold text-rose-800">
+                        {serverValidation.minimumWageViolationCount} Employee(s) Below State Floor
+                      </span>
+                    </div>
+                    <p className="text-xs text-rose-900 mt-1 leading-relaxed">
+                      Update salary for the highlighted workers below to match the applicable state minimum wage floor.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsMinWageModalOpen(true)}
+                    className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-rose-100 border border-rose-300 text-rose-900 font-bold text-xs cursor-pointer"
+                  >
+                    Inspect State Floors
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRunServerPreFinalizationCheck}
+                    className="px-4 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs shadow-xs cursor-pointer"
+                  >
+                    Review Workers
+                  </button>
                 </div>
               </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={handleRunServerPreFinalizationCheck}
-              className="px-4 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-xs shrink-0 cursor-pointer"
-            >
-              Review Before Finalizing
-            </button>
-          </div>
-        </div>
-      )}
-
-      {!fetchError && (
-        <>
-          {/* STATUTORY DEPTH PAYROLL KPIS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pending Net Pay</span>
-              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-amber-600 mt-1">
-                ₹{pendingPayout.toLocaleString()}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-2 border-t border-rose-200/80">
+                {(
+                  serverValidation.blockingMinimumWageWorkers ||
+                  serverValidation.allResults.filter((r) => r.isMinimumWageViolation)
+                ).map((mw) => {
+                  const targetWorker = workers.find((w) => w.id === mw.workerId);
+                  return (
+                    <div
+                      key={mw.workerId || mw.workerName}
+                      className="bg-white border border-rose-200 rounded-2xl p-3.5 flex items-start justify-between gap-3"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-xs text-slate-900">{mw.workerName}</span>
+                          <span className="text-[11px] font-mono tabular-nums text-slate-600">
+                            {mw.state} · {mw.wageZone}
+                          </span>
+                        </div>
+                        <div className="text-[11px] font-mono tabular-nums text-slate-700">
+                          Basic ₹{mw.basicPay.toLocaleString('en-IN')}/mo vs Floor ₹{mw.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo ·{' '}
+                          <strong className="text-rose-700">
+                            Gap ₹{mw.minimumWageGap.toLocaleString('en-IN')}/mo
+                          </strong>
+                        </div>
+                      </div>
+                      {targetWorker && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingWageWorker(targetWorker)}
+                          className="px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Edit3 size={11} /> Fix Salary
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">To disburse to operators</p>
             </div>
+          )}
 
-            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Settled Net Pay</span>
-              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-emerald-600 mt-1">
-                ₹{paidPayout.toLocaleString()}
+          {/* 50% WAGE RULE AUDIT ALERT BANNER */}
+          {serverValidation && serverValidation.nonCompliantCount > 0 && (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-3xl p-5 shadow-xs animate-in fade-in">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm sm:text-base font-black text-amber-950">
+                        50% Basic Rule Check
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white font-bold text-[10px]">
+                        {serverValidation.nonCompliantCount} Need Review
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+                      Basic pay is under 50% of total salary for <strong>{serverValidation.nonCompliantCount}</strong> worker(s). Total monthly gap:{' '}
+                      <strong className="font-mono tabular-nums text-rose-700">
+                        ₹{serverValidation.totalGapAmount.toLocaleString('en-IN')}
+                      </strong>
+                    </p>
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      {serverValidation.flaggedWorkers
+                        .filter((fw) => fw.isFiftyPercentNonCompliant)
+                        .map((fw) => {
+                          const targetWorker = workers.find((w) => w.id === fw.workerId);
+                          return (
+                            <button
+                              key={fw.workerId || fw.workerName}
+                              type="button"
+                              onClick={() => targetWorker && setEditingWageWorker(targetWorker)}
+                              className="px-2.5 py-1 rounded-xl bg-white hover:bg-amber-100 border border-amber-300 text-xs font-bold text-amber-950 flex items-center gap-1.5 cursor-pointer transition-colors"
+                            >
+                              <span>{fw.workerName}</span>
+                              {fw.gapAmount > 0 && (
+                                <span className="font-mono tabular-nums text-rose-700">
+                                  (Gap ₹{fw.gapAmount.toLocaleString('en-IN')})
+                                </span>
+                              )}
+                              <Edit3 size={11} className="text-blue-600" />
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleRunServerPreFinalizationCheck}
+                  className="px-4 py-2.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-xs shrink-0 cursor-pointer"
+                >
+                  Review Before Finalizing
+                </button>
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">Paid via bank transfer</p>
             </div>
+          )}
 
+          {/* DETAILED VIEW KPIS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Gross Wages</span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Workers</span>
               <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-1">
-                ₹{totalGross.toLocaleString()}
+                {totalStaffCount}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">Basic + OT + Allowances</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">Active in {monthLabel}</p>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Employer Liabilities</span>
-              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-blue-600 mt-1">
-                +₹{totalEmployerStatutory.toLocaleString()}
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Cost to Company</span>
+              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-slate-900 mt-1">
+                ₹{Math.round(totalCTC).toLocaleString('en-IN')}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">PF (13%) + ESI (3.25%) + LWF</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">Gross wages + employer contributions</p>
             </div>
 
-            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-xs sm:col-span-2 lg:col-span-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Company CTC</span>
-              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-emerald-400 mt-1">
-                ₹{totalCTC.toLocaleString()}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Deductions (PF/ESI/PT)</span>
+              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-blue-600 mt-1">
+                ₹{Math.round(totalStatutoryDeductions).toLocaleString('en-IN')}
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">Gross + Employer Stat</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">Employee statutory deductions</p>
+            </div>
+
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Net Payout</span>
+              <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums text-emerald-400 mt-1">
+                ₹{Math.round(totalNetPayout).toLocaleString('en-IN')}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                ₹{Math.round(paidPayout).toLocaleString('en-IN')} paid · ₹{Math.round(pendingPayout).toLocaleString('en-IN')} pending
+              </p>
             </div>
           </div>
 
@@ -1023,7 +1432,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
 
                       {rec.legalHold?.active && (
                         <div className="p-2.5 rounded-xl bg-amber-100/80 border border-amber-300 text-[11px] text-amber-950">
-                          <strong>LEGAL_HOLD ({rec.legalHold.category}):</strong> {rec.legalHold.reason}
+                          <strong>Legal Hold:</strong> {rec.legalHold.reason}
                         </div>
                       )}
 
@@ -1082,7 +1491,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                             className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-50 border border-amber-300 text-amber-900 text-xs font-bold flex items-center gap-1 cursor-pointer"
                           >
                             <PauseCircle size={13} />
-                            <span>LEGAL_HOLD</span>
+                            <span>Place Legal Hold</span>
                           </button>
                         ) : null}
 
@@ -1176,10 +1585,10 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                     type="button"
                     onClick={(e) => handleMarkAsPaid(payroll, e)}
                     className={`${compact ? 'min-h-[32px] px-2.5 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'} font-bold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 rounded-xl transition-all cursor-pointer inline-flex items-center gap-1`}
-                    title="MINIMUM_WAGE_VIOLATION: Payout blocked until Basic Pay meets state minimum wage"
+                    title="Payout paused until salary meets state minimum wage"
                   >
                     <Lock size={12} />
-                    <span>{compact ? 'Blocked' : 'Blocked: Min Wage'}</span>
+                    <span>{compact ? 'Paused' : 'Paused: Min Wage'}</span>
                   </button>
                 );
               }
@@ -1231,8 +1640,8 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                         </div>
                         {cardAudit?.hasAnyViolation && (
                           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                            <span className="text-[10px] font-mono font-bold text-rose-700">
-                              {cardAudit.isMinimumWageViolation ? 'MIN WAGE VIOLATION' : '50% RULE GAP'}
+                            <span className="text-[10px] font-semibold text-rose-700">
+                              {cardAudit.isMinimumWageViolation ? 'Below Min Wage' : 'Below 50% Basic'}
                             </span>
                             {workerObj && (
                               <button
@@ -1582,7 +1991,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                             <span className="font-bold">FnF Gratuity Settlement</span>
                             <span className="block text-[10px] text-emerald-800">
                               {payroll.fnfSummary.roundedYears} yrs · Exit {payroll.fnfSummary.exitDate}
-                              {payroll.fnfSummary.deathInService ? ' · DEATH_IN_SERVICE' : ''}
+                              {payroll.fnfSummary.deathInService ? ' · Death in Service' : ''}
                               {payroll.fnfSummary.ceilingApplied ? ' · ₹20L Cap' : ''}
                             </span>
                           </div>
@@ -1643,10 +2052,10 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                             className="mt-2.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5"
                           >
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <span className="text-[10px] font-mono font-bold text-rose-800">
+                              <span className="text-[10px] font-semibold text-rose-800">
                                 {cardAudit.isMinimumWageViolation
-                                  ? `MINIMUM_WAGE_VIOLATION · Gap ₹${cardAudit.minimumWageGap.toLocaleString('en-IN')}`
-                                  : `NON_COMPLIANT · Gap ₹${cardAudit.gapAmount.toLocaleString('en-IN')}`}
+                                  ? `Below State Min Wage · Gap ₹${cardAudit.minimumWageGap.toLocaleString('en-IN')}`
+                                  : `Below 50% Basic Rule · Gap ₹${cardAudit.gapAmount.toLocaleString('en-IN')}`}
                               </span>
                               {workerObj && (
                                 <button
@@ -1808,11 +2217,11 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                 <p className="text-xs text-slate-300 mt-0.5 flex items-center gap-1.5">
                   {serverValidation.verificationSource === 'CLOUD_FUNCTION' ? (
                     <>
-                      <Cloud size={12} className="text-blue-400" /> Verified by Cloud Function (`validatePayrollFinalization`)
+                      <Cloud size={12} className="text-blue-400" /> Verified automatically on server ({currentMonthStr})
                     </>
                   ) : (
                     <>
-                      <Cpu size={12} className="text-indigo-400" /> Verified by Statutory Validation Engine ({currentMonthStr})
+                      <Cpu size={12} className="text-indigo-400" /> Verified automatically for {currentMonthStr}
                     </>
                   )}
                 </p>
@@ -1837,11 +2246,11 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                 <>
                   {serverValidation.minimumWageViolationCount > 0 && (
                     <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-4">
-                      <h3 className="text-sm font-black text-rose-950 font-mono">
-                        BLOCKING ERROR: MINIMUM_WAGE_VIOLATION ({serverValidation.minimumWageViolationCount} Employee{serverValidation.minimumWageViolationCount > 1 ? 's' : ''})
+                      <h3 className="text-sm font-black text-rose-950">
+                        Below State Minimum Wage ({serverValidation.minimumWageViolationCount} Employee{serverValidation.minimumWageViolationCount > 1 ? 's' : ''})
                       </h3>
                       <p className="text-xs text-rose-900 mt-1">
-                        Payroll cannot be finalized while any employee&apos;s Basic Pay is below the applicable state minimum wage floor. Fix Basic Pay for each highlighted worker below and re-validate.
+                        Payroll cannot be finalized while any employee is below the applicable state minimum wage floor. Update salary for each highlighted worker below and re-validate.
                       </p>
                     </div>
                   )}
@@ -1849,13 +2258,13 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                   {serverValidation.nonCompliantCount > 0 && (
                     <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4">
                       <h3 className="text-sm font-black text-amber-950">
-                        Your basic pay is less than 50% of CTC. This will increase PF/Gratuity liabilities.
+                        Basic pay is below 50% of total salary for {serverValidation.nonCompliantCount} worker(s).
                       </h3>
                       <p className="text-xs text-amber-900 mt-1">
-                        Found <strong>{serverValidation.nonCompliantCount}</strong> NON_COMPLIANT worker(s) · Total Gap:{' '}
+                        Total monthly gap:{' '}
                         <strong className="font-mono tabular-nums">₹{serverValidation.totalGapAmount.toLocaleString('en-IN')}/mo</strong>.
                         {!isRetrospectivePeriod && (
-                          <> Automatic 50% Rule excess allowance add-back &amp; WageComplianceAudit persistence will execute on finalization.</>
+                          <> Statutory PF and gratuity adjustments will be logged automatically on finalization.</>
                         )}
                       </p>
                     </div>
@@ -1878,47 +2287,37 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-bold text-sm text-slate-900">{fw.workerName}</span>
                               {fw.isFiftyPercentNonCompliant && (
-                                <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-mono font-bold">
-                                  NON_COMPLIANT
+                                <span className="px-2 py-0.5 rounded bg-amber-600 text-white text-[10px] font-bold">
+                                  Below 50% Basic
                                 </span>
                               )}
                               {fw.isMinimumWageViolation && (
-                                <span className="px-2 py-0.5 rounded bg-rose-800 text-white text-[10px] font-mono font-bold">
-                                  MINIMUM_WAGE_VIOLATION (BLOCKED)
+                                <span className="px-2 py-0.5 rounded bg-rose-800 text-white text-[10px] font-bold">
+                                  Below State Minimum Wage
                                 </span>
                               )}
                             </div>
                             <div className="text-xs font-mono tabular-nums text-slate-600 mt-1">
-                              {fw.state} ({fw.wageZone}) · {fw.scheduledEmployment} · {fw.skillCategory.replace('_', '-')}
+                              {fw.state} ({fw.wageZone})
                             </div>
                             {fw.isMinimumWageViolation && (
                               <div className="text-xs font-mono tabular-nums text-rose-900 mt-1">
                                 Basic: ₹{fw.basicPay.toLocaleString('en-IN')}/mo vs Floor ₹{fw.statutoryMinimumWageMonthly.toLocaleString('en-IN')}/mo ·{' '}
-                                <strong>Gap ₹{fw.minimumWageGap.toLocaleString('en-IN')}/mo</strong> · Notif. Date: {fw.minimumWageNotificationDate}
-                                {fw.isOnProbation ? ' · Probation Active (No Exemption)' : ''}
-                              </div>
-                            )}
-                            {fw.midMonthRevisionInfo?.isRevisedInMonth && (
-                              <div className="text-[11px] font-mono tabular-nums text-amber-900 mt-0.5">
-                                Pro-rated mid-month revision eff. {fw.midMonthRevisionInfo.revisionDate}: {fw.midMonthRevisionInfo.daysAtPreviousRate}d @ ₹{fw.midMonthRevisionInfo.previousMonthlyFloor.toLocaleString('en-IN')} + {fw.midMonthRevisionInfo.daysAtRevisedRate}d @ ₹{fw.midMonthRevisionInfo.revisedMonthlyFloor.toLocaleString('en-IN')}
+                                <strong>Gap ₹{fw.minimumWageGap.toLocaleString('en-IN')}/mo</strong>
                               </div>
                             )}
                             <div className="text-xs font-mono tabular-nums text-slate-600 mt-1">
-                              WageBase: ₹{fw.wageBase.toLocaleString('en-IN')} ({fw.wageBasePercentage}%) · Excluded: ₹{fw.excludedComponents.toLocaleString('en-IN')} ({fw.excludedPercentage}%)
+                              Basic Share: {fw.wageBasePercentage}%
                               {fw.gapAmount > 0 && (
                                 <span className="text-rose-700 font-bold ml-2">
-                                  50% Gap: ₹{fw.gapAmount.toLocaleString('en-IN')}
+                                  Shortfall: ₹{fw.gapAmount.toLocaleString('en-IN')}
                                 </span>
                               )}
                             </div>
                             {fw.deemedWageAddBack > 0 && (
                               <div className="text-[11px] font-mono text-amber-900 mt-1">
-                                {!isRetrospectivePeriod
-                                  ? `Auto Add-Back: +₹${fw.deemedWageAddBack.toLocaleString('en-IN')} → CompliantWageBase: ₹${(fw.compliantWageBase ?? (fw.wageBase + fw.deemedWageAddBack)).toLocaleString('en-IN')}`
-                                  : `Deferred Add-Back (Pre-Nov 2025): ₹${fw.deemedWageAddBack.toLocaleString('en-IN')}`}
-                                {' · '}
                                 <span className="text-rose-700 font-bold">
-                                  Gratuity Impact: +₹{fw.estimatedAdditionalGratuityMonthly}/mo (+₹{gratYr.toLocaleString('en-IN')}/yr)
+                                  Est. Gratuity Impact: +₹{fw.estimatedAdditionalGratuityMonthly}/mo (+₹{gratYr.toLocaleString('en-IN')}/yr)
                                 </span>
                               </div>
                             )}
@@ -1933,7 +2332,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                               }}
                               className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-xs font-bold text-slate-800 flex items-center gap-1 shrink-0 cursor-pointer"
                             >
-                              <Edit3 size={12} className="text-blue-600" /> Fix Structure
+                              <Edit3 size={12} className="text-blue-600" /> Fix Salary
                             </button>
                           )}
                         </div>
@@ -1982,9 +2381,9 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                 {finalizingPayroll ? <Loader2 size={15} className="animate-spin" /> : <Lock size={14} />}
                 <span>
                   {serverValidation.minimumWageViolationCount > 0
-                    ? 'Payroll Blocked (Fix MINIMUM_WAGE_VIOLATION)'
+                    ? 'Fix Minimum Wage to Finalize'
                     : serverValidation.hasFlaggedWorkers
-                    ? 'Acknowledge 50% Add-Back & Finalize Payroll'
+                    ? 'Finalize Payroll with Adjustments'
                     : 'Finalize & Lock Payroll'}
                 </span>
               </button>
@@ -2200,6 +2599,34 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
           onConfirm={handlePlaceFnfHold}
         />
       )}
+
+      {/* INLINE QUICK-FIX MODAL FOR MISSING PAN / UAN */}
+      <MissingKycQuickFixModal
+        isOpen={isMissingKycModalOpen}
+        onClose={() => setIsMissingKycModalOpen(false)}
+        workers={workersMissingPanOrUan}
+        onSaved={loadData}
+      />
+
+      {/* PAUSE & QUICK-FIX MODAL FOR MISSING BANK ACCOUNTS */}
+      <MissingBankDetailsPauseModal
+        isOpen={isMissingBankModalOpen}
+        onClose={() => setIsMissingBankModalOpen(false)}
+        missingBankWorkers={workersMissingBank}
+        readyWorkerCount={readyBankWorkerCount}
+        onSaveAndResume={async (updatedSubset) => {
+          const updatedMap = new Map(updatedSubset.map((w) => [w.id, w]));
+          const mergedWorkers = workers.map((w) => updatedMap.get(w.id) || w);
+          setWorkers(mergedWorkers);
+          await executeRunPayrollAndGeneratePayslips({
+            skipMissingBank: false,
+            overrideWorkers: mergedWorkers,
+          });
+        }}
+        onRunForReadyOnly={async () => {
+          await executeRunPayrollAndGeneratePayslips({ skipMissingBank: true });
+        }}
+      />
     </div>
   );
 };

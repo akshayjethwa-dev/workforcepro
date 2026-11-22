@@ -121,14 +121,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginDemo = (role: Role = 'FACTORY_OWNER') => {
-    const demoUid = role === 'SUPER_ADMIN' ? 'demo-superadmin-uid' : role === 'RESELLER' ? 'demo-reseller-uid' : 'demo-owner-uid';
-    const demoEmail = role === 'SUPER_ADMIN' ? 'superadmin@workforce.demo' : role === 'RESELLER' ? 'partner@agency.demo' : 'admin@factory.demo';
-    const demoCompany = role === 'SUPER_ADMIN' ? 'WorkForce Pro Global' : role === 'RESELLER' ? 'Apex Industrial Partners' : 'Apex Engineering Ltd.';
+    const demoUid =
+      role === 'SUPER_ADMIN'
+        ? 'demo-superadmin-uid'
+        : role === 'CA'
+        ? 'demo-ca-uid'
+        : role === 'RESELLER'
+        ? 'demo-reseller-uid'
+        : role === 'SUPERVISOR'
+        ? 'demo-supervisor-uid'
+        : 'demo-owner-uid';
+    const demoEmail =
+      role === 'SUPER_ADMIN'
+        ? 'superadmin@workforce.demo'
+        : role === 'CA'
+        ? 'ca.auditor@workforce.demo'
+        : role === 'RESELLER'
+        ? 'partner@agency.demo'
+        : role === 'SUPERVISOR'
+        ? 'manager@factory.demo'
+        : 'admin@factory.demo';
+    const demoCompany =
+      role === 'SUPER_ADMIN'
+        ? 'WorkForce Pro Global'
+        : role === 'RESELLER'
+        ? 'Apex Industrial Partners'
+        : 'Apex Engineering Ltd.';
 
     const demoUser = {
       uid: demoUid,
       email: demoEmail,
-      displayName: role === 'SUPER_ADMIN' ? 'Super Admin' : role === 'RESELLER' ? 'Partner Agency' : 'Factory Admin'
+      displayName:
+        role === 'SUPER_ADMIN'
+          ? 'Super Admin'
+          : role === 'CA'
+          ? 'Chartered Accountant (CA)'
+          : role === 'RESELLER'
+          ? 'Partner Agency'
+          : role === 'SUPERVISOR'
+          ? 'Site Manager'
+          : 'Factory Admin'
     } as unknown as User;
 
     const demoProfile: UserProfile = {

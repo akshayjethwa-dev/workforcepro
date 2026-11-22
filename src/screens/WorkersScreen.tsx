@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save, Lock, 
-  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload,
+  UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload, Download,
   Calendar, Clock, Send, Key, UserX, Shield, CheckCircle2, RotateCcw, Smartphone
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,6 +30,7 @@ import {
   triggerAutomatedDraftFnf,
 } from '../services/fnfService';
 import { FnfSettlementRecord, GratuityExitReason } from '../types/index';
+import { downloadWorkerImportTemplate } from '../utils/workerExcelTemplate';
 
 interface Props {
   onAddWorker: () => void;
@@ -341,17 +342,36 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
         </div>
 
         <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
-          <button 
-            onClick={() => setShowBulkImport(true)}
-            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0"
-            title="Import workers in bulk via CSV"
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                const fileName = downloadWorkerImportTemplate();
+                toast.success(`Downloaded ${fileName} (includes Sample Data & Read Me guide).`);
+              } catch (err) {
+                console.error('Template download failed:', err);
+                toast.error('Unable to generate Excel template. Please try again.');
+              }
+            }}
+            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-800 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0 cursor-pointer"
+            title="Download pre-formatted Excel template (.xlsx) with Sample Data and Read Me guide"
           >
-            <Upload size={15} className="shrink-0" />
-            <span className="break-words">Bulk CSV Import</span>
+            <Download size={15} className="shrink-0" />
+            <span className="break-words">Download Template</span>
           </button>
           <button 
+            type="button"
+            onClick={() => setShowBulkImport(true)}
+            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0 cursor-pointer"
+            title="Import workers in bulk via Excel or CSV"
+          >
+            <Upload size={15} className="shrink-0" />
+            <span className="break-words">Bulk Import</span>
+          </button>
+          <button 
+            type="button"
             onClick={handleAddWorkerClick}
-            className="inline-flex items-center justify-center gap-2 min-h-[2.5rem] px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0"
+            className="inline-flex items-center justify-center gap-2 min-h-[2.5rem] px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0 cursor-pointer"
           >
             <Plus size={16} className="shrink-0" />
             <span className="break-words">Add New Worker</span>
@@ -660,11 +680,14 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
         errorPayload={paywallError}
       />
 
-      {/* BULK CSV WORKER IMPORT */}
+      {/* BULK EXCEL / CSV WORKER IMPORT & VALIDATION ENGINE */}
       <BulkImportModal
         isOpen={showBulkImport}
         onClose={() => setShowBulkImport(false)}
         tenantId={profile?.tenantId || 'demo-tenant-id'}
+        orgSettings={settings}
+        existingWorkers={workers}
+        actorEmail={profile?.email || 'admin@factory.in'}
         onSuccess={() => {
           loadWorkersAndSettings();
         }}

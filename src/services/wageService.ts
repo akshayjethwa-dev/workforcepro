@@ -39,10 +39,14 @@ export const ensureWageConfig = (worker: Worker): WageConfig => {
   return {
     type: isMonthly ? 'MONTHLY' : 'DAILY',
     amount: resolvedAmount,
+    salaryInputMode: worker.wageConfig?.salaryInputMode,
     basicPercentage: worker.wageConfig?.basicPercentage,
     dailyMultiplier,
     monthlyBreakdown: worker.wageConfig?.monthlyBreakdown,
     dailyBreakdown: worker.wageConfig?.dailyBreakdown,
+    pfCapAtStatutoryCeiling: worker.wageConfig?.pfCapAtStatutoryCeiling,
+    pfWageCeiling: worker.wageConfig?.pfWageCeiling,
+    pfQualifyingWage: worker.wageConfig?.pfQualifyingWage,
     overtimeEligible,
     overtimeRatePerHour,
     workingDaysPerMonth: worker.wageConfig?.workingDaysPerMonth || dailyMultiplier,
@@ -53,7 +57,10 @@ export const ensureWageConfig = (worker: Worker): WageConfig => {
     },
     complianceStatus: worker.wageConfig?.complianceStatus,
     complianceFlags: worker.wageConfig?.complianceFlags,
-    acknowledgedNonCompliant: worker.wageConfig?.acknowledgedNonCompliant
+    acknowledgedNonCompliant: worker.wageConfig?.acknowledgedNonCompliant,
+    pfComplianceLiabilityAcknowledgedAt: worker.wageConfig?.pfComplianceLiabilityAcknowledgedAt,
+    pfComplianceLiabilityAcknowledgedBy: worker.wageConfig?.pfComplianceLiabilityAcknowledgedBy,
+    pfComplianceLiabilityStatement: worker.wageConfig?.pfComplianceLiabilityStatement
   };
 };
 

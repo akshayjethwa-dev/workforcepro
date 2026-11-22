@@ -3,7 +3,7 @@ import { dbService } from './db';
 import { conflictService } from './conflictService';
 import { syncService } from './syncService';
 
-const INBOX_LOCAL_STORAGE_KEY = 'workforce_inbox_items_v1';
+const INBOX_LOCAL_STORAGE_KEY = 'workforce_inbox_items_v2';
 const INBOX_AUDIT_KEY = 'workforce_inbox_audit_v1';
 const INBOX_DELEGATION_KEY = 'workforce_inbox_delegation_v1';
 
@@ -84,134 +84,201 @@ export class InboxService {
   private seedInitialItems(tenantId: string, workers: Worker[]): InboxItem[] {
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
-    const worker1 = workers[0] || { id: 'w1', name: 'Ramesh Kumar', phone: '9876543210', designation: 'CNC Operator', branchId: 'main' };
-    const worker2 = workers[1] || { id: 'w2', name: 'Sunita Devi', phone: '9876543211', designation: 'Assembly Line', branchId: 'main' };
-    const worker3 = workers[2] || { id: 'w3', name: 'Vikram Singh', phone: '9876543212', designation: 'Packer & Dispatch', branchId: 'north' };
-    const worker4 = workers[3] || { id: 'w4', name: 'Pooja Verma', phone: '9876543213', designation: 'Quality Inspector', branchId: 'main' };
+    const ramesh =
+      workers.find((w) => w.name.toLowerCase().startsWith('ramesh')) ||
+      workers[0] ||
+      { id: 'worker-1', name: 'Ramesh Sharma', phone: '9876543210', designation: 'CNC Operator', branchId: 'main' };
+    const suresh =
+      workers.find((w) => w.name.toLowerCase().startsWith('suresh')) ||
+      { id: 'worker-suresh', name: 'Suresh Patel', phone: '9876543219', designation: 'Machine Helper', branchId: 'main' };
+    const vikram =
+      workers.find((w) => w.name.toLowerCase().startsWith('vikram')) ||
+      workers[5] ||
+      { id: 'worker-6', name: 'Vikram Desai', phone: '9876543215', designation: 'Packer & Dispatch', branchId: 'main' };
+    const amit =
+      workers.find((w) => w.name.toLowerCase().startsWith('amit')) ||
+      workers[2] ||
+      { id: 'worker-3', name: 'Amit Kumar', phone: '9876543212', designation: 'Field Technician', branchId: 'north' };
+    const priya =
+      workers.find((w) => w.name.toLowerCase().startsWith('priya')) ||
+      workers[1] ||
+      { id: 'worker-2', name: 'Priya Patel', phone: '9876543211', designation: 'Quality Inspector', branchId: 'main' };
 
     const initial: InboxItem[] = [
       {
-        id: `inbox-adv-1`,
+        id: `inbox-geo-ramesh-1`,
         tenantId,
-        branchId: worker1.branchId,
-        actionType: 'ADVANCE_APPROVAL',
-        urgency: 'NORMAL',
-        status: 'PENDING',
-        workerId: worker1.id,
-        workerName: worker1.name,
-        workerPhone: worker1.phone,
-        workerDesignation: worker1.designation,
-        title: `Advance / Kharchi Request: ₹350`,
-        description: `Requested emergency travel allowance for night shift conveyance.`,
-        timestamp: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
-        amount: 350,
-        isLowRisk: true, // under ₹500
-        details: {
-          reason: 'Emergency travel conveyance',
-          punchHistory: [
-            { timestamp: `${todayStr}T08:58:00.000Z`, type: 'IN', device: 'Kiosk North Gate' }
-          ]
-        }
-      },
-      {
-        id: `inbox-geo-1`,
-        tenantId,
-        branchId: worker2.branchId,
+        branchId: ramesh.branchId,
         actionType: 'ATTENDANCE_EXCEPTION',
         urgency: 'HIGH',
         status: 'PENDING',
-        workerId: worker2.id,
-        workerName: worker2.name,
-        workerPhone: worker2.phone,
-        workerDesignation: worker2.designation,
-        title: `Geofence Violation Exception (145m out)`,
-        description: `Punch IN marked 145 meters outside verified factory boundary at Main Gate road.`,
-        timestamp: new Date(Date.now() - 55 * 60 * 1000).toISOString(),
+        workerId: ramesh.id,
+        workerName: ramesh.name,
+        workerPhone: ramesh.phone,
+        workerDesignation: ramesh.designation,
+        title: `Ramesh punched in 2km away from the site.`,
+        description: `Recorded at 9:05 AM • General Shift`,
+        timestamp: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
         isLowRisk: false,
         details: {
           geofenceViolation: true,
-          distanceMeters: 145,
-          baseLocation: { lat: 19.0760, lng: 72.8777, radius: 100, address: 'MIDC Industrial Area, Shed 4' },
-          punchLocation: { lat: 19.0772, lng: 72.8785 },
+          distanceMeters: 2000,
+          gpsAccuracyMeters: 16,
+          isMockGps: false,
+          siteName: 'GIDC Industrial Estate, Shed 4',
+          baseLocation: { lat: 23.0225, lng: 72.5714, radius: 100, address: 'GIDC Industrial Estate, Shed 4, Ahmedabad' },
+          punchLocation: { lat: 23.0405, lng: 72.5721 },
+          deviceModel: 'Samsung Galaxy A14',
+          deviceOs: 'Android 14',
           shiftName: 'General Shift (09:00 - 18:00)',
           punch: {
-            timestamp: `${todayStr}T09:02:15.000Z`,
+            timestamp: `${todayStr}T09:05:12.000Z`,
             type: 'IN',
             device: 'Mobile App (PWA)',
             isOutOfGeofence: true,
-            location: { lat: 19.0772, lng: 72.8785 }
+            location: { lat: 23.0405, lng: 72.5721 }
           },
           punchHistory: [
-            { timestamp: `${todayStr}T09:02:15.000Z`, type: 'IN', device: 'Mobile App', isOutOfGeofence: true }
+            { timestamp: `${todayStr}T09:05:12.000Z`, type: 'IN', device: 'Samsung Galaxy A14', isOutOfGeofence: true }
           ]
         }
       },
       {
-        id: `inbox-late-1`,
+        id: `inbox-root-suresh-1`,
         tenantId,
-        branchId: worker3.branchId,
+        branchId: suresh.branchId,
         actionType: 'ATTENDANCE_EXCEPTION',
-        urgency: 'NORMAL',
+        urgency: 'URGENT',
         status: 'PENDING',
-        workerId: worker3.id,
-        workerName: worker3.name,
-        workerPhone: worker3.phone,
-        workerDesignation: worker3.designation,
-        title: `Late Arrival Exception (+42 mins)`,
-        description: `Reported at 09:42 AM (Grace period: 15 mins). Worker cited suburban train delay.`,
-        timestamp: new Date(Date.now() - 85 * 60 * 1000).toISOString(),
+        workerId: suresh.id,
+        workerName: suresh.name,
+        workerPhone: suresh.phone,
+        workerDesignation: suresh.designation,
+        title: `Suresh's device was rooted (unsafe).`,
+        description: `Punch flagged for security review at 9:12 AM.`,
+        timestamp: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
         isLowRisk: false,
         details: {
-          lateMinutes: 42,
-          shiftName: 'Morning Shift (09:00 - 17:30)',
-          shiftStartTime: '09:00 AM',
-          reason: 'Suburban train delay (Western Line)',
+          isRootedDevice: true,
+          deviceIntegrityFailed: true,
+          isMockGps: false,
+          gpsAccuracyMeters: 12,
+          deviceModel: 'Redmi Note 11 (Magisk v27)',
+          deviceOs: 'Android 13 • Bootloader Unlocked',
+          deviceFingerprint: 'fp_98a4c1e0b7f231d9',
+          attestationSummary: 'Play Integrity: MEETS_DEVICE_INTEGRITY = FAILED (Root binary detected)',
+          siteName: 'GIDC Industrial Estate, Shed 4',
+          baseLocation: { lat: 23.0225, lng: 72.5714, radius: 100, address: 'GIDC Industrial Estate, Shed 4, Ahmedabad' },
+          punchLocation: { lat: 23.0228, lng: 72.5716 },
+          shiftName: 'General Shift (09:00 - 18:00)',
+          reason: 'Rooted device detected during punch attestation',
+          punch: {
+            timestamp: `${todayStr}T09:12:40.000Z`,
+            type: 'IN',
+            device: 'Redmi Note 11',
+            location: { lat: 23.0228, lng: 72.5716 }
+          },
           punchHistory: [
-            { timestamp: `${todayStr}T09:42:00.000Z`, type: 'IN', device: 'Kiosk Turnstile 1' }
+            { timestamp: `${todayStr}T09:12:40.000Z`, type: 'IN', device: 'Redmi Note 11 (Rooted)' }
           ]
         }
       },
       {
-        id: `inbox-adv-2`,
+        id: `inbox-ot-vikram-1`,
         tenantId,
-        branchId: worker4.branchId,
+        branchId: vikram.branchId,
+        actionType: 'OVERTIME_APPROVAL',
+        urgency: 'NORMAL',
+        status: 'PENDING',
+        workerId: vikram.id,
+        workerName: vikram.name,
+        workerPhone: vikram.phone,
+        workerDesignation: vikram.designation,
+        title: `Vikram worked 2 hours extra — 1.5x Overtime (₹300)`,
+        description: `2 hours overtime after General Shift. Approve to include ₹300 in payroll.`,
+        timestamp: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+        amount: 300,
+        isLowRisk: false,
+        details: {
+          overtimeHours: 2,
+          overtimeMultiplier: 1.5,
+          overtimeHourlyRate: 100,
+          overtimePayableAmount: 300,
+          shiftName: 'General Shift (09:00 - 18:00)',
+          shiftStartTime: '09:00 AM',
+          shiftEndTime: '06:00 PM',
+          actualPunchOutTime: '08:00 PM',
+          siteName: 'GIDC Industrial Estate, Shed 4',
+          baseLocation: { lat: 23.0225, lng: 72.5714, radius: 100, address: 'GIDC Industrial Estate, Shed 4, Ahmedabad' },
+          punchLocation: { lat: 23.0226, lng: 72.5713 },
+          gpsAccuracyMeters: 9,
+          punchHistory: [
+            { timestamp: `${todayStr}T08:57:00.000Z`, type: 'IN', device: 'Main Gate Kiosk' },
+            { timestamp: `${todayStr}T20:01:00.000Z`, type: 'OUT', device: 'Main Gate Kiosk' }
+          ]
+        }
+      },
+      {
+        id: `inbox-mockgps-amit-1`,
+        tenantId,
+        branchId: amit.branchId,
+        actionType: 'ATTENDANCE_EXCEPTION',
+        urgency: 'URGENT',
+        status: 'PENDING',
+        workerId: amit.id,
+        workerName: amit.name,
+        workerPhone: amit.phone,
+        workerDesignation: amit.designation,
+        title: `Amit used a fake GPS app while punching in (1.9km away from the site).`,
+        description: `Location spoofing was detected at 9:18 AM • Field Shift.`,
+        timestamp: new Date(Date.now() - 52 * 60 * 1000).toISOString(),
+        isLowRisk: false,
+        details: {
+          isMockGps: true,
+          geofenceViolation: true,
+          distanceMeters: 1850,
+          gpsAccuracyMeters: 0.5,
+          deviceModel: 'Poco M5',
+          deviceOs: 'Android 13 • Mock Location Provider Active',
+          deviceFingerprint: 'fp_77e1a2b4c9d0318a',
+          attestationSummary: 'Mock Location Flag = TRUE (Fake GPS Joystick detected; GPS accuracy 0.5m synthetic)',
+          siteName: 'Anand Manufacturing Unit',
+          baseLocation: { lat: 22.5645, lng: 72.9289, radius: 150, address: 'Anand Manufacturing Unit, Plot 12' },
+          punchLocation: { lat: 22.5811, lng: 72.9312 },
+          shiftName: 'Field Shift (09:00 - 18:00)',
+          punch: {
+            timestamp: `${todayStr}T09:18:22.000Z`,
+            type: 'IN',
+            device: 'Poco M5',
+            isOutOfGeofence: true,
+            location: { lat: 22.5811, lng: 72.9312 }
+          },
+          punchHistory: [
+            { timestamp: `${todayStr}T09:18:22.000Z`, type: 'IN', device: 'Poco M5 (Mock GPS)', isOutOfGeofence: true }
+          ]
+        }
+      },
+      {
+        id: `inbox-adv-1`,
+        tenantId,
+        branchId: priya.branchId,
         actionType: 'ADVANCE_APPROVAL',
         urgency: 'LOW',
         status: 'PENDING',
-        workerId: worker4.id,
-        workerName: worker4.name,
-        workerPhone: worker4.phone,
-        workerDesignation: worker4.designation,
-        title: `Advance / Kharchi Request: ₹450`,
-        description: `Routine medical prescription advance.`,
-        timestamp: new Date(Date.now() - 110 * 60 * 1000).toISOString(),
-        amount: 450,
-        isLowRisk: true, // under ₹500
+        workerId: priya.id,
+        workerName: priya.name,
+        workerPhone: priya.phone,
+        workerDesignation: priya.designation,
+        title: `Advance Request: ₹350`,
+        description: `Requested travel allowance for evening conveyance.`,
+        timestamp: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+        amount: 350,
+        isLowRisk: true,
         details: {
-          reason: 'Routine medical prescription advance',
+          reason: 'Evening travel conveyance',
           punchHistory: [
-            { timestamp: `${todayStr}T08:50:00.000Z`, type: 'IN', device: 'Kiosk Turnstile 2' }
+            { timestamp: `${todayStr}T08:55:00.000Z`, type: 'IN', device: 'Main Gate Kiosk' }
           ]
-        }
-      },
-      {
-        id: `inbox-pay-1`,
-        tenantId,
-        branchId: worker1.branchId,
-        actionType: 'PAYROLL_SIGNOFF',
-        urgency: 'HIGH',
-        status: 'PENDING',
-        workerId: worker1.id,
-        workerName: worker1.name,
-        workerPhone: worker1.phone,
-        workerDesignation: worker1.designation,
-        title: `Monthly Payroll Pre-Sign-off: Ramesh Kumar`,
-        description: `Verify 26 payable days, 8.5 OT hours and ₹1,200 total kharchi deductions before payroll lock.`,
-        timestamp: new Date(Date.now() - 150 * 60 * 1000).toISOString(),
-        isLowRisk: false,
-        details: {
-          payrollMonth: todayStr.substring(0, 7),
-          reason: 'Monthly payroll sign-off verification'
         }
       }
     ];
@@ -235,11 +302,14 @@ export class InboxService {
       items = this.seedInitialItems(tenantId, workers);
     }
 
+    let didMutate = false;
+
     // 1. Sync live database advances
     try {
       const advances = await dbService.getAdvances(tenantId);
       for (const adv of advances) {
         if (adv.status === 'PENDING' && !items.some(i => i.id === `db-adv-${adv.id}`)) {
+          didMutate = true;
           const w = workers.find(x => x.id === adv.workerId);
           const isEwa = Boolean(adv.isEwa);
           const ewaDetails = adv.ewaDetails;
@@ -306,6 +376,7 @@ export class InboxService {
       const conflicts = await conflictService.getConflicts(tenantId);
       for (const conf of conflicts) {
         if (conf.status === 'UNRESOLVED' && !items.some(i => i.id === `db-conf-${conf.id}`)) {
+          didMutate = true;
           items.unshift({
             id: `db-conf-${conf.id}`,
             tenantId,
@@ -326,6 +397,71 @@ export class InboxService {
       }
     } catch (e) {
       console.warn('Could not pull conflicts into inbox', e);
+    }
+
+    // 2.5 Sync live overtime attendance records from today into Overtime Approval cards
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const allAttendance = await dbService.getAttendanceHistory(tenantId);
+      const todayAttendance = allAttendance.filter((att) => att.date === todayStr);
+      for (const att of todayAttendance) {
+        const rawOvertime = att.hours?.overtime || 0;
+        if (rawOvertime > 0 && !items.some((i) => i.id === `db-ot-${att.id}`)) {
+          const w = workers.find((x) => x.id === att.workerId);
+          // Skip if there is already an overtime inbox item for this worker today
+          const alreadyHasOtForWorker = items.some(
+            (i) => i.actionType === 'OVERTIME_APPROVAL' && i.workerId === att.workerId
+          );
+          if (alreadyHasOtForWorker) continue;
+
+          const otHours = Number(rawOvertime.toFixed(1));
+          const multiplier = 1.5;
+          const monthlyWage =
+            w?.wageConfig?.type === 'DAILY'
+              ? (w.wageConfig.amount || 800) * (w.wageConfig.dailyMultiplier || 26)
+              : w?.wageConfig?.amount || 20800;
+          const derivedHourlyRate =
+            w?.wageConfig?.overtimeRatePerHour && w.wageConfig.overtimeRatePerHour > 0
+              ? Math.round(w.wageConfig.overtimeRatePerHour / multiplier)
+              : Math.max(75, Math.round(monthlyWage / (26 * 8)));
+          const payableAmount = Math.round(otHours * derivedHourlyRate * multiplier);
+          const firstName = (w?.name || 'Worker').split(' ')[0];
+          const punches = att.timeline || [];
+
+          didMutate = true;
+          items.unshift({
+            id: `db-ot-${att.id}`,
+            tenantId,
+            branchId: w?.branchId,
+            actionType: 'OVERTIME_APPROVAL',
+            urgency: 'NORMAL',
+            status: 'PENDING',
+            workerId: att.workerId,
+            workerName: w?.name || 'Worker',
+            workerPhone: w?.phone,
+            workerDesignation: w?.designation,
+            title: `${firstName} worked ${otHours} ${otHours === 1 ? 'hour' : 'hours'} extra — ${multiplier}x Overtime (₹${payableAmount.toLocaleString('en-IN')})`,
+            description: `Approve to include ₹${payableAmount.toLocaleString('en-IN')} overtime in payroll.`,
+            timestamp: punches[punches.length - 1]?.timestamp || new Date().toISOString(),
+            amount: payableAmount,
+            isLowRisk: false,
+            details: {
+              attendanceRecord: att,
+              overtimeHours: otHours,
+              overtimeMultiplier: multiplier,
+              overtimeHourlyRate: derivedHourlyRate,
+              overtimePayableAmount: payableAmount,
+              punchHistory: punches
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Could not sync overtime attendance into inbox', e);
+    }
+
+    if (didMutate) {
+      this.saveStoredItems(tenantId, items);
     }
 
     // 3. Check for unsynced offline queue items

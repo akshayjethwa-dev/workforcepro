@@ -12,6 +12,13 @@ import {
 import { tenantSecurityService } from "./tenantSecurityService";
 import { entitlementService } from "./entitlementService";
 import { employeeCapGuard, EmployeeCapExceededError } from "./employeeCapGuard";
+import {
+  buildOneNumberWageConfig,
+  ONE_NUMBER_MIN_WAGE_WARNING,
+  PF_LIABILITY_SHIFT_STATEMENT,
+  PF_STATUTORY_CEILING,
+  validateWorkerWageStructure,
+} from "./wageStructureValidationService";
 
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7; 
@@ -78,13 +85,18 @@ export const normalizeWorker = (w: any): Worker => {
     gender: w.gender || 'Male',
     dob: w.dob || '1995-01-01',
     joinedDate: w.joinedDate || w.dateOfJoining || '2025-01-01',
+    ...(w.bankDetails ? { bankDetails: w.bankDetails } : {}),
     wageConfig: {
       type: isMonthly ? 'MONTHLY' : 'DAILY',
       amount,
+      salaryInputMode: w.wageConfig?.salaryInputMode,
       basicPercentage: w.wageConfig?.basicPercentage,
       dailyMultiplier: w.wageConfig?.dailyMultiplier || (w.wageConfig?.workingDaysPerMonth === 30 ? 30 : 26),
       monthlyBreakdown: w.wageConfig?.monthlyBreakdown,
       dailyBreakdown: w.wageConfig?.dailyBreakdown,
+      pfCapAtStatutoryCeiling: w.wageConfig?.pfCapAtStatutoryCeiling,
+      pfWageCeiling: w.wageConfig?.pfWageCeiling,
+      pfQualifyingWage: w.wageConfig?.pfQualifyingWage,
       overtimeEligible: w.wageConfig?.overtimeEligible ?? true,
       overtimeRatePerHour: w.overtimeRate || w.wageConfig?.overtimeRatePerHour || (isMonthly ? 150 : 100),
       workingDaysPerMonth: w.wageConfig?.workingDaysPerMonth || 26,
@@ -92,7 +104,10 @@ export const normalizeWorker = (w: any): Worker => {
       complianceStatus: w.wageConfig?.complianceStatus,
       complianceFlags: w.wageConfig?.complianceFlags,
       wageAuditSummary: w.wageConfig?.wageAuditSummary,
-      acknowledgedNonCompliant: w.wageConfig?.acknowledgedNonCompliant
+      acknowledgedNonCompliant: w.wageConfig?.acknowledgedNonCompliant,
+      pfComplianceLiabilityAcknowledgedAt: w.wageConfig?.pfComplianceLiabilityAcknowledgedAt,
+      pfComplianceLiabilityAcknowledgedBy: w.wageConfig?.pfComplianceLiabilityAcknowledgedBy,
+      pfComplianceLiabilityStatement: w.wageConfig?.pfComplianceLiabilityStatement
     }
   };
 };
@@ -104,7 +119,14 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     name: 'Ramesh Sharma',
     fatherName: 'Dinesh Sharma',
     uan: '101234567890',
+    pan: 'ABCPS1234A',
     esicIp: '3123456789',
+    bankDetails: {
+      accountHolderName: 'Ramesh Sharma',
+      accountNumber: '50100234891201',
+      ifscCode: 'HDFC0001234',
+      bankName: 'HDFC Bank'
+    },
     phone: '9876543210',
     wageType: 'DAILY',
     dailyWage: 650,
@@ -138,7 +160,14 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     name: 'Priya Patel',
     fatherName: 'Kishore Patel',
     uan: '101234567891',
+    pan: 'BCPPP4567B',
     esicIp: '3123456790',
+    bankDetails: {
+      accountHolderName: 'Priya Patel',
+      accountNumber: '32490100045812',
+      ifscCode: 'SBIN0004521',
+      bankName: 'State Bank of India'
+    },
     phone: '9876543211',
     wageType: 'MONTHLY',
     monthlySalary: 20500,
@@ -173,7 +202,8 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     tenantId: 'demo-tenant-id',
     name: 'Amit Kumar',
     fatherName: 'Suresh Kumar',
-    uan: '101234567892',
+    uan: '',
+    pan: '',
     esicIp: '3123456791',
     phone: '9876543212',
     wageType: 'MONTHLY',
@@ -222,7 +252,8 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     tenantId: 'demo-tenant-id',
     name: 'Sunil Verma',
     fatherName: 'Mahesh Verma',
-    uan: '101234567893',
+    uan: '',
+    pan: '',
     esicIp: '3123456792',
     phone: '9876543213',
     wageType: 'DAILY',
@@ -270,7 +301,14 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     name: 'Kavita Singh',
     fatherName: 'Rajendra Singh',
     uan: '101234567894',
+    pan: 'CDFPS8821K',
     esicIp: '3123456793',
+    bankDetails: {
+      accountHolderName: 'Kavita Singh',
+      accountNumber: '004201532891',
+      ifscCode: 'ICIC0000042',
+      bankName: 'ICICI Bank'
+    },
     phone: '9876543214',
     wageType: 'DAILY',
     dailyWage: 600,
@@ -304,7 +342,14 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     name: 'Vikram Desai',
     fatherName: 'Harish Desai',
     uan: '101234567895',
+    pan: 'DEFPD7710M',
     esicIp: '3123456794',
+    bankDetails: {
+      accountHolderName: 'Vikram Desai',
+      accountNumber: '918010045218930',
+      ifscCode: 'UTIB0000312',
+      bankName: 'Axis Bank'
+    },
     phone: '9876543215',
     wageType: 'MONTHLY',
     monthlySalary: 32000,
@@ -357,7 +402,14 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     name: 'Anjali Nair',
     fatherName: 'Raghavan Nair',
     uan: '101234567896',
+    pan: 'EFGPN6192R',
     esicIp: '3123456795',
+    bankDetails: {
+      accountHolderName: 'Anjali Nair',
+      accountNumber: '401928374651',
+      ifscCode: 'KKBK0000841',
+      bankName: 'Kotak Mahindra Bank'
+    },
     phone: '9876543216',
     wageType: 'MONTHLY',
     monthlySalary: 45000,
@@ -1095,10 +1147,60 @@ export const dbService = {
     // Centralized server-side guard: enforce soft/hard employee caps
     await employeeCapGuard.assertCanAddWorker(worker.tenantId, worker, 1);
 
-    if (worker.tenantId === 'demo-tenant-id') {
+    // Enforce One-Number Monthly Salary minimum wage guard & canonical 50/20/30 + ₹15,000 PF ceiling math
+    let preparedWorker: Omit<Worker, 'id'> = worker;
+    if (worker.wageConfig?.type === 'MONTHLY' && worker.wageConfig?.salaryInputMode === 'ONE_NUMBER') {
+      const { wageConfig, calculation } = buildOneNumberWageConfig(
+        worker.wageConfig.amount,
+        worker.wageConfig,
+        {
+          state: worker.state,
+          wageZone: worker.wageZone,
+          skillCategory: worker.skillCategory,
+          scheduledEmployment: worker.scheduledEmployment,
+          branchId: worker.branchId,
+        }
+      );
+      if (calculation.isBelowMinimumWage) {
+        throw new Error(ONE_NUMBER_MIN_WAGE_WARNING);
+      }
+      preparedWorker = {
+        ...worker,
+        monthlySalary: calculation.monthlySalary,
+        wageConfig: {
+          ...worker.wageConfig,
+          ...wageConfig,
+        },
+      };
+    } else if (worker.wageConfig?.type === 'MONTHLY' && worker.wageConfig?.salaryInputMode === 'CUSTOM_BREAKDOWN') {
+      const audit = validateWorkerWageStructure(worker, { ignoreRevisionCutoff: true });
+      if (audit.isMinimumWageViolation) {
+        throw new Error(ONE_NUMBER_MIN_WAGE_WARNING);
+      }
+      if (audit.isFiftyPercentNonCompliant && !worker.wageConfig.acknowledgedNonCompliant) {
+        throw new Error(`Please confirm "${PF_LIABILITY_SHIFT_STATEMENT}" before saving.`);
+      }
+      const pfQualifyingWage = Math.min(audit.wageBase, PF_STATUTORY_CEILING);
+      preparedWorker = {
+        ...worker,
+        monthlySalary: audit.totalRemuneration,
+        wageConfig: {
+          ...worker.wageConfig,
+          amount: audit.totalRemuneration,
+          basicPercentage: audit.wageBasePercentage,
+          pfCapAtStatutoryCeiling: true,
+          pfWageCeiling: PF_STATUTORY_CEILING,
+          pfQualifyingWage,
+          complianceStatus: audit.status,
+          complianceFlags: audit.complianceFlags,
+        },
+      };
+    }
+
+    if (preparedWorker.tenantId === 'demo-tenant-id') {
       const current = getStoredDemoWorkers();
       const newWorker: Worker = {
-        ...worker,
+        ...preparedWorker,
         id: 'worker-' + Date.now(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1107,7 +1209,7 @@ export const dbService = {
       return newWorker.id;
     }
     const workerData = {
-      ...worker,
+      ...preparedWorker,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1117,7 +1219,7 @@ export const dbService = {
     } catch {
       const current = getStoredDemoWorkers();
       const newWorker: Worker = {
-        ...worker,
+        ...preparedWorker,
         id: 'worker-' + Date.now(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1165,22 +1267,71 @@ export const dbService = {
       }
     }
 
+    let preparedData: Partial<Worker> = data;
+    if (data.wageConfig?.type === 'MONTHLY' && data.wageConfig?.salaryInputMode === 'ONE_NUMBER') {
+      const { wageConfig, calculation } = buildOneNumberWageConfig(
+        data.wageConfig.amount,
+        data.wageConfig,
+        {
+          state: data.state,
+          wageZone: data.wageZone,
+          skillCategory: data.skillCategory,
+          scheduledEmployment: data.scheduledEmployment,
+          branchId: data.branchId,
+        }
+      );
+      if (calculation.isBelowMinimumWage) {
+        throw new Error(ONE_NUMBER_MIN_WAGE_WARNING);
+      }
+      preparedData = {
+        ...data,
+        monthlySalary: calculation.monthlySalary,
+        wageConfig: {
+          ...data.wageConfig,
+          ...wageConfig,
+        },
+      };
+    } else if (data.wageConfig?.type === 'MONTHLY' && data.wageConfig?.salaryInputMode === 'CUSTOM_BREAKDOWN') {
+      const audit = validateWorkerWageStructure(data, { ignoreRevisionCutoff: true });
+      if (audit.isMinimumWageViolation) {
+        throw new Error(ONE_NUMBER_MIN_WAGE_WARNING);
+      }
+      if (audit.isFiftyPercentNonCompliant && !data.wageConfig.acknowledgedNonCompliant) {
+        throw new Error(`Please confirm "${PF_LIABILITY_SHIFT_STATEMENT}" before saving.`);
+      }
+      const pfQualifyingWage = Math.min(audit.wageBase, PF_STATUTORY_CEILING);
+      preparedData = {
+        ...data,
+        monthlySalary: audit.totalRemuneration,
+        wageConfig: {
+          ...data.wageConfig,
+          amount: audit.totalRemuneration,
+          basicPercentage: audit.wageBasePercentage,
+          pfCapAtStatutoryCeiling: true,
+          pfWageCeiling: PF_STATUTORY_CEILING,
+          pfQualifyingWage,
+          complianceStatus: audit.status,
+          complianceFlags: audit.complianceFlags,
+        },
+      };
+    }
+
     if (workerId.startsWith('worker-')) {
       const current = getStoredDemoWorkers();
-      const updated = current.map(w => w.id === workerId ? { ...w, ...data, updatedAt: new Date().toISOString() } : w);
+      const updated = current.map(w => w.id === workerId ? { ...w, ...preparedData, updatedAt: new Date().toISOString() } : w);
       setStoredDemoWorkers(updated);
       return;
     }
     try {
       const docRef = doc(db, "workers", workerId);
       const updateData = {
-        ...data,
+        ...preparedData,
         updatedAt: new Date().toISOString(),
       };
       await updateDoc(docRef, updateData);
     } catch {
       const current = getStoredDemoWorkers();
-      const updated = current.map(w => w.id === workerId ? { ...w, ...data, updatedAt: new Date().toISOString() } : w);
+      const updated = current.map(w => w.id === workerId ? { ...w, ...preparedData, updatedAt: new Date().toISOString() } : w);
       setStoredDemoWorkers(updated);
     }
   },

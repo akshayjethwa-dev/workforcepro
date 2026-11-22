@@ -1332,7 +1332,12 @@ export const magicLinkService = {
           description: `${workerName} attempted ${params.punchType} using a mock or spoofed location app on ${params.deviceModel}. The punch was blocked at the API layer.`,
           timestamp: serverTimestamp,
           details: {
+            isMockGps: true,
+            deviceModel: params.deviceModel,
+            deviceFingerprint: params.deviceFingerprint,
+            gpsAccuracyMeters: coords?.accuracy,
             punchLocation: coords ? { lat: coords.lat, lng: coords.lng } : undefined,
+            attestationSummary: `Mock Location Flag = TRUE on ${params.deviceModel}`,
             reason: `Mock location app detected (spoofed coordinates) on ${params.deviceModel} (fingerprint: ${params.deviceFingerprint})`
           } as any
         });

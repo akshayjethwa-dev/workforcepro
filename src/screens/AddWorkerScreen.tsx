@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ChevronLeft, ChevronRight, Save, User, Briefcase, IndianRupee, 
-  Camera, CheckCircle, Loader2, Clock, Calendar, Shield, AlertCircle, Lock
+  Camera, CheckCircle, CheckCircle2, Loader2, Clock, Calendar, Shield, AlertCircle, AlertTriangle, Lock, Info, SlidersHorizontal, Sparkles
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -18,15 +18,21 @@ import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
 import { EmployeeCapExceededError } from '../services/employeeCapGuard';
 import { INDIAN_STATES } from '../types/index';
 import {
+  buildOneNumberWageConfig,
+  calculateOneNumberSalaryBreakdown,
   DEFAULT_SCHEDULED_EMPLOYMENT,
   getDefaultZoneForState,
   getStateMinimumWage,
   getZonesForState,
+  ONE_NUMBER_MIN_WAGE_WARNING,
+  PF_LIABILITY_SHIFT_STATEMENT,
+  PF_STATUTORY_CEILING,
   rebalanceWageConfigTo50Percent,
   resolveWorkerDefaultState,
   resolveWorkerWorkLocation,
   SCHEDULED_EMPLOYMENT_CATEGORIES,
   SKILL_LEVEL_LABELS,
+  validateOneNumberSalaryOnServer,
   validateWorkerWageStructure,
 } from '../services/wageStructureValidationService';
 import { WageStructureValidatorCard } from '../components/WageStructureValidatorCard';
@@ -111,20 +117,29 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
   const [formData, setFormData] = useState<Partial<Worker>>({
     name: '', phone: '', aadhar: '', dob: '', gender: '' as any, 
-    category: 'Daily Wage', department: '', designation: '', 
+    category: 'Monthly', department: '', designation: '', 
     joinedDate: new Date().toISOString().split('T')[0],
     shiftId: 'default',
     branchId: 'default',
     weeklyOffOverride: undefined, 
     leaveBalances: undefined, // Default to undefined to use factory policy
     wageConfig: {
-      type: 'DAILY', amount: 0, dailyMultiplier: 26, workingDaysPerMonth: 26, overtimeEligible: false, 
+      type: 'MONTHLY',
+      salaryInputMode: 'ONE_NUMBER',
+      amount: 0,
+      basicPercentage: 50,
+      dailyMultiplier: 26,
+      workingDaysPerMonth: 26,
+      pfCapAtStatutoryCeiling: true,
+      pfWageCeiling: 15000,
+      pfQualifyingWage: 0,
+      overtimeEligible: false, 
       allowances: { travel: 0, food: 0, nightShift: 0 },
       monthlyBreakdown: { basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0 },
       dailyBreakdown: { basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0 }
     },
-    state: 'Maharashtra',
-    wageZone: getDefaultZoneForState('Maharashtra'),
+    state: 'Gujarat',
+    wageZone: getDefaultZoneForState('Gujarat'),
     scheduledEmployment: DEFAULT_SCHEDULED_EMPLOYMENT,
     skillCategory: 'UNSKILLED',
     isOnProbation: false,
@@ -140,7 +155,9 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   });
 
   const [useDailyBreakdown, setUseDailyBreakdown] = useState(false);
+  const [customizeSalaryStructure, setCustomizeSalaryStructure] = useState(false);
   const [acknowledgedNonCompliant, setAcknowledgedNonCompliant] = useState(false);
+  const [showLocationOverrides, setShowLocationOverrides] = useState(false);
 
   useBackButton(() => {
     if (currentStep > 0) {
@@ -184,34 +201,71 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
   useEffect(() => {
     if (initialData) {
         const hydrated = { ...initialData };
-        if (
-          (hydrated.wageConfig?.type === 'MONTHLY' || hydrated.wageType === 'MONTHLY') &&
-          !hydrated.wageConfig?.monthlyBreakdown
-        ) {
+        let shouldOpenCustomStructure = false;
+        if (hydrated.wageConfig?.type === 'MONTHLY' || hydrated.wageType === 'MONTHLY') {
           const audit = validateWorkerWageStructure(hydrated, { ignoreRevisionCutoff: true });
-          hydrated.wageConfig = {
-            ...(hydrated.wageConfig || {
+          const totalMonthly = audit.totalRemuneration || hydrated.wageConfig?.amount || hydrated.monthlySalary || 0;
+          const existingMb = hydrated.wageConfig?.monthlyBreakdown;
+          const expectedAutoBasic = totalMonthly > 0 ? Math.ceil(totalMonthly * 0.5) : 0;
+          const expectedAutoHra = totalMonthly > 0 ? Math.round(totalMonthly * 0.2) : 0;
+          const hasCustomSavedBreakdown =
+            hydrated.wageConfig?.salaryInputMode === 'CUSTOM_BREAKDOWN' ||
+            Boolean(hydrated.wageConfig?.acknowledgedNonCompliant) ||
+            Boolean(
+              existingMb &&
+              totalMonthly > 0 &&
+              (
+                (existingMb.travel || 0) > 0 ||
+                (existingMb.da || 0) > 0 ||
+                (existingMb.retainingAllowance || 0) > 0 ||
+                (existingMb.medical || 0) > 0 ||
+                Math.abs((existingMb.basic || 0) - expectedAutoBasic) > 1 ||
+                Math.abs((existingMb.hra || 0) - expectedAutoHra) > 1
+              )
+            );
+
+          if (hasCustomSavedBreakdown) {
+            shouldOpenCustomStructure = true;
+            const wageBase = (existingMb?.basic || audit.basicPay || 0) + (existingMb?.da || 0) + (existingMb?.retainingAllowance || 0);
+            const pfQualifyingWage = Math.min(wageBase, PF_STATUTORY_CEILING);
+            hydrated.wageConfig = {
+              ...(hydrated.wageConfig || {
+                type: 'MONTHLY',
+                amount: totalMonthly,
+                overtimeEligible: false,
+                allowances: { travel: 0, food: 0, nightShift: 0 },
+              }),
               type: 'MONTHLY',
-              amount: audit.totalRemuneration,
-              overtimeEligible: true,
-              allowances: { travel: 0, food: 0, nightShift: 0 },
-            }),
-            type: 'MONTHLY',
-            amount: audit.totalRemuneration,
-            basicPercentage: Math.round(audit.wageBasePercentage),
-            monthlyBreakdown: {
-              basic: audit.basicPay,
-              da: audit.da,
-              retainingAllowance: audit.retainingAllowance,
-              hra: audit.hra,
-              travel: audit.travelAllowance,
-              medical: audit.medicalAllowance,
-              others: audit.otherAllowances,
-              employerPf: audit.employerPf,
-              employerGratuity: audit.employerGratuity,
-            },
-          };
+              salaryInputMode: 'CUSTOM_BREAKDOWN',
+              amount: totalMonthly,
+              basicPercentage: totalMonthly > 0 ? Math.round((wageBase / totalMonthly) * 1000) / 10 : 0,
+              pfCapAtStatutoryCeiling: true,
+              pfWageCeiling: PF_STATUTORY_CEILING,
+              pfQualifyingWage,
+              monthlyBreakdown: {
+                basic: existingMb?.basic ?? audit.basicPay,
+                da: existingMb?.da ?? 0,
+                retainingAllowance: existingMb?.retainingAllowance ?? 0,
+                hra: existingMb?.hra ?? audit.hra,
+                travel: existingMb?.travel ?? audit.travelAllowance,
+                medical: existingMb?.medical ?? 0,
+                others: existingMb?.others ?? audit.otherAllowances,
+                employerPf: existingMb?.employerPf ?? audit.employerPf,
+                employerGratuity: existingMb?.employerGratuity ?? audit.employerGratuity,
+              },
+            };
+          } else {
+            const { wageConfig: builtConfig } = buildOneNumberWageConfig(totalMonthly, hydrated.wageConfig, {
+              state: hydrated.state,
+              wageZone: hydrated.wageZone,
+              skillCategory: hydrated.skillCategory,
+              scheduledEmployment: hydrated.scheduledEmployment,
+              branchId: hydrated.branchId,
+            });
+            hydrated.wageConfig = builtConfig;
+          }
         }
+        setCustomizeSalaryStructure(shouldOpenCustomStructure);
         setFormData(hydrated);
         setAcknowledgedNonCompliant(Boolean(hydrated.wageConfig?.acknowledgedNonCompliant));
         if (hydrated.wageConfig?.dailyBreakdown && (
@@ -289,36 +343,232 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     | 'employerPf'
     | 'employerGratuity';
 
-  const handleMonthlyWageChange = (field: BreakdownField, value: string) => {
-    const numVal = parseFloat(value) || 0;
+  const handleOneNumberSalaryChange = (rawValue: string) => {
+    const cleaned = rawValue.replace(/[^\d.]/g, '');
+    const numVal = cleaned === '' ? 0 : Math.max(0, Math.round(parseFloat(cleaned) || 0));
     setFormData(prev => {
-      const currentBreakdown = prev.wageConfig?.monthlyBreakdown || {
-        basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0
+      const { wageConfig } = buildOneNumberWageConfig(numVal, prev.wageConfig, {
+        state: prev.state || resolveWorkerDefaultState(prev, settings || undefined),
+        wageZone: prev.wageZone,
+        skillCategory: prev.skillCategory || 'UNSKILLED',
+        scheduledEmployment: prev.scheduledEmployment,
+        orgSettings: settings || undefined,
+        branchId: prev.branchId,
+      });
+      return {
+        ...prev,
+        monthlySalary: numVal,
+        wageType: 'MONTHLY',
+        wageConfig: {
+          ...wageConfig,
+          salaryInputMode: customizeSalaryStructure ? 'CUSTOM_BREAKDOWN' : 'ONE_NUMBER',
+        },
       };
+    });
+    setAcknowledgedNonCompliant(false);
+    clearFieldError('monthlySalary');
+    clearFieldError('pfLiabilityAck');
+  };
+
+  const handleToggleCustomizeStructure = () => {
+    const nextEnabled = !customizeSalaryStructure;
+    setCustomizeSalaryStructure(nextEnabled);
+    clearFieldError('pfLiabilityAck');
+
+    setFormData(prev => {
+      const currentAmount = prev.wageConfig?.amount || 0;
+      if (nextEnabled) {
+        const calc = calculateOneNumberSalaryBreakdown(currentAmount, {
+          state: prev.state || resolveWorkerDefaultState(prev, settings || undefined),
+          wageZone: prev.wageZone,
+          skillCategory: prev.skillCategory || 'UNSKILLED',
+          scheduledEmployment: prev.scheduledEmployment,
+          orgSettings: settings || undefined,
+          branchId: prev.branchId,
+        });
+        const existingMb = prev.wageConfig?.monthlyBreakdown;
+        const hasPopulatedBreakdown =
+          existingMb &&
+          (existingMb.basic || 0) +
+            (existingMb.da || 0) +
+            (existingMb.retainingAllowance || 0) +
+            (existingMb.hra || 0) +
+            (existingMb.travel || 0) +
+            (existingMb.medical || 0) +
+            (existingMb.others || 0) >
+            0;
+        const seededBreakdown = hasPopulatedBreakdown
+          ? {
+              basic: existingMb!.basic || 0,
+              da: existingMb!.da || 0,
+              retainingAllowance: existingMb!.retainingAllowance || 0,
+              hra: existingMb!.hra || 0,
+              travel: existingMb!.travel || 0,
+              medical: existingMb!.medical || 0,
+              others: existingMb!.others || 0,
+              employerPf: existingMb!.employerPf ?? (calc.employerEpfMonthly + calc.employerEpsMonthly),
+              employerGratuity: existingMb!.employerGratuity ?? calc.estimatedGratuityMonthly,
+            }
+          : {
+              basic: calc.basic,
+              da: 0,
+              retainingAllowance: 0,
+              hra: calc.hra,
+              travel: 0,
+              medical: 0,
+              others: calc.allowances,
+              employerPf: calc.employerEpfMonthly + calc.employerEpsMonthly,
+              employerGratuity: calc.estimatedGratuityMonthly,
+            };
+        const total =
+          seededBreakdown.basic +
+          seededBreakdown.da +
+          seededBreakdown.retainingAllowance +
+          seededBreakdown.hra +
+          seededBreakdown.travel +
+          seededBreakdown.medical +
+          seededBreakdown.others;
+        const wageBase =
+          seededBreakdown.basic + seededBreakdown.da + seededBreakdown.retainingAllowance;
+        return {
+          ...prev,
+          monthlySalary: total,
+          wageConfig: {
+            ...prev.wageConfig!,
+            type: 'MONTHLY',
+            salaryInputMode: 'CUSTOM_BREAKDOWN',
+            amount: total,
+            basicPercentage: total > 0 ? Math.round((wageBase / total) * 1000) / 10 : 0,
+            pfCapAtStatutoryCeiling: true,
+            pfWageCeiling: PF_STATUTORY_CEILING,
+            pfQualifyingWage: Math.min(wageBase, PF_STATUTORY_CEILING),
+            monthlyBreakdown: seededBreakdown,
+          },
+        };
+      } else {
+        const { wageConfig } = buildOneNumberWageConfig(currentAmount, prev.wageConfig, {
+          state: prev.state || resolveWorkerDefaultState(prev, settings || undefined),
+          wageZone: prev.wageZone,
+          skillCategory: prev.skillCategory || 'UNSKILLED',
+          scheduledEmployment: prev.scheduledEmployment,
+          orgSettings: settings || undefined,
+          branchId: prev.branchId,
+        });
+        return {
+          ...prev,
+          monthlySalary: wageConfig.amount,
+          wageConfig,
+        };
+      }
+    });
+
+    if (!nextEnabled) {
+      setAcknowledgedNonCompliant(false);
+    }
+  };
+
+  const handleCustomMonthlyBreakdownChange = (
+    field: 'basic' | 'hra' | 'travel' | 'others',
+    rawValue: string
+  ) => {
+    const cleaned = rawValue.replace(/[^\d.]/g, '');
+    const numVal = cleaned === '' ? 0 : Math.max(0, Math.round(parseFloat(cleaned) || 0));
+
+    const prevBreakdown = formData.wageConfig?.monthlyBreakdown || {
+      basic: 0,
+      da: 0,
+      retainingAllowance: 0,
+      hra: 0,
+      travel: 0,
+      medical: 0,
+      others: 0,
+      employerPf: 0,
+      employerGratuity: 0,
+    };
+    const nextBreakdown = { ...prevBreakdown, [field]: numVal };
+    const nextWageBase =
+      (nextBreakdown.basic || 0) +
+      (nextBreakdown.da || 0) +
+      (nextBreakdown.retainingAllowance || 0);
+    const nextTotal =
+      nextWageBase +
+      (nextBreakdown.hra || 0) +
+      (nextBreakdown.travel || 0) +
+      (nextBreakdown.medical || 0) +
+      (nextBreakdown.others || 0);
+    const isNowCompliant = nextTotal === 0 || nextWageBase >= nextTotal * 0.5;
+
+    setFormData(prev => {
+      const currentBreakdown = prev.wageConfig?.monthlyBreakdown || prevBreakdown;
       const updatedBreakdown = { ...currentBreakdown, [field]: numVal };
-      const newTotalRemuneration =
-        (updatedBreakdown.basic || 0) +
-        (updatedBreakdown.da || 0) +
-        (updatedBreakdown.retainingAllowance || 0) +
-        (updatedBreakdown.hra || 0) +
-        (updatedBreakdown.travel || 0) +
-        (updatedBreakdown.medical || 0) +
-        (updatedBreakdown.others || 0);
       const wageBase =
         (updatedBreakdown.basic || 0) +
         (updatedBreakdown.da || 0) +
         (updatedBreakdown.retainingAllowance || 0);
+      const total =
+        wageBase +
+        (updatedBreakdown.hra || 0) +
+        (updatedBreakdown.travel || 0) +
+        (updatedBreakdown.medical || 0) +
+        (updatedBreakdown.others || 0);
+      const pfQualifyingWage = Math.min(wageBase, PF_STATUTORY_CEILING);
+      const employeePf = Math.round(pfQualifyingWage * 0.12);
+      const employerGratuity = Math.round((wageBase * 15) / 26 / 12);
+      const compliant = total === 0 || wageBase >= total * 0.5;
 
       return {
         ...prev,
+        monthlySalary: total,
+        wageType: 'MONTHLY',
         wageConfig: {
           ...prev.wageConfig!,
-          monthlyBreakdown: updatedBreakdown,
-          amount: newTotalRemuneration,
-          basicPercentage: newTotalRemuneration > 0 ? Math.round((wageBase / newTotalRemuneration) * 100) : 0
-        }
+          type: 'MONTHLY',
+          salaryInputMode: 'CUSTOM_BREAKDOWN',
+          amount: total,
+          basicPercentage: total > 0 ? Math.round((wageBase / total) * 1000) / 10 : 0,
+          pfCapAtStatutoryCeiling: true,
+          pfWageCeiling: PF_STATUTORY_CEILING,
+          pfQualifyingWage,
+          monthlyBreakdown: {
+            ...updatedBreakdown,
+            employerPf: employeePf,
+            employerGratuity,
+          },
+          acknowledgedNonCompliant: compliant ? false : prev.wageConfig?.acknowledgedNonCompliant,
+        },
       };
     });
+    if (isNowCompliant) {
+      setAcknowledgedNonCompliant(false);
+    }
+    clearFieldError('monthlySalary');
+    clearFieldError('pfLiabilityAck');
+  };
+
+  const handleAutoFixCustomTo50Percent = () => {
+    const rebalanced = rebalanceWageConfigTo50Percent(
+      { ...formData, state: activeWorkerState },
+      settings || undefined
+    );
+    const wageBase =
+      (rebalanced.monthlyBreakdown?.basic || 0) +
+      (rebalanced.monthlyBreakdown?.da || 0) +
+      (rebalanced.monthlyBreakdown?.retainingAllowance || 0);
+    setFormData(prev => ({
+      ...prev,
+      monthlySalary: rebalanced.amount,
+      wageConfig: {
+        ...rebalanced,
+        salaryInputMode: 'CUSTOM_BREAKDOWN',
+        pfCapAtStatutoryCeiling: true,
+        pfWageCeiling: PF_STATUTORY_CEILING,
+        pfQualifyingWage: Math.min(wageBase, PF_STATUTORY_CEILING),
+        acknowledgedNonCompliant: false,
+      },
+    }));
+    setAcknowledgedNonCompliant(false);
+    clearFieldError('pfLiabilityAck');
+    toast.success('Rebalanced Basic to 50% while keeping total salary unchanged.');
   };
 
   const handleDailyBreakdownChange = (field: BreakdownField, value: string) => {
@@ -353,13 +603,55 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     });
   };
 
+  const activeWorkerState = formData.state || resolveWorkerDefaultState(formData, settings || undefined);
+
+  const oneNumberCalc = calculateOneNumberSalaryBreakdown(
+    formData.wageConfig?.type === 'MONTHLY' ? (formData.wageConfig?.amount || 0) : 0,
+    {
+      state: activeWorkerState,
+      wageZone: formData.wageZone,
+      skillCategory: formData.skillCategory || 'UNSKILLED',
+      scheduledEmployment: formData.scheduledEmployment,
+      orgSettings: settings || undefined,
+      branchId: formData.branchId,
+    }
+  );
+
   const liveWageAudit = validateWorkerWageStructure(
     {
       ...formData,
-      state: formData.state || resolveWorkerDefaultState(formData, settings || undefined),
+      state: activeWorkerState,
     },
     { ignoreRevisionCutoff: true, orgSettings: settings || undefined }
   );
+
+  const isMonthlyWageType = formData.wageConfig?.type === 'MONTHLY';
+  const isCustomMonthlyMode = isMonthlyWageType && customizeSalaryStructure;
+  const customMonthlyTotal = formData.wageConfig?.amount || 0;
+  const customMb = formData.wageConfig?.monthlyBreakdown || {
+    basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0
+  };
+  const customWageBase = (customMb.basic || 0) + (customMb.da || 0) + (customMb.retainingAllowance || 0);
+  const customPfQualifyingWage = Math.min(customWageBase, PF_STATUTORY_CEILING);
+  const customEmployeePfMonthly = Math.round(customPfQualifyingWage * 0.12);
+  const customEmployerEpsMonthly = Math.round(customPfQualifyingWage * 0.0833);
+  const customEmployerEpfMonthly = Math.max(0, customEmployeePfMonthly - customEmployerEpsMonthly);
+  const customEmployerPfTotalMonthly =
+    customEmployerEpfMonthly +
+    customEmployerEpsMonthly +
+    Math.round(customPfQualifyingWage * 0.005) +
+    Math.round(customPfQualifyingWage * 0.005);
+
+  const isBelowMinWageBlocked = isMonthlyWageType
+    ? oneNumberCalc.isBelowMinimumWage
+    : liveWageAudit.isMinimumWageViolation;
+
+  const isFiftyPercentBreached =
+    isCustomMonthlyMode &&
+    customMonthlyTotal > 0 &&
+    liveWageAudit.isFiftyPercentNonCompliant;
+
+  const needsPfLiabilityAck = isFiftyPercentBreached && !acknowledgedNonCompliant;
 
   const validateStep = (step: number): boolean => {
     const errors: Record<string, string> = {};
@@ -393,15 +685,18 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
     if (step === 2) {
       if (formData.wageConfig?.type === 'MONTHLY') {
-        if (!formData.wageConfig?.monthlyBreakdown?.basic || formData.wageConfig.monthlyBreakdown.basic <= 0) {
-          errors.basicPay = 'Basic Pay is required for Monthly Wages to calculate PF accurately.';
-        }
         if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) {
-          errors.basicPay = errors.basicPay || 'Gross monthly salary must be greater than ₹0.';
+          errors.monthlySalary = 'Please enter the Monthly Salary (₹).';
+        } else if (oneNumberCalc.isBelowMinimumWage) {
+          errors.monthlySalary = ONE_NUMBER_MIN_WAGE_WARNING;
+        } else if (needsPfLiabilityAck) {
+          errors.pfLiabilityAck = `Please check "${PF_LIABILITY_SHIFT_STATEMENT}" before saving.`;
         }
       } else {
         if (!formData.wageConfig?.amount || formData.wageConfig.amount <= 0) {
           errors.wageAmount = 'Daily Rate Amount is required and must be greater than ₹0.';
+        } else if (liveWageAudit.isMinimumWageViolation) {
+          errors.wageAmount = ONE_NUMBER_MIN_WAGE_WARNING;
         }
       }
       if (
@@ -434,9 +729,21 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
     }
   };
 
-  const handleSave = async () => {
-    if (capturedImages[0] !== "EXISTING_DATA" && capturedImages.length < 5) {
-      toast.warning("All 5 face orientation scans are recommended for biometric accuracy.");
+  const handleSave = async (options: { skipFaceRequirement?: boolean } = {}) => {
+    // Enforce minimum wage & required wage validation before saving from any step
+    if (!validateStep(2)) {
+      if (currentStep !== 2) setCurrentStep(2);
+      return;
+    }
+
+    if (
+      !options.skipFaceRequirement &&
+      currentStep === 4 &&
+      capturedImages[0] !== "EXISTING_DATA" &&
+      capturedImages.length > 0 &&
+      capturedImages.length < 5
+    ) {
+      toast.warning("Capture all 5 face angles or click 'Skip Face Scan & Save' to finish now.");
       return;
     }
 
@@ -496,22 +803,138 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
       const isMonthlyWage = formData.wageConfig?.type === 'MONTHLY';
       const wageAmount = (formData.wageConfig?.amount && formData.wageConfig.amount > 0) 
         ? formData.wageConfig.amount 
-        : (isMonthlyWage ? 25000 : 650);
+        : 0;
+
+      let resolvedWageConfig = formData.wageConfig;
+
+      if (isMonthlyWage && !customizeSalaryStructure) {
+        // Backend validation & automatic ₹15,000 PF statutory ceiling calculation
+        const serverValidated = await validateOneNumberSalaryOnServer(
+          profile.tenantId,
+          wageAmount,
+          {
+            state: activeWorkerState,
+            wageZone: formData.wageZone,
+            skillCategory: formData.skillCategory || 'UNSKILLED',
+            scheduledEmployment: formData.scheduledEmployment,
+            orgSettings: settings || undefined,
+            branchId: formData.branchId,
+          }
+        );
+
+        if (serverValidated.isBelowMinimumWage) {
+          toast.error(ONE_NUMBER_MIN_WAGE_WARNING);
+          setSaving(false);
+          return;
+        }
+
+        const { wageConfig: canonicalMonthlyConfig } = buildOneNumberWageConfig(
+          serverValidated.monthlySalary,
+          formData.wageConfig,
+          {
+            state: serverValidated.state,
+            wageZone: serverValidated.wageZone,
+            skillCategory: serverValidated.skillCategory,
+            scheduledEmployment: serverValidated.scheduledEmployment,
+            orgSettings: settings || undefined,
+            branchId: formData.branchId,
+          }
+        );
+        resolvedWageConfig = {
+          ...canonicalMonthlyConfig,
+          salaryInputMode: 'ONE_NUMBER',
+          pfCapAtStatutoryCeiling: true,
+          pfWageCeiling: serverValidated.pfStatutoryCeiling,
+          pfQualifyingWage: serverValidated.pfQualifyingWage,
+          monthlyBreakdown: {
+            basic: serverValidated.basic,
+            da: 0,
+            retainingAllowance: 0,
+            hra: serverValidated.hra,
+            travel: 0,
+            medical: 0,
+            others: serverValidated.allowances,
+            employerPf: serverValidated.employerEpfMonthly + serverValidated.employerEpsMonthly,
+            employerGratuity: serverValidated.estimatedGratuityMonthly,
+          },
+        };
+      } else if (isMonthlyWage && customizeSalaryStructure) {
+        const mb = formData.wageConfig?.monthlyBreakdown || {
+          basic: 0, da: 0, retainingAllowance: 0, hra: 0, travel: 0, medical: 0, others: 0, employerPf: 0, employerGratuity: 0
+        };
+        const wageBase = (mb.basic || 0) + (mb.da || 0) + (mb.retainingAllowance || 0);
+        const computedTotal =
+          wageBase +
+          (mb.hra || 0) +
+          (mb.travel || 0) +
+          (mb.medical || 0) +
+          (mb.others || 0);
+        const pfQualifyingWage = Math.min(wageBase, PF_STATUTORY_CEILING);
+        const employerPfMonthly = Math.round(pfQualifyingWage * 0.12);
+        const employerGratuityMonthly = Math.round((wageBase * 15) / 26 / 12);
+
+        resolvedWageConfig = {
+          ...(formData.wageConfig || {
+            type: 'MONTHLY',
+            amount: computedTotal,
+            overtimeEligible: false,
+            allowances: { travel: 0, food: 0, nightShift: 0 },
+          }),
+          type: 'MONTHLY',
+          salaryInputMode: 'CUSTOM_BREAKDOWN',
+          amount: computedTotal,
+          basicPercentage: computedTotal > 0 ? Math.round((wageBase / computedTotal) * 1000) / 10 : 0,
+          pfCapAtStatutoryCeiling: true,
+          pfWageCeiling: PF_STATUTORY_CEILING,
+          pfQualifyingWage,
+          monthlyBreakdown: {
+            basic: mb.basic || 0,
+            da: mb.da || 0,
+            retainingAllowance: mb.retainingAllowance || 0,
+            hra: mb.hra || 0,
+            travel: mb.travel || 0,
+            medical: mb.medical || 0,
+            others: mb.others || 0,
+            employerPf: employerPfMonthly,
+            employerGratuity: employerGratuityMonthly,
+          },
+        };
+      }
+
+      const finalWageAmount = isMonthlyWage
+        ? (resolvedWageConfig?.amount ?? wageAmount)
+        : wageAmount;
 
       const finalAudit = validateWorkerWageStructure(
         {
           ...formData,
-          state: formData.state || resolveWorkerDefaultState(formData, settings || undefined),
+          state: activeWorkerState,
           wageConfig: {
-            ...(formData.wageConfig || {}),
+            ...(resolvedWageConfig || {}),
             type: isMonthlyWage ? 'MONTHLY' : 'DAILY',
-            amount: wageAmount,
-            overtimeEligible: formData.wageConfig?.overtimeEligible ?? false,
-            allowances: formData.wageConfig?.allowances || { travel: 0, food: 0, nightShift: 0 },
+            amount: finalWageAmount,
+            overtimeEligible: resolvedWageConfig?.overtimeEligible ?? false,
+            allowances: resolvedWageConfig?.allowances || { travel: 0, food: 0, nightShift: 0 },
           },
         },
         { ignoreRevisionCutoff: true, orgSettings: settings || undefined }
       );
+
+      if (finalAudit.isMinimumWageViolation) {
+        toast.error(ONE_NUMBER_MIN_WAGE_WARNING);
+        setSaving(false);
+        return;
+      }
+
+      if (isMonthlyWage && customizeSalaryStructure && finalAudit.isFiftyPercentNonCompliant && !acknowledgedNonCompliant) {
+        setFieldErrors(prev => ({
+          ...prev,
+          pfLiabilityAck: `Please check "${PF_LIABILITY_SHIFT_STATEMENT}" before saving.`,
+        }));
+        toast.error(`Please confirm: "${PF_LIABILITY_SHIFT_STATEMENT}"`);
+        setSaving(false);
+        return;
+      }
 
       const nextStatus: Worker['status'] = formData.status || 'ACTIVE';
       const isSeparated =
@@ -522,6 +945,8 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         isSeparated && !formData.dateOfExit
           ? new Date().toISOString().split('T')[0]
           : formData.dateOfExit || undefined;
+
+      const hasLiabilityOverride = Boolean(finalAudit.isFiftyPercentNonCompliant && acknowledgedNonCompliant);
 
       const workerData: any = {
         ...formData,
@@ -545,20 +970,25 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
         ptExemptionStatus: formData.ptExempt ? 'PT_EXEMPT' : 'NONE',
         ptExemptionReason: formData.ptExempt ? 'MULTIPLE_EMPLOYER' : undefined,
         wageType: isMonthlyWage ? 'MONTHLY' : 'DAILY',
-        dailyWage: !isMonthlyWage ? wageAmount : undefined,
-        monthlySalary: isMonthlyWage ? wageAmount : undefined,
+        dailyWage: !isMonthlyWage ? finalWageAmount : undefined,
+        monthlySalary: isMonthlyWage ? finalWageAmount : undefined,
         wageConfig: {
-          ...(formData.wageConfig || {}),
+          ...(resolvedWageConfig || {}),
           type: isMonthlyWage ? 'MONTHLY' : 'DAILY',
-          amount: wageAmount,
-          dailyMultiplier: !isMonthlyWage ? (formData.wageConfig?.dailyMultiplier || 26) : undefined,
-          workingDaysPerMonth: !isMonthlyWage ? (formData.wageConfig?.dailyMultiplier || formData.wageConfig?.workingDaysPerMonth || 26) : (formData.wageConfig?.workingDaysPerMonth || 26),
+          amount: finalWageAmount,
+          ...(!isMonthlyWage ? { dailyMultiplier: resolvedWageConfig?.dailyMultiplier || 26 } : {}),
+          workingDaysPerMonth: !isMonthlyWage ? (resolvedWageConfig?.dailyMultiplier || resolvedWageConfig?.workingDaysPerMonth || 26) : (resolvedWageConfig?.workingDaysPerMonth || 26),
           complianceStatus: finalAudit.status,
           complianceFlags: finalAudit.complianceFlags,
           wageAuditSummary: finalAudit,
-          acknowledgedNonCompliant: finalAudit.isFiftyPercentNonCompliant
-            ? acknowledgedNonCompliant || true
-            : false,
+          acknowledgedNonCompliant: hasLiabilityOverride,
+          ...(hasLiabilityOverride
+            ? {
+                pfComplianceLiabilityAcknowledgedAt: new Date().toISOString(),
+                pfComplianceLiabilityAcknowledgedBy: profile.email || profile.uid || 'admin',
+                pfComplianceLiabilityStatement: PF_LIABILITY_SHIFT_STATEMENT,
+              }
+            : {}),
         }
       };
 
@@ -1092,138 +1522,719 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
         {/* STEP 3: WAGE */}
         {currentStep === 2 && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h2 className="text-lg font-bold text-gray-800 mb-2">Wage Configuration &amp; 50% Rule Validation</h2>
-            <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Salary &amp; Compliance</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Enter the total monthly salary — Basic, HRA, Allowances &amp; statutory PF ceiling are calculated automatically.
+                </p>
+              </div>
+            </div>
+
+            {/* Pay Type Selector — Monthly Salary primary */}
+            <div className="grid grid-cols-2 gap-3">
                <button 
                  type="button"
-                 onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'DAILY'}}))}
-                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 cursor-pointer ${
-                    formData.wageConfig?.type === 'DAILY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
+                 onClick={() => {
+                   if (formData.wageConfig?.type === 'MONTHLY') return;
+                   setFieldErrors({});
+                   setCustomizeSalaryStructure(false);
+                   setAcknowledgedNonCompliant(false);
+                   setFormData(prev => {
+                     const { wageConfig } = buildOneNumberWageConfig(0, prev.wageConfig, {
+                       state: activeWorkerState,
+                       wageZone: prev.wageZone,
+                       skillCategory: prev.skillCategory || 'UNSKILLED',
+                       scheduledEmployment: prev.scheduledEmployment,
+                       orgSettings: settings || undefined,
+                       branchId: prev.branchId,
+                     });
+                     return { ...prev, wageConfig };
+                   });
+                 }}
+                 className={`p-3.5 min-h-16 rounded-xl border-2 transition-all flex items-center justify-center gap-2.5 cursor-pointer ${
+                    formData.wageConfig?.type === 'MONTHLY'
+                      ? 'border-blue-600 bg-blue-50/80 text-blue-700 shadow-xs'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                  }`}
                >
-                 <Clock size={24} />
-                 <span className="font-bold text-sm">Daily Wages</span>
-               </button>
-               <button 
-                 type="button"
-                 onClick={() => setFormData(prev => ({...prev, wageConfig: {...prev.wageConfig!, type: 'MONTHLY'}}))}
-                 className={`p-4 min-h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center space-y-2 cursor-pointer ${
-                    formData.wageConfig?.type === 'MONTHLY' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500'
-                 }`}
-               >
-                 <Calendar size={24} />
+                 <Calendar size={20} />
                  <span className="font-bold text-sm">Monthly Salary</span>
                </button>
+               <button 
+                 type="button"
+                 onClick={() => {
+                   if (formData.wageConfig?.type === 'DAILY') return;
+                   setFieldErrors({});
+                   setCustomizeSalaryStructure(false);
+                   setAcknowledgedNonCompliant(false);
+                   setFormData(prev => ({
+                     ...prev,
+                     wageConfig: {
+                       ...prev.wageConfig!,
+                       type: 'DAILY',
+                       salaryInputMode: 'CUSTOM_BREAKDOWN',
+                       amount: 0,
+                     }
+                   }));
+                 }}
+                 className={`p-3.5 min-h-16 rounded-xl border-2 transition-all flex items-center justify-center gap-2.5 cursor-pointer ${
+                    formData.wageConfig?.type === 'DAILY'
+                      ? 'border-blue-600 bg-blue-50/80 text-blue-700 shadow-xs'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                 }`}
+               >
+                 <Clock size={20} />
+                 <span className="font-bold text-sm">Daily Wages</span>
+               </button>
             </div>
 
-            {/* Work State, Zone, Skill, Scheduled Employment, Revision Date & Probation */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Work State (Employee Location)</label>
-                  <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
-                    value={formData.state || resolveWorkerDefaultState(formData, settings || undefined)}
-                    onChange={e => {
-                      const nextSt = e.target.value;
-                      setFormData({
-                        ...formData,
-                        state: nextSt,
-                        wageZone: getDefaultZoneForState(nextSt),
-                      });
-                    }}
-                  >
-                    {INDIAN_STATES.map(st => (
-                      <option key={st} value={st}>{st}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Minimum Wage Zone</label>
-                  <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
-                    value={formData.wageZone || getDefaultZoneForState(formData.state || resolveWorkerDefaultState(formData, settings || undefined))}
-                    onChange={e => setFormData({ ...formData, wageZone: e.target.value })}
-                  >
-                    {getZonesForState(formData.state || resolveWorkerDefaultState(formData, settings || undefined)).map(z => (
-                      <option key={z} value={z}>{z}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Skill Category</label>
-                  <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
-                    value={formData.skillCategory || 'UNSKILLED'}
-                    onChange={e => setFormData({ ...formData, skillCategory: e.target.value as WorkerSkillCategory })}
-                  >
-                    {(Object.keys(SKILL_LEVEL_LABELS) as WorkerSkillCategory[]).map(sk => (
-                      <option key={sk} value={sk}>{SKILL_LEVEL_LABELS[sk]}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Scheduled Employment</label>
-                  <select
-                    className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
-                    value={formData.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
-                    onChange={e => setFormData({ ...formData, scheduledEmployment: e.target.value })}
-                  >
-                    {SCHEDULED_EMPLOYMENT_CATEGORIES.map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Structure Effective Date</label>
-                  <ModalDatePicker
-                    fieldName="salaryRevisionDate"
-                    label="Structure Effective Date"
-                    placeholder="Select effective date"
-                    value={formData.salaryRevisionDate || ''}
-                    className="mt-1"
-                    onChange={iso => setFormData({ ...formData, salaryRevisionDate: iso })}
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
-                <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(formData.isOnProbation)}
-                    onChange={e => setFormData({ ...formData, isOnProbation: e.target.checked })}
-                    className="w-4 h-4 accent-slate-900 rounded"
-                  />
-                  <span>Employee on Probation</span>
-                  <span className="text-[11px] font-normal text-slate-500">(No minimum wage exemption)</span>
-                </label>
-
-                {(() => {
-                  const st = formData.state || resolveWorkerDefaultState(formData, settings || undefined);
-                  const minInfo = getStateMinimumWage(
-                    st,
-                    formData.skillCategory || 'UNSKILLED',
-                    formData.wageZone,
-                    formData.scheduledEmployment,
-                    undefined,
-                    settings?.compliance?.minimumWageRevisions
-                  );
-                  return (
-                    <span className="text-[11px] text-slate-700 font-mono tabular-nums font-bold">
-                      Floor: ₹{minInfo.monthlyFloor.toLocaleString('en-IN')}/mo (₹{minInfo.dailyFloor}/day) · Notif. {minInfo.entry.notificationDate}
+            {formData.wageConfig?.type === 'MONTHLY' ? (
+              <div className="space-y-4 animate-in fade-in">
+                {/* ONE-NUMBER MONTHLY SALARY INPUT CARD */}
+                <div
+                  data-field="monthlySalary"
+                  className={`p-5 sm:p-6 rounded-2xl border-2 transition-colors ${
+                    oneNumberCalc.isBelowMinimumWage || fieldErrors.monthlySalary
+                      ? 'bg-rose-50/40 border-rose-300'
+                      : isFiftyPercentBreached
+                      ? 'bg-amber-50/40 border-amber-300'
+                      : oneNumberCalc.monthlySalary > 0
+                      ? 'bg-emerald-50/30 border-emerald-200'
+                      : 'bg-slate-50/70 border-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label
+                        htmlFor="worker-monthly-salary"
+                        className="text-sm font-extrabold text-slate-900 tracking-tight"
+                      >
+                        Monthly Salary (₹) *
+                      </label>
+                      {customizeSalaryStructure && (
+                        <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
+                          Auto-summed from custom breakdown
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                      {oneNumberCalc.state} min. wage: ₹{oneNumberCalc.stateMinimumWageMonthly.toLocaleString('en-IN')}/mo
                     </span>
-                  );
-                })()}
-              </div>
-            </div>
+                  </div>
 
-            {formData.wageConfig?.type === 'DAILY' ? (
-              <div className="mt-4 space-y-4 animate-in fade-in">
+                  <div className="relative">
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-bold text-slate-400 select-none"
+                    >
+                      ₹
+                    </span>
+                    <input
+                      id="worker-monthly-salary"
+                      type="number"
+                      inputMode="numeric"
+                      enterKeyHint="done"
+                      min={0}
+                      step={100}
+                      autoFocus={!customizeSalaryStructure}
+                      aria-invalid={Boolean(fieldErrors.monthlySalary || oneNumberCalc.isBelowMinimumWage)}
+                      aria-describedby={
+                        fieldErrors.monthlySalary
+                          ? 'worker-monthly-salary-error'
+                          : oneNumberCalc.isBelowMinimumWage
+                          ? 'worker-min-wage-warning'
+                          : 'worker-salary-summary'
+                      }
+                      className={`w-full pl-11 pr-4 py-4 border-2 rounded-xl font-mono tabular-nums font-extrabold text-2xl sm:text-3xl outline-none focus:ring-4 transition-all bg-white ${
+                        oneNumberCalc.isBelowMinimumWage || fieldErrors.monthlySalary
+                          ? 'border-rose-400 text-rose-900 focus:border-rose-500 focus:ring-rose-500/15'
+                          : isFiftyPercentBreached
+                          ? 'border-amber-400 text-slate-900 focus:border-amber-500 focus:ring-amber-500/15'
+                          : 'border-slate-200 text-slate-900 focus:border-blue-600 focus:ring-blue-600/15'
+                      }`}
+                      placeholder="e.g. 15000"
+                      value={formData.wageConfig?.amount || ''}
+                      onChange={e => handleOneNumberSalaryChange(e.target.value)}
+                    />
+                  </div>
+
+                  {/* LIVE AUTO-CALCULATED SIMPLIFIED SUMMARY */}
+                  {!customizeSalaryStructure && oneNumberCalc.monthlySalary > 0 && (
+                    <div
+                      id="worker-salary-summary"
+                      className="mt-4 px-4 py-3 rounded-xl bg-white border border-slate-200/90 shadow-2xs"
+                    >
+                      <p className="text-sm sm:text-[15px] font-semibold text-slate-800 font-mono tabular-nums leading-relaxed">
+                        Basic: <strong className="text-slate-950">₹{oneNumberCalc.basic.toLocaleString('en-IN')}</strong>
+                        <span className="mx-2 text-slate-300">|</span>
+                        HRA: <strong className="text-slate-950">₹{oneNumberCalc.hra.toLocaleString('en-IN')}</strong>
+                        <span className="mx-2 text-slate-300">|</span>
+                        Allowances: <strong className="text-slate-950">₹{oneNumberCalc.allowances.toLocaleString('en-IN')}</strong>
+                      </p>
+                    </div>
+                  )}
+
+                  {/* ADVANCED MODE TOGGLE: "Customize Salary Structure" */}
+                  <div className="mt-4 pt-3.5 border-t border-slate-200/80">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                          customizeSalaryStructure
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-200/80 text-slate-600'
+                        }`}>
+                          <SlidersHorizontal size={15} />
+                        </div>
+                        <div className="min-w-0">
+                          <span
+                            id="customize-salary-toggle-label"
+                            className="text-sm font-bold text-slate-900 block"
+                          >
+                            Customize Salary Structure
+                          </span>
+                          <span className="text-xs text-slate-500 block">
+                            Edit Basic, HRA, Conveyance &amp; Special Allowance to match existing salary slips
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={customizeSalaryStructure}
+                        aria-labelledby="customize-salary-toggle-label"
+                        onClick={handleToggleCustomizeStructure}
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 cursor-pointer ${
+                          customizeSalaryStructure ? 'bg-blue-600' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-xs transition-transform ${
+                            customizeSalaryStructure ? 'translate-x-5.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* EXPANDED ADVANCED MODE BREAKDOWN INPUTS */}
+                    {customizeSalaryStructure && (
+                      <div
+                        id="worker-salary-summary"
+                        className="mt-4 p-4 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-4 animate-in fade-in slide-in-from-top-2 duration-200"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label
+                                htmlFor="worker-custom-basic"
+                                className="text-xs font-bold text-slate-700"
+                              >
+                                Basic (₹)
+                              </label>
+                              <span
+                                className={`text-[11px] font-mono tabular-nums font-bold ${
+                                  customMonthlyTotal > 0 && liveWageAudit.wageBasePercentage < 50
+                                    ? 'text-rose-600'
+                                    : 'text-emerald-700'
+                                }`}
+                              >
+                                {customMonthlyTotal > 0 ? `${liveWageAudit.wageBasePercentage}%` : '0%'}
+                              </span>
+                            </div>
+                            <input
+                              id="worker-custom-basic"
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step={100}
+                              className={`w-full px-3.5 py-2.5 border rounded-xl font-mono tabular-nums font-bold text-base outline-none focus:ring-2 min-h-11 transition-colors ${
+                                isFiftyPercentBreached
+                                  ? 'border-amber-400 bg-amber-50/30 text-slate-900 focus:ring-amber-500'
+                                  : 'border-slate-200 bg-white text-slate-900 focus:ring-blue-500'
+                              }`}
+                              placeholder="0"
+                              value={customMb.basic || ''}
+                              onChange={e => handleCustomMonthlyBreakdownChange('basic', e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label
+                                htmlFor="worker-custom-hra"
+                                className="text-xs font-bold text-slate-700"
+                              >
+                                HRA (₹)
+                              </label>
+                              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                                {customMonthlyTotal > 0 ? `${Math.round(((customMb.hra || 0) / customMonthlyTotal) * 1000) / 10}%` : '0%'}
+                              </span>
+                            </div>
+                            <input
+                              id="worker-custom-hra"
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step={100}
+                              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl font-mono tabular-nums font-bold text-base text-slate-900 bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                              placeholder="0"
+                              value={customMb.hra || ''}
+                              onChange={e => handleCustomMonthlyBreakdownChange('hra', e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label
+                                htmlFor="worker-custom-conveyance"
+                                className="text-xs font-bold text-slate-700"
+                              >
+                                Conveyance (₹)
+                              </label>
+                              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                                {customMonthlyTotal > 0 ? `${Math.round(((customMb.travel || 0) / customMonthlyTotal) * 1000) / 10}%` : '0%'}
+                              </span>
+                            </div>
+                            <input
+                              id="worker-custom-conveyance"
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step={100}
+                              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl font-mono tabular-nums font-bold text-base text-slate-900 bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                              placeholder="0"
+                              value={customMb.travel || ''}
+                              onChange={e => handleCustomMonthlyBreakdownChange('travel', e.target.value)}
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label
+                                htmlFor="worker-custom-special"
+                                className="text-xs font-bold text-slate-700"
+                              >
+                                Special Allowance (₹)
+                              </label>
+                              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                                {customMonthlyTotal > 0 ? `${Math.round(((customMb.others || 0) / customMonthlyTotal) * 1000) / 10}%` : '0%'}
+                              </span>
+                            </div>
+                            <input
+                              id="worker-custom-special"
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step={100}
+                              className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl font-mono tabular-nums font-bold text-base text-slate-900 bg-white outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                              placeholder="0"
+                              value={customMb.others || ''}
+                              onChange={e => handleCustomMonthlyBreakdownChange('others', e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Dynamically Recalculated Total Bar */}
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+                          <div className="text-xs text-slate-600 font-mono tabular-nums">
+                            Total Monthly Salary:{' '}
+                            <strong className="text-sm text-slate-950">
+                              ₹{customMonthlyTotal.toLocaleString('en-IN')}
+                            </strong>
+                            {((customMb.da || 0) + (customMb.retainingAllowance || 0) + (customMb.medical || 0) > 0) && (
+                              <span className="ml-2 text-[11px] text-slate-500">
+                                (incl. ₹{((customMb.da || 0) + (customMb.retainingAllowance || 0) + (customMb.medical || 0)).toLocaleString('en-IN')} legacy DA/Medical)
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`text-xs font-mono tabular-nums font-bold ${
+                              isFiftyPercentBreached ? 'text-amber-700' : 'text-emerald-700'
+                            }`}
+                          >
+                            Basic Share: {customMonthlyTotal > 0 ? `${liveWageAudit.wageBasePercentage}%` : '0%'} (Min 50%)
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* BELOW MINIMUM WAGE BLOCKING RED WARNING */}
+                  {oneNumberCalc.isBelowMinimumWage ? (
+                    <div
+                      id="worker-min-wage-warning"
+                      role="alert"
+                      className="mt-3.5 p-4 rounded-xl bg-rose-50 border border-rose-300 flex items-start justify-between gap-3 flex-wrap"
+                    >
+                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                        <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-rose-800">
+                            {ONE_NUMBER_MIN_WAGE_WARNING}
+                          </p>
+                          <p className="text-xs text-rose-700 mt-1 font-mono tabular-nums">
+                            {oneNumberCalc.state} ({oneNumberCalc.wageZone} · {SKILL_LEVEL_LABELS[oneNumberCalc.skillCategory]}) floor is ₹{oneNumberCalc.stateMinimumWageMonthly.toLocaleString('en-IN')}/mo · Shortfall: ₹{oneNumberCalc.minimumWageShortfall.toLocaleString('en-IN')}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOneNumberSalaryChange(String(oneNumberCalc.stateMinimumWageMonthly))}
+                        className="px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold shrink-0 cursor-pointer transition-colors"
+                      >
+                        Set to ₹{oneNumberCalc.stateMinimumWageMonthly.toLocaleString('en-IN')}
+                      </button>
+                    </div>
+                  ) : isFiftyPercentBreached ? (
+                    <div className="mt-3.5 space-y-3">
+                      {/* 50% BASIC RULE BREACH WARNING */}
+                      <div
+                        role="alert"
+                        className="p-4 rounded-xl bg-amber-50 border border-amber-300 space-y-3"
+                      >
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                            <AlertTriangle size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-amber-950">
+                                50% Basic Rule Breached (Basic is {liveWageAudit.wageBasePercentage}% of ₹{customMonthlyTotal.toLocaleString('en-IN')})
+                              </p>
+                              <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+                                Under the Code on Wages, Basic must be at least 50% (₹{liveWageAudit.fiftyPercentThreshold.toLocaleString('en-IN')}). Shortfall of{' '}
+                                <span className="font-mono tabular-nums font-bold">₹{liveWageAudit.gapAmount.toLocaleString('en-IN')}</span>{' '}
+                                may be deemed back into wages, increasing PF/Gratuity liability by ~₹{liveWageAudit.estimatedAdditionalPfMonthly.toLocaleString('en-IN')}/mo.
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAutoFixCustomTo50Percent}
+                            className="px-3 py-2 rounded-lg bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold shrink-0 inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Sparkles size={13} />
+                            <span>Auto-Fix to 50% Basic</span>
+                          </button>
+                        </div>
+
+                        {/* LIABILITY SHIFT CHECKBOX (MANDATORY TO SAVE WHEN OVERRIDING 50% RULE) */}
+                        <div
+                          data-field="pfLiabilityAck"
+                          className={`p-3.5 rounded-xl border transition-colors ${
+                            acknowledgedNonCompliant
+                              ? 'bg-white border-amber-300'
+                              : fieldErrors.pfLiabilityAck
+                              ? 'bg-rose-50 border-rose-400'
+                              : 'bg-white border-amber-400'
+                          }`}
+                        >
+                          <label className="flex items-start gap-3 cursor-pointer select-none">
+                            <input
+                              id="worker-pf-liability-ack"
+                              type="checkbox"
+                              checked={acknowledgedNonCompliant}
+                              onChange={e => {
+                                setAcknowledgedNonCompliant(e.target.checked);
+                                clearFieldError('pfLiabilityAck');
+                              }}
+                              aria-invalid={Boolean(fieldErrors.pfLiabilityAck)}
+                              aria-describedby={fieldErrors.pfLiabilityAck ? 'worker-pf-liability-error' : undefined}
+                              className="w-5 h-5 mt-0.5 accent-amber-700 rounded shrink-0 cursor-pointer"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <span className="text-sm font-bold text-slate-900">
+                                  {PF_LIABILITY_SHIFT_STATEMENT}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md ${
+                                    acknowledgedNonCompliant
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-700'
+                                  }`}
+                                >
+                                  {acknowledgedNonCompliant ? 'Override Confirmed' : 'Required to Save'}
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-slate-500 block mt-0.5">
+                                Required when overriding the auto-calculated 50% Basic structure. This acknowledgement is recorded in the worker&apos;s wage compliance log.
+                              </span>
+                            </div>
+                          </label>
+                          <InlineFieldError id="worker-pf-liability-error" message={fieldErrors.pfLiabilityAck} />
+                        </div>
+                      </div>
+
+                      {/* PF STATUTORY CEILING AUTO-CAP NOTICE (also in Custom Mode if Basic >= ₹15,000) */}
+                      {customWageBase >= PF_STATUTORY_CEILING && (
+                        <div className="px-4 py-3 rounded-xl bg-blue-50/80 border border-blue-200 flex items-start gap-2.5 text-blue-900">
+                          <Info size={16} className="text-blue-600 shrink-0 mt-0.5" />
+                          <div className="text-xs leading-relaxed">
+                            <span className="font-bold block">
+                              {customWageBase > PF_STATUTORY_CEILING
+                                ? `PF automatically capped at ₹${PF_STATUTORY_CEILING.toLocaleString('en-IN')} statutory ceiling (Basic is ₹${customWageBase.toLocaleString('en-IN')}).`
+                                : `PF statutory ceiling (₹${PF_STATUTORY_CEILING.toLocaleString('en-IN')}) applied automatically.`}
+                            </span>
+                            <span className="font-mono tabular-nums text-blue-700">
+                              PF Wage Base: ₹{customPfQualifyingWage.toLocaleString('en-IN')} · Employee PF (12%): ₹{customEmployeePfMonthly.toLocaleString('en-IN')}/mo · Employer PF: ₹{customEmployerPfTotalMonthly.toLocaleString('en-IN')}/mo
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : oneNumberCalc.monthlySalary > 0 ? (
+                    <div className="mt-3.5 space-y-2.5">
+                      {/* GREEN LABOUR CODE 50% BASIC RULE COMPLIANCE CHECKMARK */}
+                      <div
+                        role="status"
+                        className="px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2.5 text-emerald-800"
+                      >
+                        <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+                        <span className="text-sm font-bold">
+                          Compliant with Labour Code (50% Basic rule).
+                        </span>
+                      </div>
+
+                      {/* PF STATUTORY CEILING AUTO-CAP NOTICE (when Basic >= ₹15,000) */}
+                      {(customizeSalaryStructure ? customWageBase >= PF_STATUTORY_CEILING : oneNumberCalc.isPfCappedAtCeiling) && (
+                        <div className="px-4 py-3 rounded-xl bg-blue-50/80 border border-blue-200 flex items-start gap-2.5 text-blue-900">
+                          <Info size={16} className="text-blue-600 shrink-0 mt-0.5" />
+                          <div className="text-xs leading-relaxed">
+                            <span className="font-bold block">
+                              {(customizeSalaryStructure ? customWageBase > PF_STATUTORY_CEILING : oneNumberCalc.isBasicAbovePfCeiling)
+                                ? `PF automatically capped at ₹${PF_STATUTORY_CEILING.toLocaleString('en-IN')} statutory ceiling (Basic is ₹${(customizeSalaryStructure ? customWageBase : oneNumberCalc.basic).toLocaleString('en-IN')}).`
+                                : `PF statutory ceiling (₹${PF_STATUTORY_CEILING.toLocaleString('en-IN')}) applied automatically.`}
+                            </span>
+                            <span className="font-mono tabular-nums text-blue-700">
+                              PF Wage Base: ₹{(customizeSalaryStructure ? customPfQualifyingWage : oneNumberCalc.pfQualifyingWage).toLocaleString('en-IN')} · Employee PF (12%): ₹{(customizeSalaryStructure ? customEmployeePfMonthly : oneNumberCalc.employeePfMonthly).toLocaleString('en-IN')}/mo · Employer PF: ₹{(customizeSalaryStructure ? customEmployerPfTotalMonthly : oneNumberCalc.employerPfTotalMonthly).toLocaleString('en-IN')}/mo
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-slate-500">
+                      Type the worker&apos;s total monthly salary above (e.g., 15000). We automatically split it into 50% Basic, 20% HRA, and 30% Allowances.
+                    </p>
+                  )}
+
+                  {fieldErrors.monthlySalary && !oneNumberCalc.isBelowMinimumWage && (
+                    <InlineFieldError id="worker-monthly-salary-error" message={fieldErrors.monthlySalary} />
+                  )}
+                </div>
+
+                {/* COMPACT STATE & SKILL LOCATION BAR (expandable for Zone/Sector/Probation) */}
+                <div className="bg-slate-50/80 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="worker-work-state" className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">
+                        Work State (Minimum Wage Rule)
+                      </label>
+                      <select
+                        id="worker-work-state"
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={activeWorkerState}
+                        onChange={e => {
+                          const nextSt = e.target.value;
+                          const nextZone = getDefaultZoneForState(nextSt);
+                          setFormData(prev => ({
+                            ...prev,
+                            state: nextSt,
+                            wageZone: nextZone,
+                          }));
+                        }}
+                      >
+                        {INDIAN_STATES.map(st => (
+                          <option key={st} value={st}>{st}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="worker-skill-cat" className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">
+                        Skill Category
+                      </label>
+                      <select
+                        id="worker-skill-cat"
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={formData.skillCategory || 'UNSKILLED'}
+                        onChange={e => setFormData({ ...formData, skillCategory: e.target.value as WorkerSkillCategory })}
+                      >
+                        {(Object.keys(SKILL_LEVEL_LABELS) as WorkerSkillCategory[]).map(sk => (
+                          <option key={sk} value={sk}>{SKILL_LEVEL_LABELS[sk]}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-200/70">
+                    <span className="text-[11px] text-slate-600 font-mono tabular-nums">
+                      Zone: <strong className="text-slate-800">{oneNumberCalc.wageZone}</strong> · Min: ₹{oneNumberCalc.stateMinimumWageMonthly.toLocaleString('en-IN')}/mo
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowLocationOverrides(v => !v)}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer"
+                    >
+                      {showLocationOverrides ? 'Hide zone & probation options' : 'Change zone / sector / probation'}
+                    </button>
+                  </div>
+
+                  {showLocationOverrides && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-200/70 animate-in fade-in">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Minimum Wage Zone</label>
+                        <select
+                          className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                          value={formData.wageZone || getDefaultZoneForState(activeWorkerState)}
+                          onChange={e => setFormData({ ...formData, wageZone: e.target.value })}
+                        >
+                          {getZonesForState(activeWorkerState).map(z => (
+                            <option key={z} value={z}>{z}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Scheduled Employment</label>
+                        <select
+                          className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                          value={formData.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
+                          onChange={e => setFormData({ ...formData, scheduledEmployment: e.target.value })}
+                        >
+                          {SCHEDULED_EMPLOYMENT_CATEGORIES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Structure Effective Date</label>
+                        <ModalDatePicker
+                          fieldName="salaryRevisionDate"
+                          label="Structure Effective Date"
+                          placeholder="Select effective date"
+                          value={formData.salaryRevisionDate || ''}
+                          className="mt-1"
+                          onChange={iso => setFormData({ ...formData, salaryRevisionDate: iso })}
+                        />
+                      </div>
+                      <div className="md:col-span-3 pt-1">
+                        <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(formData.isOnProbation)}
+                            onChange={e => setFormData({ ...formData, isOnProbation: e.target.checked })}
+                            className="w-4 h-4 accent-slate-900 rounded"
+                          />
+                          <span>Employee on Probation</span>
+                          <span className="text-[11px] font-normal text-slate-500">(No minimum wage exemption)</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4 animate-in fade-in">
+                {/* Work State, Zone, Skill, Scheduled Employment, Revision Date & Probation for Daily Wage */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Work State (Employee Location)</label>
+                      <select
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={activeWorkerState}
+                        onChange={e => {
+                          const nextSt = e.target.value;
+                          setFormData({
+                            ...formData,
+                            state: nextSt,
+                            wageZone: getDefaultZoneForState(nextSt),
+                          });
+                        }}
+                      >
+                        {INDIAN_STATES.map(st => (
+                          <option key={st} value={st}>{st}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Minimum Wage Zone</label>
+                      <select
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={formData.wageZone || getDefaultZoneForState(activeWorkerState)}
+                        onChange={e => setFormData({ ...formData, wageZone: e.target.value })}
+                      >
+                        {getZonesForState(activeWorkerState).map(z => (
+                          <option key={z} value={z}>{z}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Skill Category</label>
+                      <select
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={formData.skillCategory || 'UNSKILLED'}
+                        onChange={e => setFormData({ ...formData, skillCategory: e.target.value as WorkerSkillCategory })}
+                      >
+                        {(Object.keys(SKILL_LEVEL_LABELS) as WorkerSkillCategory[]).map(sk => (
+                          <option key={sk} value={sk}>{SKILL_LEVEL_LABELS[sk]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Scheduled Employment</label>
+                      <select
+                        className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg bg-white text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 min-h-11"
+                        value={formData.scheduledEmployment || DEFAULT_SCHEDULED_EMPLOYMENT}
+                        onChange={e => setFormData({ ...formData, scheduledEmployment: e.target.value })}
+                      >
+                        {SCHEDULED_EMPLOYMENT_CATEGORIES.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Structure Effective Date</label>
+                      <ModalDatePicker
+                        fieldName="salaryRevisionDate"
+                        label="Structure Effective Date"
+                        placeholder="Select effective date"
+                        value={formData.salaryRevisionDate || ''}
+                        className="mt-1"
+                        onChange={iso => setFormData({ ...formData, salaryRevisionDate: iso })}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
+                    <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(formData.isOnProbation)}
+                        onChange={e => setFormData({ ...formData, isOnProbation: e.target.checked })}
+                        className="w-4 h-4 accent-slate-900 rounded"
+                      />
+                      <span>Employee on Probation</span>
+                      <span className="text-[11px] font-normal text-slate-500">(No minimum wage exemption)</span>
+                    </label>
+                    {(() => {
+                      const minInfo = getStateMinimumWage(
+                        activeWorkerState,
+                        formData.skillCategory || 'UNSKILLED',
+                        formData.wageZone,
+                        formData.scheduledEmployment,
+                        undefined,
+                        settings?.compliance?.minimumWageRevisions
+                      );
+                      return (
+                        <span className="text-[11px] text-slate-700 font-mono tabular-nums font-bold">
+                          Floor: ₹{minInfo.monthlyFloor.toLocaleString('en-IN')}/mo (₹{minInfo.dailyFloor}/day)
+                        </span>
+                      );
+                    })()}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div data-field="wageAmount">
                     <label htmlFor="worker-daily-rate" className="text-xs font-bold text-gray-600 uppercase ml-1 block">Daily Rate Amount *</label>
@@ -1355,163 +2366,41 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </div>
                   )}
                 </div>
+
+                {/* LIVE 50% RULE & MINIMUM WAGE AUDIT CARD FOR DAILY WAGE */}
+                {liveWageAudit.totalRemuneration > 0 && (
+                  <WageStructureValidatorCard
+                    audit={liveWageAudit}
+                    acknowledgedNonCompliant={acknowledgedNonCompliant}
+                    onAcknowledgeChange={setAcknowledgedNonCompliant}
+                    onAutoRebalance={() => {
+                      const balanced = rebalanceWageConfigTo50Percent(
+                        { ...formData, state: activeWorkerState },
+                        settings || undefined
+                      );
+                      if (balanced.type === 'DAILY') setUseDailyBreakdown(true);
+                      setFormData(prev => ({ ...prev, wageConfig: balanced }));
+                      setAcknowledgedNonCompliant(false);
+                      toast.success('Adjusted Basic Pay to meet the 50% Wage Rule.');
+                    }}
+                    onMatchMinimumWage={() => {
+                      const minFloor = liveWageAudit.statutoryMinimumWageMonthly;
+                      const mult = liveWageAudit.dailyMultiplier || 26;
+                      const dailyMin = Math.ceil(minFloor / mult);
+                      if (useDailyBreakdown) {
+                        handleDailyBreakdownChange('basic', String(dailyMin));
+                      } else {
+                        setFormData(prev => ({
+                          ...prev,
+                          wageConfig: { ...prev.wageConfig!, amount: dailyMin }
+                        }));
+                      }
+                      toast.success(`Updated Daily Rate to meet ${liveWageAudit.state} minimum wage floor.`);
+                    }}
+                    compact
+                  />
+                )}
               </div>
-            ) : (
-              <div className="mt-4 bg-blue-50/70 p-4 rounded-xl border border-blue-200/80 animate-in fade-in slide-in-from-top-2 space-y-4">
-                <h3 className="text-sm font-bold text-blue-900 flex items-center">
-                  <Briefcase size={16} className="mr-2"/> Monthly Salary Structure
-                </h3>
-
-                {/* WageBase Group */}
-                <div className="bg-white/90 rounded-xl p-3 border border-blue-100 space-y-3">
-                  <span className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider block">
-                    WageBase = Basic Pay + DA + Retaining Allowance
-                  </span>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div data-field="basicPay">
-                      <label htmlFor="worker-basic-pay" className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">Basic Pay *</label>
-                      <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
-                        <input
-                          id="worker-basic-pay"
-                          type="number"
-                          inputMode="decimal"
-                          enterKeyHint="next"
-                          aria-invalid={Boolean(fieldErrors.basicPay)}
-                          aria-describedby={fieldErrors.basicPay ? 'worker-basic-error' : undefined}
-                          className={`w-full pl-8 p-2.5 border rounded-lg text-sm font-bold font-mono focus:ring-2 outline-none min-h-11 transition-colors ${
-                            fieldErrors.basicPay
-                              ? 'border-rose-400 bg-rose-50/40 focus:ring-rose-500'
-                              : 'border-blue-200 bg-white focus:ring-blue-500'
-                          }`}
-                          value={formData.wageConfig?.monthlyBreakdown?.basic || ''}
-                          onChange={e => {
-                            handleMonthlyWageChange('basic', e.target.value);
-                            clearFieldError('basicPay');
-                          }}
-                          placeholder="e.g. 15000"
-                        />
-                      </div>
-                      <InlineFieldError id="worker-basic-error" message={fieldErrors.basicPay} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">DA (Dearness Allow.)</label>
-                      <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
-                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                          value={formData.wageConfig?.monthlyBreakdown?.da || ''}
-                          onChange={e => handleMonthlyWageChange('da', e.target.value)} placeholder="0" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-blue-800 uppercase ml-1 block">Retaining Allowance</label>
-                      <div className="relative mt-1">
-                        <IndianRupee className="absolute left-2.5 top-3.5 text-blue-400" size={14}/>
-                        <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full pl-8 p-2.5 border border-blue-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                          value={formData.wageConfig?.monthlyBreakdown?.retainingAllowance || ''}
-                          onChange={e => handleMonthlyWageChange('retainingAllowance', e.target.value)} placeholder="0" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Excluded Components Group */}
-                <div className="bg-white/90 rounded-xl p-3 border border-blue-100 space-y-3">
-                  <span className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
-                    Excluded Components = HRA + Travel + Medical + Other Allowances
-                  </span>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">HRA</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.hra || ''}
-                        onChange={e => handleMonthlyWageChange('hra', e.target.value)} placeholder="e.g. 5000" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Travel Allow.</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.travel || ''}
-                        onChange={e => handleMonthlyWageChange('travel', e.target.value)} placeholder="0" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Medical Allow.</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.medical || ''}
-                        onChange={e => handleMonthlyWageChange('medical', e.target.value)} placeholder="0" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-600 uppercase ml-1 block">Other Allow.</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 border border-slate-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-blue-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.others || ''}
-                        onChange={e => handleMonthlyWageChange('others', e.target.value)} placeholder="e.g. 2000" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Employer Contributions (Explicitly Excluded from 50% Denominator) */}
-                <div className="bg-indigo-50/80 rounded-xl p-3 border border-indigo-200/70 space-y-2">
-                  <span className="text-[10px] font-extrabold text-indigo-900 uppercase tracking-wider block">
-                    Employer Contributions (Excluded from 50% Rule Denominator)
-                  </span>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1 block">Employer PF (₹/mo)</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.employerPf || ''}
-                        onChange={e => handleMonthlyWageChange('employerPf', e.target.value)} placeholder="0" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-indigo-800 uppercase ml-1 block">Employer Gratuity (₹/mo)</label>
-                      <input type="number" inputMode="decimal" enterKeyHint="next" className="w-full p-2.5 mt-1 bg-white border border-indigo-200 rounded-lg text-sm font-bold font-mono focus:ring-2 focus:ring-indigo-500 outline-none min-h-11"
-                        value={formData.wageConfig?.monthlyBreakdown?.employerGratuity || ''}
-                        onChange={e => handleMonthlyWageChange('employerGratuity', e.target.value)} placeholder="0" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-blue-200 flex justify-between items-center flex-wrap gap-2">
-                    <span className="text-xs font-bold text-blue-900 uppercase">Total Remuneration (Excl. Employer PF/Gratuity)</span>
-                    <span className="text-xl font-black font-mono text-blue-700">₹ {(formData.wageConfig?.amount || 0).toLocaleString('en-IN')}</span>
-                </div>
-              </div>
-            )}
-
-            {/* LIVE 50% RULE & MINIMUM WAGE AUDIT CARD */}
-            {liveWageAudit.totalRemuneration > 0 && (
-              <WageStructureValidatorCard
-                audit={liveWageAudit}
-                acknowledgedNonCompliant={acknowledgedNonCompliant}
-                onAcknowledgeChange={setAcknowledgedNonCompliant}
-                onAutoRebalance={() => {
-                  const balanced = rebalanceWageConfigTo50Percent(
-                    { ...formData, state: formData.state || resolveWorkerDefaultState(formData, settings || undefined) },
-                    settings || undefined
-                  );
-                  if (balanced.type === 'DAILY') setUseDailyBreakdown(true);
-                  setFormData(prev => ({ ...prev, wageConfig: balanced }));
-                  setAcknowledgedNonCompliant(false);
-                  toast.success('Adjusted Basic Pay to meet the 50% Wage Rule.');
-                }}
-                onMatchMinimumWage={() => {
-                  const minFloor = liveWageAudit.statutoryMinimumWageMonthly;
-                  if (formData.wageConfig?.type === 'MONTHLY') {
-                    handleMonthlyWageChange('basic', String(minFloor));
-                  } else {
-                    const mult = liveWageAudit.dailyMultiplier || 26;
-                    const dailyMin = Math.ceil(minFloor / mult);
-                    if (useDailyBreakdown) {
-                      handleDailyBreakdownChange('basic', String(dailyMin));
-                    } else {
-                      setFormData(prev => ({
-                        ...prev,
-                        wageConfig: { ...prev.wageConfig!, amount: dailyMin }
-                      }));
-                    }
-                  }
-                  toast.success(`Updated Basic Pay to meet ${liveWageAudit.state} minimum wage floor.`);
-                }}
-                compact
-              />
             )}
 
             <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
@@ -1654,6 +2543,84 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                     </button>
                 </div>
             )}
+
+            {/* BANK ACCOUNT DETAILS FOR SALARY PAYOUT */}
+            <div className="mt-5 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Bank Account Details (For Payroll Payout)</h3>
+                <p className="text-[11px] text-slate-500">
+                  Required when running monthly bank payouts. You can also add this later during payroll.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Account Number</label>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={18}
+                    enterKeyHint="next"
+                    value={formData.bankDetails?.accountNumber || ''}
+                    onChange={e =>
+                      setFormData({
+                        ...formData,
+                        bankDetails: {
+                          accountHolderName: formData.name || formData.bankDetails?.accountHolderName,
+                          accountNumber: e.target.value.replace(/\D/g, ''),
+                          ifscCode: formData.bankDetails?.ifscCode || '',
+                          bankName: formData.bankDetails?.bankName || '',
+                        },
+                      })
+                    }
+                    placeholder="e.g. 501002348912"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-900 outline-none focus:border-blue-600 min-h-11"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">IFSC Code</label>
+                  <input
+                    type="text"
+                    maxLength={11}
+                    enterKeyHint="next"
+                    value={formData.bankDetails?.ifscCode || ''}
+                    onChange={e =>
+                      setFormData({
+                        ...formData,
+                        bankDetails: {
+                          accountHolderName: formData.name || formData.bankDetails?.accountHolderName,
+                          accountNumber: formData.bankDetails?.accountNumber || '',
+                          ifscCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+                          bankName: formData.bankDetails?.bankName || '',
+                        },
+                      })
+                    }
+                    placeholder="e.g. HDFC0001234"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono uppercase text-slate-900 outline-none focus:border-blue-600 min-h-11"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 block mb-1">Bank Name</label>
+                  <input
+                    type="text"
+                    enterKeyHint="next"
+                    value={formData.bankDetails?.bankName || ''}
+                    onChange={e =>
+                      setFormData({
+                        ...formData,
+                        bankDetails: {
+                          accountHolderName: formData.name || formData.bankDetails?.accountHolderName,
+                          accountNumber: formData.bankDetails?.accountNumber || '',
+                          ifscCode: formData.bankDetails?.ifscCode || '',
+                          bankName: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="e.g. HDFC Bank"
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 min-h-11"
+                  />
+                </div>
+              </div>
+            </div>
 
             {/* GRATUITY, NOMINEE & SUBSIDIARY TRANSFER SETTINGS */}
             <div className="mt-5 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
@@ -1957,7 +2924,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                         Re-scan Face (Update)
                     </button>
                     <div className="mt-12 w-full px-4">
-                        <button onClick={handleSave} className="w-full bg-blue-600 text-white min-h-14 rounded-xl font-bold flex items-center justify-center shadow-lg active:scale-95 transition-all text-lg">
+                        <button
+                          type="button"
+                          disabled={saving || isBelowMinWageBlocked}
+                          onClick={() => handleSave()}
+                          className="w-full bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white min-h-14 rounded-xl font-bold flex items-center justify-center shadow-lg active:scale-95 transition-all text-lg"
+                        >
                             {saving ? <Loader2 className="animate-spin mr-2"/> : <Save className="mr-2"/>} Update Worker
                         </button>
                     </div>
@@ -1978,10 +2950,19 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                        <div className="bg-blue-600 text-white px-6 py-2 rounded-full font-bold mb-8 animate-pulse text-center min-h-10 flex items-center">
                           {FACE_ANGLES[capturedImages.length]}
                        </div>
-                       <button onClick={capturePhoto} className="w-20 h-20 bg-white border-4 border-gray-200 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-all focus:outline-none focus:ring-4 focus:ring-blue-300">
+                       <button type="button" onClick={capturePhoto} className="w-20 h-20 bg-white border-4 border-gray-200 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-all focus:outline-none focus:ring-4 focus:ring-blue-300">
                           <div className="w-16 h-16 bg-red-500 rounded-full border-2 border-white pointer-events-none"></div>
                        </button>
                        <p className="text-gray-400 text-xs mt-4">Photo {capturedImages.length + 1} of 5</p>
+                       <button
+                         type="button"
+                         disabled={saving || isBelowMinWageBlocked || needsPfLiabilityAck}
+                         onClick={() => handleSave({ skipFaceRequirement: true })}
+                         className="mt-6 px-5 min-h-11 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-semibold text-xs flex items-center gap-2 transition-colors cursor-pointer"
+                       >
+                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                         <span>Skip Face Scan &amp; Save Worker</span>
+                       </button>
                      </>
                    ) : (
                      <div className="w-full text-center px-4">
@@ -1990,8 +2971,12 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                        </div>
                        <h3 className="font-bold text-gray-800 text-lg">Scan Complete!</h3>
                        <p className="text-gray-500 text-sm mb-8">All 5 angles captured successfully.</p>
-                       <button onClick={handleSave} disabled={saving} 
-                          className="w-full bg-blue-600 hover:bg-blue-700 text-white min-h-14 rounded-xl font-bold shadow-lg flex items-center justify-center transition-all text-lg">
+                       <button
+                          type="button"
+                          onClick={() => handleSave()}
+                          disabled={saving || isBelowMinWageBlocked || needsPfLiabilityAck} 
+                          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white min-h-14 rounded-xl font-bold shadow-lg flex items-center justify-center transition-all text-lg"
+                       >
                           {saving ? (
                             <>
                               <Loader2 className="animate-spin mr-2"/> Processing Face...
@@ -2043,14 +3028,16 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
             </button>
 
             <div className="flex items-center gap-2">
-              {isEditing && capturedImages[0] === 'EXISTING_DATA' && (
+              {(currentStep >= 2 || (isEditing && capturedImages[0] === 'EXISTING_DATA')) && (
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={saving || (currentStep === 2 && (isBelowMinWageBlocked || needsPfLiabilityAck || !formData.wageConfig?.amount || formData.wageConfig.amount <= 0))}
                   onClick={() => {
-                    if (validateStep(currentStep)) handleSave();
+                    if (validateStep(currentStep)) {
+                      handleSave({ skipFaceRequirement: true });
+                    }
                   }}
-                  className="px-4 sm:px-5 min-h-[2.75rem] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                  className="px-5 sm:px-6 min-h-[2.75rem] bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                 >
                   {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                   <span>Save</span>
@@ -2059,10 +3046,15 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
 
               <button 
                 type="button"
+                disabled={currentStep === 2 && (isBelowMinWageBlocked || needsPfLiabilityAck)}
                 onClick={handleNext} 
-                className="px-5 sm:px-6 min-h-[2.75rem] bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                className={`px-4 sm:px-5 min-h-[2.75rem] rounded-xl font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  currentStep === 2
+                    ? 'border border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
               >
-                <span>Next Step</span>
+                <span>{currentStep === 2 ? 'Statutory / Face' : 'Next Step'}</span>
                 <ChevronRight size={15} />
               </button>
             </div>

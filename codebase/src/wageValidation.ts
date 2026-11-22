@@ -17,9 +17,13 @@ export interface ServerWageBreakdown {
 export interface ServerWageConfig {
   type: 'DAILY' | 'MONTHLY';
   amount: number;
+  salaryInputMode?: 'ONE_NUMBER' | 'CUSTOM_BREAKDOWN';
   basicPercentage?: number;
   dailyMultiplier?: 26 | 30;
   workingDaysPerMonth?: number;
+  pfCapAtStatutoryCeiling?: boolean;
+  pfWageCeiling?: number;
+  pfQualifyingWage?: number;
   monthlyBreakdown?: ServerWageBreakdown;
   dailyBreakdown?: ServerWageBreakdown;
   allowances?: {
@@ -27,6 +31,41 @@ export interface ServerWageConfig {
     food?: number;
     nightShift?: number;
   };
+}
+
+export const SERVER_PF_STATUTORY_CEILING = 15000;
+export const SERVER_MIN_WAGE_WARNING =
+  'This is below the state minimum wage. Please increase the salary.';
+
+export interface OneNumberSalaryServerResult {
+  monthlySalary: number;
+  basic: number;
+  hra: number;
+  allowances: number;
+  basicPercentage: number;
+  isFiftyPercentCompliant: boolean;
+  state: string;
+  wageZone: string;
+  skillCategory: WorkerSkillCategory;
+  scheduledEmployment: string;
+  stateMinimumWageMonthly: number;
+  stateMinimumWageDaily: number;
+  notificationDate: string;
+  isBelowMinimumWage: boolean;
+  minimumWageShortfall: number;
+  minimumWageWarning?: string;
+  pfStatutoryCeiling: number;
+  pfQualifyingWage: number;
+  isPfCappedAtCeiling: boolean;
+  isBasicAbovePfCeiling: boolean;
+  employeePfMonthly: number;
+  employerEpsMonthly: number;
+  employerEpfMonthly: number;
+  employerEdliMonthly: number;
+  employerAdminMonthly: number;
+  employerPfTotalMonthly: number;
+  estimatedGratuityMonthly: number;
+  canSave: boolean;
 }
 
 export interface ServerBranchInput {
@@ -401,6 +440,97 @@ function resolveServerMinimumWage(
   };
 }
 
+/**
+ * Server-side "One-Number" Salary Calculator & PF Ceiling Engine.
+ * Computes the 50% Basic / 20% HRA / 30% Allowances split, enforces state minimum wage,
+ * and caps EPF/EPS/EDLI/Admin math at the ₹15,000 statutory PF ceiling.
+ */
+export function computeOneNumberSalaryServer(
+  rawMonthlySalary: number,
+  params: {
+    state?: string;
+    wageZone?: string;
+    scheduledEmployment?: string;
+    skillCategory?: WorkerSkillCategory;
+    evaluationDate?: string;
+    minimumWageRevisions?: ServerMinWageRevisionRule[];
+  } = {}
+): OneNumberSalaryServerResult {
+  const monthlySalary =
+    Number.isFinite(rawMonthlySalary) && rawMonthlySalary > 0
+      ? Math.round(rawMonthlySalary)
+      : 0;
+  const state = (params.state || 'Gujarat').trim();
+  const scheduledEmployment = params.scheduledEmployment || 'Engineering & Manufacturing';
+  const skillCategory: WorkerSkillCategory = params.skillCategory || 'UNSKILLED';
+  const evaluationDate = params.evaluationDate || new Date().toISOString().slice(0, 10);
+
+  const minWage = resolveServerMinimumWage(
+    state,
+    params.wageZone,
+    scheduledEmployment,
+    skillCategory,
+    evaluationDate,
+    params.minimumWageRevisions || []
+  );
+
+  const basic = monthlySalary > 0 ? Math.ceil(monthlySalary * 0.5) : 0;
+  const hra = monthlySalary > 0 ? Math.round(monthlySalary * 0.2) : 0;
+  const allowances = monthlySalary > 0 ? Math.max(0, monthlySalary - basic - hra) : 0;
+  const basicPercentage = monthlySalary > 0 ? Math.round((basic / monthlySalary) * 1000) / 10 : 0;
+  const isFiftyPercentCompliant = monthlySalary > 0 && basic >= monthlySalary * 0.5;
+
+  const isBelowMinimumWage = monthlySalary > 0 && monthlySalary < minWage.monthlyFloor;
+  const minimumWageShortfall = isBelowMinimumWage
+    ? Math.max(0, minWage.monthlyFloor - monthlySalary)
+    : 0;
+
+  // Automatic PF statutory ceiling cap at ₹15,000
+  const pfQualifyingWage = Math.min(basic, SERVER_PF_STATUTORY_CEILING);
+  const isPfCappedAtCeiling = basic >= SERVER_PF_STATUTORY_CEILING;
+  const isBasicAbovePfCeiling = basic > SERVER_PF_STATUTORY_CEILING;
+
+  const employeePfMonthly = Math.round(pfQualifyingWage * 0.12);
+  const employerEpsMonthly = Math.round(pfQualifyingWage * 0.0833);
+  const employerEpfMonthly = Math.max(0, employeePfMonthly - employerEpsMonthly);
+  const employerEdliMonthly = Math.round(pfQualifyingWage * 0.005);
+  const employerAdminMonthly = Math.round(pfQualifyingWage * 0.005);
+  const employerPfTotalMonthly =
+    employerEpfMonthly + employerEpsMonthly + employerEdliMonthly + employerAdminMonthly;
+  const estimatedGratuityMonthly = Math.round((basic * 15) / 26 / 12);
+
+  return {
+    monthlySalary,
+    basic,
+    hra,
+    allowances,
+    basicPercentage,
+    isFiftyPercentCompliant,
+    state,
+    wageZone: minWage.zone,
+    skillCategory,
+    scheduledEmployment,
+    stateMinimumWageMonthly: minWage.monthlyFloor,
+    stateMinimumWageDaily: minWage.dailyFloor,
+    notificationDate: minWage.notificationDate,
+    isBelowMinimumWage,
+    minimumWageShortfall,
+    minimumWageWarning: isBelowMinimumWage ? SERVER_MIN_WAGE_WARNING : undefined,
+    pfStatutoryCeiling: SERVER_PF_STATUTORY_CEILING,
+    pfQualifyingWage,
+    isPfCappedAtCeiling,
+    isBasicAbovePfCeiling,
+    employeePfMonthly,
+    employerEpsMonthly,
+    employerEpfMonthly,
+    employerEdliMonthly,
+    employerAdminMonthly,
+    employerPfTotalMonthly,
+    estimatedGratuityMonthly,
+    canSave: monthlySalary > 0 && !isBelowMinimumWage,
+  };
+}
+
 export function auditWorkerWageStructureServer(
   worker: ServerWorkerInput,
   evaluationDate: string,
@@ -602,9 +732,14 @@ export function auditWorkerWageStructureServer(
     ? 'Employee is on probation — statutory minimum wage applies without exemption.'
     : undefined;
 
-  const isMinimumWageViolation = totalRemuneration > 0 && basicPay < minWage.monthlyFloor;
+  const usesMonthlyTotalMinWageFloor =
+    wageType === 'MONTHLY' &&
+    (activeWageConfig?.salaryInputMode === 'ONE_NUMBER' ||
+      activeWageConfig?.salaryInputMode === 'CUSTOM_BREAKDOWN');
+  const minWageComparableAmount = usesMonthlyTotalMinWageFloor ? totalRemuneration : basicPay;
+  const isMinimumWageViolation = totalRemuneration > 0 && minWageComparableAmount < minWage.monthlyFloor;
   const minimumWageGap = isMinimumWageViolation
-    ? round2(minWage.monthlyFloor - basicPay)
+    ? round2(minWage.monthlyFloor - minWageComparableAmount)
     : 0;
 
   const complianceFlags: WageComplianceFlag[] = [];
@@ -663,7 +798,9 @@ export function auditWorkerWageStructureServer(
     isMinimumWageViolation,
     minimumWageGap,
     minimumWageWarning: isMinimumWageViolation
-      ? `MINIMUM_WAGE_VIOLATION: Basic Pay (₹${basicPay}/mo) is below ${activeState} · ${minWage.zone} (${scheduledEmployment}) floor of ₹${minWage.monthlyFloor}/mo. Shortfall: ₹${minimumWageGap}/mo · Notification Date: ${minWage.notificationDate}.`
+      ? usesMonthlyTotalMinWageFloor
+        ? `${SERVER_MIN_WAGE_WARNING} (Monthly Salary ₹${totalRemuneration}/mo is below ${activeState} · ${minWage.zone} floor of ₹${minWage.monthlyFloor}/mo).`
+        : `MINIMUM_WAGE_VIOLATION: Basic Pay (₹${basicPay}/mo) is below ${activeState} · ${minWage.zone} (${scheduledEmployment}) floor of ₹${minWage.monthlyFloor}/mo. Shortfall: ₹${minimumWageGap}/mo · Notification Date: ${minWage.notificationDate}.`
       : undefined,
     blockingErrorCode: isMinimumWageViolation ? 'MINIMUM_WAGE_VIOLATION' : undefined,
     complianceFlags,
