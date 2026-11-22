@@ -1,8 +1,10 @@
 // src/RootNavigator.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
-import { auth } from './lib/firebase';
+import { useToast } from './contexts/ToastContext';
 import { Layout } from './components/Layout';
+import { RoleProtectedRoute } from './components/RoleProtectedRoute';
 import { LoginScreen } from './screens/LoginScreen';
 import { RegisterScreen } from './screens/RegisterScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
@@ -12,12 +14,13 @@ import { AttendanceKioskScreen } from './screens/AttendanceKioskScreen';
 import { AttendanceScreen } from './screens/AttendanceScreen';
 import { PayrollScreen } from './screens/PayrollScreen';
 import { DailyWageScreen } from './screens/DailyWageScreen';
-import { TeamScreen } from './screens/TeamScreen'; 
+import { TeamScreen } from './screens/TeamScreen';
 import { ScreenName, Worker, KioskTerminal } from './types/index';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WorkerHistoryScreen } from './screens/WorkerHistoryScreen';
+import { WorkerSelfServiceScreen } from './screens/WorkerSelfServiceScreen';
 import { SuperAdminDashboard } from './screens/SuperAdminDashboard';
-import { ResellerDashboard } from './screens/ResellerDashboard'; // NEW IMPORT
+import { ResellerDashboard } from './screens/ResellerDashboard';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
@@ -41,15 +44,21 @@ import { UpgradeRequiredView } from './components/UpgradeRequiredView';
 // SCOPED MAGIC LINK PORTAL
 import { WorkerMagicLinkPortalView } from './components/WorkerMagicLinkPortalView';
 
+// RBAC ROUTING HELPERS
+import {
+  getDefaultPathForRole,
+  getDefaultScreenForRole,
+  pathToScreen,
+  screenToPath,
+} from './services/rbacService';
+
 export const RootNavigator: React.FC = () => {
-  const { user, profile, loading, logout } = useAuth();
+  const { user, activeRole, loading, logout, roleChangeEvent, clearRoleChangeEvent } = useAuth();
   const { isEntitled } = useEntitlements();
-  const [currentScreen, setCurrentScreen] = useState<ScreenName>(() => {
-    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('order_id')) {
-      return 'BILLING';
-    }
-    return 'DASHBOARD';
-  });
+  const { toast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');
@@ -75,31 +84,71 @@ export const RootNavigator: React.FC = () => {
     return saved ? JSON.parse(saved) : null;
   });
 
-  useEffect(() => {
-    if (user && profile && currentScreen === 'DASHBOARD') {
-      if (profile.role === 'SUPER_ADMIN') {
-        setCurrentScreen('SUPER_ADMIN_DASHBOARD');
-      } else if (profile.role === 'RESELLER') {
-        setCurrentScreen('RESELLER_DASHBOARD'); // NEW ROUTING
+  const currentScreen: ScreenName = pathToScreen(location.pathname);
+
+  const handleNavigate = useCallback(
+    (screen: ScreenName) => {
+      const targetPath = screenToPath(screen);
+      if (location.pathname !== targetPath) {
+        navigate(targetPath);
       }
+    },
+    [location.pathname, navigate]
+  );
+
+  // Surface mid-session role change / forced logout toast notifications
+  useEffect(() => {
+    if (!roleChangeEvent) return;
+    if (roleChangeEvent.type === 'REVOKED') {
+      toast.error(
+        roleChangeEvent.reason || 'Your session has ended because your access was revoked.',
+        'Session Terminated'
+      );
+    } else if (roleChangeEvent.type === 'DEMOTED') {
+      toast.warning(
+        roleChangeEvent.reason ||
+          `Role updated to ${roleChangeEvent.toRole}. Permissions refreshed.`,
+        'Permissions Updated'
+      );
+    } else {
+      toast.info(
+        roleChangeEvent.reason || 'Your workspace permissions have been refreshed.',
+        'Role Updated'
+      );
     }
-  }, [user, profile, currentScreen]);
+    clearRoleChangeEvent();
+  }, [roleChangeEvent, clearRoleChangeEvent, toast]);
+
+  // Redirect payment callback (?order_id=...) to /billing when authenticated
+  useEffect(() => {
+    if (user && new URLSearchParams(location.search).has('order_id') && location.pathname !== '/billing') {
+      navigate('/billing' + location.search, { replace: true });
+    }
+  }, [user, location.search, location.pathname, navigate]);
+
+  // Redirect root '/' or '/login' to the user's canonical role home route once authenticated
+  useEffect(() => {
+    if (!user || loading) return;
+    const normalizedPath = location.pathname.replace(/\/+$/, '') || '/';
+    if (normalizedPath === '/' || normalizedPath === '/login' || normalizedPath === '/register') {
+      navigate(getDefaultPathForRole(activeRole), { replace: true });
+    }
+  }, [user, loading, activeRole, location.pathname, navigate]);
 
   useBackButton(() => {
-    if (kioskConfig) return true; 
+    if (kioskConfig) return true;
     if (!user) {
-      if (isRegistering) { setIsRegistering(false); return true; }
-      return false; 
+      if (isRegistering) {
+        setIsRegistering(false);
+        return true;
+      }
+      return false;
     }
-    
-    // Default screen determination based on role
-    let defaultScreen: ScreenName = 'DASHBOARD';
-    if (profile?.role === 'SUPER_ADMIN') defaultScreen = 'SUPER_ADMIN_DASHBOARD';
-    if (profile?.role === 'RESELLER') defaultScreen = 'RESELLER_DASHBOARD'; // NEW ROUTING
-    
+
+    const defaultScreen = getDefaultScreenForRole(activeRole);
     if (currentScreen !== defaultScreen) {
-       setCurrentScreen(defaultScreen);
-       return true; 
+      handleNavigate(defaultScreen);
+      return true;
     }
     return false;
   });
@@ -118,6 +167,7 @@ export const RootNavigator: React.FC = () => {
             window.history.replaceState({}, '', (cleanPath || '/') + (url.search ? url.search : ''));
           }
           setMagicToken(null);
+          navigate('/login', { replace: true });
         }}
       />
     );
@@ -133,133 +183,402 @@ export const RootNavigator: React.FC = () => {
 
   if (kioskConfig) {
     return (
-      <AttendanceKioskScreen 
-        branchId={kioskConfig.branchId} 
+      <AttendanceKioskScreen
+        branchId={kioskConfig.branchId}
         isDedicatedMode={true}
         tenantId={kioskConfig.tenantId}
         adminPin={kioskConfig.adminPin}
         onExit={() => {
-           localStorage.removeItem('kiosk_config');
-           setKioskConfig(null);
-        }} 
-      />
-    );
-  }
-
-  if (!user) {
-    if (isRegistering) {
-      return <RegisterScreen onNavigateToLogin={() => setIsRegistering(false)} />;
-    }
-    return (
-      <LoginScreen 
-        onNavigateToRegister={() => setIsRegistering(true)} 
-        onKioskLogin={(config) => {
-           localStorage.setItem('kiosk_config', JSON.stringify(config));
-           setKioskConfig(config);
+          localStorage.removeItem('kiosk_config');
+          setKioskConfig(null);
         }}
       />
     );
   }
 
-  if (currentScreen === 'ATTENDANCE_KIOSK') {
-    if (!isEntitled('KIOSK_MODE')) {
+  if (!user) {
+    if (isRegistering || location.pathname === '/register') {
       return (
-        <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={logout}>
-          <GracePeriodBanner onNavigateToBilling={() => setCurrentScreen('BILLING')} />
-          <UpgradeRequiredView featureKey="KIOSK_MODE" onNavigate={setCurrentScreen} />
-        </Layout>
+        <RegisterScreen
+          onNavigateToLogin={() => {
+            setIsRegistering(false);
+            navigate('/login', { replace: true });
+          }}
+        />
       );
     }
-    return <AttendanceKioskScreen isDedicatedMode={false} onExit={() => setCurrentScreen('DASHBOARD')} branchId={kioskBranchId} />;
-  }
-
-  if (currentScreen === 'ADD_WORKER') {
     return (
-      <AddWorkerScreen 
-        initialData={workerToEdit}
-        onBack={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
-        onSuccess={() => { setWorkerToEdit(undefined); setCurrentScreen('WORKERS'); }} 
-        onNavigateToBilling={() => setCurrentScreen('BILLING')}
+      <LoginScreen
+        onNavigateToRegister={() => {
+          setIsRegistering(true);
+          navigate('/register');
+        }}
+        onKioskLogin={(config) => {
+          localStorage.setItem('kiosk_config', JSON.stringify(config));
+          setKioskConfig(config);
+        }}
       />
     );
   }
 
   const handleOpenKiosk = (branchId: string) => {
-    if (!isEntitled('KIOSK_MODE')) {
-      setCurrentScreen('ATTENDANCE_KIOSK');
-      return;
-    }
     setKioskBranchId(branchId);
-    setCurrentScreen('ATTENDANCE_KIOSK');
+    handleNavigate('ATTENDANCE_KIOSK');
   };
 
-  const renderMainScreen = () => {
-    switch (currentScreen) {
-      case 'DASHBOARD': return <DashboardScreen onOpenKiosk={handleOpenKiosk} onNavigate={setCurrentScreen} />;
-      case 'INBOX': return <InboxScreen onNavigate={setCurrentScreen} />;
-      case 'WORKERS': 
-        return <WorkersScreen 
-                  onAddWorker={() => { setWorkerToEdit(undefined); setCurrentScreen('ADD_WORKER'); }}
-                  onEditWorker={(worker) => { setWorkerToEdit(worker); setCurrentScreen('ADD_WORKER'); }} 
-                  onNavigateToBilling={() => setCurrentScreen('BILLING')}
-                  onOpenFnfGratuity={(workerId) => {
-                    if (typeof sessionStorage !== 'undefined') {
-                      sessionStorage.setItem('gratuity_fnf_worker_id', workerId);
-                    }
-                    setCurrentScreen('GRATUITY');
-                  }}
-               />;
-      case 'ID_CARDS': 
-        return isEntitled('DIGITAL_ID_CARDS') 
-          ? <IdCardsScreen /> 
-          : <UpgradeRequiredView featureKey="DIGITAL_ID_CARDS" onNavigate={setCurrentScreen} />;
-      case 'PAYROLL': 
-        return isEntitled('ADVANCED_PAYROLL') 
-          ? <PayrollScreen onNavigate={setCurrentScreen} /> 
-          : <UpgradeRequiredView featureKey="ADVANCED_PAYROLL" onNavigate={setCurrentScreen} />;
-      case 'CTC_SIMULATOR': return <CtcSimulatorScreen onNavigate={setCurrentScreen} />;
-      case 'GRATUITY': return <GratuityScreen onNavigate={setCurrentScreen} />;
-      case 'ANNUAL_BONUS': return <AnnualBonusScreen onNavigate={setCurrentScreen} />;
-      case 'POSH_ICC': return <PoshIccScreen onNavigate={setCurrentScreen} />;
-      case 'ATTENDANCE': return <AttendanceScreen />;
-      case 'ROSTER': 
-        return isEntitled('REGULATE_PUNCH') 
-          ? <RosterScreen /> 
-          : <UpgradeRequiredView featureKey="REGULATE_PUNCH" onNavigate={setCurrentScreen} />;
-      case 'DAILY_LOGS': return <DailyWageScreen />;
-      case 'TEAM': return <TeamScreen />;
-      case 'SETTINGS': return <SettingsScreen onNavigate={setCurrentScreen} />;
-      case 'WORKER_HISTORY': return <WorkerHistoryScreen />;
-      
-      case 'SUPER_ADMIN_DASHBOARD': 
-        return profile?.role === 'SUPER_ADMIN' 
-          ? <SuperAdminDashboard /> 
-          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />; 
+  const withShell = (node: React.ReactNode) => (
+    <Layout currentScreen={currentScreen} onNavigate={handleNavigate} onLogout={logout}>
+      <GracePeriodBanner onNavigateToBilling={() => handleNavigate('BILLING')} />
+      {node}
+    </Layout>
+  );
 
-      // NEW RESELLER DASHBOARD ROUTING
-      case 'RESELLER_DASHBOARD': 
-        return profile?.role === 'RESELLER' 
-          ? <ResellerDashboard /> 
-          : <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
-
-      case 'REPORTS': return <ReportsScreen />;
-      case 'BILLING': return <BillingScreen />;
-      
-      // LEGAL SCREENS
-      case 'TERMS': return <TermsScreen />;
-      case 'PRIVACY': return <PrivacyScreen />;
-      
-      default: 
-        if (profile?.role === 'SUPER_ADMIN') return <SuperAdminDashboard />;
-        if (profile?.role === 'RESELLER') return <ResellerDashboard />;
-        return <DashboardScreen onOpenKiosk={handleOpenKiosk} />;
-    }
-  };
+  const defaultHomePath = getDefaultPathForRole(activeRole);
 
   return (
-    <Layout currentScreen={currentScreen} onNavigate={setCurrentScreen} onLogout={logout}>
-      <GracePeriodBanner onNavigateToBilling={() => setCurrentScreen('BILLING')} />
-      {renderMainScreen()}
-    </Layout>
+    <Routes>
+      {/* Root / Auth redirect */}
+      <Route path="/" element={<Navigate to={defaultHomePath} replace />} />
+      <Route path="/login" element={<Navigate to={defaultHomePath} replace />} />
+      <Route path="/register" element={<Navigate to={defaultHomePath} replace />} />
+
+      {/* ================================================================
+          SUPER_ADMIN ROUTES: Tenants, Resellers, Revenue, System Settings
+         ================================================================ */}
+      <Route
+        path="/admin"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            <Navigate to="/admin/tenants" replace />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/tenants"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            {withShell(<SuperAdminDashboard initialTab="ORGS" />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/resellers"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            {withShell(<SuperAdminDashboard initialTab="PARTNERS" />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/revenue"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            {withShell(<SuperAdminDashboard initialTab="PLANS" />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/settings"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            {withShell(<SuperAdminDashboard initialTab="SECURITY" />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          RESELLER ROUTES: Partner Dashboard, Client List, Commission Ledger
+         ================================================================ */}
+      <Route
+        path="/reseller"
+        element={
+          <RoleProtectedRoute allowedRoles={['RESELLER']}>
+            <Navigate to="/reseller/dashboard" replace />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/reseller/dashboard"
+        element={
+          <RoleProtectedRoute allowedRoles={['RESELLER']}>
+            {withShell(<ResellerDashboard initialTab="OVERVIEW" />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/reseller/clients"
+        element={
+          <RoleProtectedRoute allowedRoles={['RESELLER']}>
+            {withShell(<ResellerDashboard initialTab="CLIENTS" />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/reseller/commissions"
+        element={
+          <RoleProtectedRoute allowedRoles={['RESELLER']}>
+            {withShell(<ResellerDashboard initialTab="BILLING" />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          SHARED TENANT_ADMIN + MANAGER ROUTES (Managers are Branch-Scoped)
+         ================================================================ */}
+      <Route
+        path="/dashboard"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'MANAGER']}>
+            {withShell(<DashboardScreen onOpenKiosk={handleOpenKiosk} onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/attendance"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'MANAGER']}>
+            {withShell(<AttendanceScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/reports"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'MANAGER']}>
+            {withShell(<ReportsScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          STRICT TENANT_ADMIN ONLY ROUTES (MANAGER / WORKER / RESELLER BLOCKED)
+         ================================================================ */}
+      <Route
+        path="/inbox"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<InboxScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/workers"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(
+              <WorkersScreen
+                onAddWorker={() => {
+                  setWorkerToEdit(undefined);
+                  handleNavigate('ADD_WORKER');
+                }}
+                onEditWorker={(worker) => {
+                  setWorkerToEdit(worker);
+                  handleNavigate('ADD_WORKER');
+                }}
+                onNavigateToBilling={() => handleNavigate('BILLING')}
+                onOpenFnfGratuity={(workerId) => {
+                  if (typeof sessionStorage !== 'undefined') {
+                    sessionStorage.setItem('gratuity_fnf_worker_id', workerId);
+                  }
+                  handleNavigate('GRATUITY');
+                }}
+              />
+            )}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/workers/add"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            <AddWorkerScreen
+              initialData={workerToEdit}
+              onBack={() => {
+                setWorkerToEdit(undefined);
+                handleNavigate('WORKERS');
+              }}
+              onSuccess={() => {
+                setWorkerToEdit(undefined);
+                handleNavigate('WORKERS');
+              }}
+              onNavigateToBilling={() => handleNavigate('BILLING')}
+            />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/kiosk"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {!isEntitled('KIOSK_MODE') ? (
+              withShell(<UpgradeRequiredView featureKey="KIOSK_MODE" onNavigate={handleNavigate} />)
+            ) : (
+              <AttendanceKioskScreen
+                isDedicatedMode={false}
+                onExit={() => handleNavigate('DASHBOARD')}
+                branchId={kioskBranchId}
+              />
+            )}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/payroll"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(
+              isEntitled('ADVANCED_PAYROLL') ? (
+                <PayrollScreen onNavigate={handleNavigate} />
+              ) : (
+                <UpgradeRequiredView featureKey="ADVANCED_PAYROLL" onNavigate={handleNavigate} />
+              )
+            )}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/roster"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(
+              isEntitled('REGULATE_PUNCH') ? (
+                <RosterScreen />
+              ) : (
+                <UpgradeRequiredView featureKey="REGULATE_PUNCH" onNavigate={handleNavigate} />
+              )
+            )}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/id-cards"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(
+              isEntitled('DIGITAL_ID_CARDS') ? (
+                <IdCardsScreen />
+              ) : (
+                <UpgradeRequiredView featureKey="DIGITAL_ID_CARDS" onNavigate={handleNavigate} />
+              )
+            )}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/ctc-simulator"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<CtcSimulatorScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/gratuity"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<GratuityScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/annual-bonus"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<AnnualBonusScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/posh-icc"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<PoshIccScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/daily-logs"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<DailyWageScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/team"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<TeamScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<SettingsScreen mode="PRIMARY" onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings/advanced-hr"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            {withShell(<SettingsScreen mode="ADVANCED" onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/billing"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'SUPER_ADMIN']}>
+            {withShell(<BillingScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          WORKER SELF-SERVICE ROUTES
+         ================================================================ */}
+      <Route
+        path="/worker-portal"
+        element={
+          <RoleProtectedRoute allowedRoles={['WORKER']}>
+            {withShell(<WorkerSelfServiceScreen onNavigate={handleNavigate} />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/worker-history"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'WORKER']}>
+            {withShell(<WorkerHistoryScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          LEGAL ROUTES (Accessible to all signed-in roles)
+         ================================================================ */}
+      <Route
+        path="/terms"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'MANAGER', 'WORKER']}>
+            {withShell(<TermsScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/privacy"
+        element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'MANAGER', 'WORKER']}>
+            {withShell(<PrivacyScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* Fallback for any unknown URL */}
+      <Route path="*" element={<Navigate to={defaultHomePath} replace />} />
+    </Routes>
   );
 };

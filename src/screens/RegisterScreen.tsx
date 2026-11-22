@@ -114,7 +114,7 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
                 createdAt: new Date().toISOString()
             });
         } 
-        else if (role === 'FACTORY_OWNER') {
+        else if (role === 'TENANT_ADMIN' || role === 'FACTORY_OWNER') {
             // Determine Trial End Date (If custom was passed by reseller, use it)
             let trialEndsAt = inviteData.trialEndsAt || null;
             if (inviteData.plan === 'TRIAL' && !trialEndsAt) {
@@ -138,21 +138,30 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
                 email: user.email,
                 name: formData.name,
                 phone: formData.phone,
-                role: 'FACTORY_OWNER',
+                role: 'TENANT_ADMIN',
+                roles: ['TENANT_ADMIN'],
                 tenantId: tenantRef.id,
                 resellerId: inviteData.resellerId,
                 companyName: inviteData.companyName || formData.companyName,
+                isActive: true,
+                roleVersion: 1,
                 createdAt: new Date().toISOString()
             });
         }
-        else if (role === 'SUPERVISOR') {
+        else if (role === 'MANAGER' || role === 'SUPERVISOR') {
              await setDoc(doc(db, 'users', user.uid), {
                 uid: user.uid,
                 email: user.email,
                 name: inviteData.name || formData.name,
                 phone: formData.phone,
-                role: 'SUPERVISOR',
+                role: 'MANAGER',
+                roles: ['MANAGER'],
                 tenantId: inviteData.tenantId,
+                branchId: inviteData.branchId || 'default',
+                assignedBranchIds: [inviteData.branchId || 'default'],
+                branchName: inviteData.branchName || 'Main Branch (Head Office)',
+                isActive: true,
+                roleVersion: 1,
                 createdAt: new Date().toISOString()
             });
         }
@@ -181,9 +190,12 @@ export const RegisterScreen: React.FC<Props> = ({ onNavigateToLogin }) => {
             email: formData.email.toLowerCase(),
             name: formData.name,
             phone: formData.phone, 
-            role: 'FACTORY_OWNER',       
+            role: 'TENANT_ADMIN',
+            roles: ['TENANT_ADMIN'],
             tenantId: tenantRef.id, 
             companyName: formData.companyName,
+            isActive: true,
+            roleVersion: 1,
             createdAt: new Date().toISOString()
         });
       }

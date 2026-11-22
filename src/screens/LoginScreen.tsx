@@ -274,20 +274,67 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
           </button>
         </form>
 
-        {/* INSTANT DEMO EXPLORATION */}
+        {/* INSTANT DEMO EXPLORATION BY ROLE */}
         {!isKioskMode && (
-          <div className="mt-5 pt-4 border-t border-slate-100">
+          <div className="mt-5 pt-4 border-t border-slate-100 space-y-2.5">
             <button
               type="button"
-              onClick={() => loginDemo('FACTORY_OWNER')}
-              className="w-full py-3 px-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50 hover:from-blue-100 hover:to-indigo-100 text-slate-800 border border-blue-200/80 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-2 shadow-2xs group"
+              onClick={() => loginDemo('TENANT_ADMIN')}
+              className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50 hover:from-blue-100 hover:to-indigo-100 text-slate-800 border border-blue-200/80 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-2 shadow-2xs group cursor-pointer"
             >
-              <Sparkles size={16} className="text-blue-600 group-hover:scale-110 transition-transform" />
-              <span>Explore Platform Demo</span>
+              <Sparkles size={15} className="text-blue-600 group-hover:scale-110 transition-transform" />
+              <span>Explore as Tenant Admin (Owner)</span>
             </button>
-            <p className="text-[11px] text-slate-400 text-center mt-1.5">
-              Instant access with pre-loaded workers, biometric kiosk, daily muster &amp; payroll.
-            </p>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  loginDemo('MANAGER', {
+                    branchId: 'default',
+                    branchName: 'Main Branch (Head Office)',
+                  })
+                }
+                className="py-2 px-2.5 bg-emerald-50/80 hover:bg-emerald-100/80 text-emerald-900 border border-emerald-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Branch Manager
+              </button>
+              <button
+                type="button"
+                onClick={() => loginDemo('RESELLER')}
+                className="py-2 px-2.5 bg-indigo-50/80 hover:bg-indigo-100/80 text-indigo-900 border border-indigo-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Reseller Partner
+              </button>
+              <button
+                type="button"
+                onClick={() => loginDemo('SUPER_ADMIN')}
+                className="py-2 px-2.5 bg-purple-50/80 hover:bg-purple-100/80 text-purple-900 border border-purple-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Super Admin
+              </button>
+              <button
+                type="button"
+                onClick={() => loginDemo('WORKER')}
+                className="py-2 px-2.5 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 border border-amber-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Worker Portal
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                loginDemo('TENANT_ADMIN', {
+                  roles: ['TENANT_ADMIN', 'RESELLER'],
+                  name: 'CA Meera Shah',
+                  email: 'ca.owner@apexpartners.demo',
+                })
+              }
+              className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+            >
+              Dual-Role Demo: Tenant Admin + Reseller (Role Switcher)
+            </button>
           </div>
         )}
 

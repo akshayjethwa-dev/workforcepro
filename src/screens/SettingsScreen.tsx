@@ -4,8 +4,11 @@ import {
   Calendar, Coffee, Info, MapPin, Building, User, Lock,
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
   CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
-  IndianRupee, MessageSquare, Navigation, ShieldAlert, PhoneCall
+  IndianRupee, MessageSquare, Navigation, ShieldAlert, PhoneCall,
+  CreditCard, Users, Sliders, ArrowLeft
 } from 'lucide-react';
+import { BillingScreen } from './BillingScreen';
+import { TeamScreen } from './TeamScreen';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -32,19 +35,25 @@ import {
 import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
-export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => void }> = ({ onNavigate }) => {
-  const { profile, limits, tenantPlan } = useAuth();
+interface SettingsScreenProps {
+  mode?: 'PRIMARY' | 'ADVANCED';
+  onNavigate?: (screen: ScreenName) => void;
+}
+
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY', onNavigate }) => {
+  const { profile, tenantPlan, limits } = useAuth();
   const { toast } = useToast();
   const { isFieldMode, toggleFieldMode, setFieldMode } = useTheme();
   
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA' | 'WHATSAPP'>('GENERAL');
+  const [primaryTab, setPrimaryTab] = useState<'COMPANY_PROFILE' | 'BILLING' | 'MANAGERS'>('COMPANY_PROFILE');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA' | 'WHATSAPP'>('SHIFTS');
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const [isWhatsAppSimulatorOpen, setWhatsAppSimulatorOpen] = useState(false);
   const [waConfig, setWaConfig] = useState<WhatsAppBridgeConfig>(() => 
     whatsappService.getWhatsAppConfig(profile?.tenantId || 'demo-tenant-id')
   );
   const [showGuide, setShowGuide] = useState(false);
-  const [showSetupAssistant, setShowSetupAssistant] = useState(true);
+  const [showSetupAssistant, setShowSetupAssistant] = useState(false);
   
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [initialSettings, setInitialSettings] = useState<OrgSettings | null>(null);
@@ -547,26 +556,221 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
     </div>
   );
 
+  const isPrimaryMode = mode === 'PRIMARY';
+
+  // =========================================================================
+  // SIMPLIFIED PRIMARY SETTINGS VIEW (SMB Owners: Company Profile, Billing, Manager Management)
+  // =========================================================================
+  if (isPrimaryMode) {
+    return (
+      <div className="space-y-6 pb-24">
+        {/* Clean Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Settings</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Manage your company profile, subscription billing, and branch managers.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigate && onNavigate('ADVANCED_HR_SETTINGS')}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto cursor-pointer"
+          >
+            <Sliders size={14} className="text-slate-500" />
+            <span>Advanced HR Settings</span>
+            <ChevronRight size={14} className="text-slate-400" />
+          </button>
+        </div>
+
+        {message && (
+          <div className={`p-4 rounded-2xl flex items-center animate-in fade-in ${message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+            {message.type === 'success' ? <CheckCircle size={18} className="mr-2.5 text-emerald-600 shrink-0"/> : <AlertCircle size={18} className="mr-2.5 text-rose-600 shrink-0"/>}
+            <span className="text-xs font-semibold">{message.text}</span>
+          </div>
+        )}
+
+        {/* Primary 3-Tab Segmented Control: ONLY Company Profile, Billing, Manager Management */}
+        <div className="inline-flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+          {[
+            { id: 'COMPANY_PROFILE', label: 'Company Profile', icon: Building },
+            { id: 'BILLING', label: 'Billing', icon: CreditCard },
+            { id: 'MANAGERS', label: 'Manager Management', icon: Users },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setPrimaryTab(tab.id as any)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+                primaryTab === tab.id
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <tab.icon size={14} className={primaryTab === tab.id ? 'text-blue-600' : 'text-slate-500'} />
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* TAB 1: COMPANY PROFILE */}
+        {primaryTab === 'COMPANY_PROFILE' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+              <div className="mb-5">
+                <h2 className="text-sm font-bold text-slate-900">Company Profile</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Basic business identity displayed on payslips, reports, and worker portals.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1.5 block">
+                    Company / Business Name
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Building className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <input
+                      type="text"
+                      className="w-full pl-10 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-blue-600 focus:bg-white outline-none text-slate-900 min-h-11 transition-colors"
+                      value={orgProfile.companyName}
+                      onChange={(e) => setOrgProfile({ ...orgProfile, companyName: e.target.value })}
+                      placeholder="Enter your business name"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1.5 block">
+                    Owner / Primary Admin Name
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <User className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <input
+                      type="text"
+                      className="w-full pl-10 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-blue-600 focus:bg-white outline-none text-slate-900 min-h-11 transition-colors"
+                      value={orgProfile.ownerName}
+                      onChange={(e) => setOrgProfile({ ...orgProfile, ownerName: e.target.value })}
+                      placeholder="Your full name"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-1 font-mono tabular-nums">
+                  <span>{settings?.branches?.length || 1} active branch{(settings?.branches?.length || 1) === 1 ? '' : 'es'}</span>
+                  <span aria-hidden="true" className="text-slate-300">·</span>
+                  <span>{settings?.shifts?.length || 1} configured shift{(settings?.shifts?.length || 1) === 1 ? '' : 's'}</span>
+                  <span aria-hidden="true" className="text-slate-300">·</span>
+                  <span>OT multiplier: {settings?.overtimeMultiplier || 2}x</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {hasChanges && (
+                    <button
+                      type="button"
+                      onClick={discardChanges}
+                      disabled={saving}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      Discard
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={saving || !hasChanges}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-500 text-white text-xs font-semibold rounded-xl transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    <span>{saving ? 'Saving...' : 'Save Profile'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Quiet Secondary Entry Point to Advanced HR Settings */}
+            <div className="bg-slate-50 rounded-2xl border border-slate-200/80 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center shrink-0 mt-0.5">
+                  <Sliders size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Need to configure HR rules?</h3>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed max-w-2xl">
+                    50% wage rule calculations, overtime multipliers, shift schedules, holiday calendars, leave policies, PF/ESI statutory codes, GPS geofencing, and kiosk terminals are kept tucked away in Advanced HR Settings.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('ADVANCED_HR_SETTINGS')}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-xl text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer"
+              >
+                <span>Open Advanced HR Settings</span>
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: BILLING */}
+        {primaryTab === 'BILLING' && (
+          <div className="animate-in fade-in duration-200">
+            <BillingScreen />
+          </div>
+        )}
+
+        {/* TAB 3: MANAGER MANAGEMENT */}
+        {primaryTab === 'MANAGERS' && (
+          <div className="animate-in fade-in duration-200">
+            <TeamScreen />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // ADVANCED HR SETTINGS VIEW (/settings/advanced-hr)
+  // Houses 50% rule, overtime multipliers, shifts, leaves, statutory, geofence, etc.
+  // =========================================================================
   return (
     // Mobile Optimization: 100dvh and massive pb-40 so floating action bar doesn't cover lowest inputs when keyboard opens
     <div className="space-y-6 pb-28">
       {/* TOOLBAR */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Factory Settings & Operations</h1>
-          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-            <span>Configure branches, shifts, leave rules, statutory returns & terminals</span>
+          <button
+            type="button"
+            onClick={() => onNavigate && onNavigate('SETTINGS')}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 mb-1.5 transition-colors cursor-pointer"
+          >
+            <ArrowLeft size={14} />
+            <span>Back to Simplified Settings</span>
+          </button>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Advanced HR Settings</h1>
+          <div className="text-xs text-slate-500 flex items-center flex-wrap gap-2 mt-0.5">
+            <span>50% wage rule, overtime multipliers, shifts, leave policies, statutory PF/ESI, geofencing &amp; terminals</span>
             <span aria-hidden="true" className="text-slate-300">·</span>
             <span className="font-mono tabular-nums text-slate-600">{settings?.shifts?.length || 0} shifts active</span>
           </div>
         </div>
 
         <button 
+          type="button"
           onClick={() => setShowGuide(true)}
-          className="inline-flex items-center gap-2 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-semibold shadow-2xs transition-all active:scale-95 self-start sm:self-auto"
+          className="inline-flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors self-start sm:self-auto whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <BookOpen size={15} className="text-indigo-600" />
-          <span>Factory Setup Guide</span>
+          <BookOpen size={15} className="text-slate-500" />
+          <span>HR Setup Guide</span>
         </button>
       </div>
 
@@ -577,115 +781,90 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
         </div>
       )}
 
-      {/* ======================= EASY SETUP ASSISTANT ======================= */}
-      <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-5 sm:p-6 shadow-md border border-indigo-900/40 relative overflow-hidden">
-        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-md bg-indigo-500/30 text-indigo-200 border border-indigo-400/20">
-                  Easy Factory Setup
-                </span>
-                <span className="text-xs text-indigo-300 font-mono">
-                  {completedStepsCount} of {setupSteps.length} Steps Ready
-                </span>
-              </div>
-              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white mt-1">
-                Configure Factory Rules &amp; Operations
-              </h2>
-              <p className="text-xs text-indigo-200/90 mt-0.5 max-w-2xl leading-relaxed">
-                Set up your working shifts, factory perimeter geofence, holiday calendar, and EPFO/ESIC statutory standards in minutes.
-              </p>
+      {/* ======================= COLLAPSIBLE HR SETUP ASSISTANT ======================= */}
+      <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-xs text-slate-300 font-mono tabular-nums">
+              <span>HR Setup Checklist</span>
+              <span aria-hidden="true">·</span>
+              <span>{completedStepsCount} of {setupSteps.length} configured</span>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={applyRecommendedDefaults}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-95"
-                title="Auto-fill recommended Indian factory configuration"
-              >
-                <Wand2 size={14} />
-                <span>Auto-Fill Factory Defaults</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowSetupAssistant(!showSetupAssistant)}
-                className="p-2 text-indigo-200 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
-                title={showSetupAssistant ? "Collapse checklist" : "Expand checklist"}
-              >
-                {showSetupAssistant ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-              </button>
-            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Optional guided checklist for shifts, geofencing, holidays, statutory codes, and kiosk terminals.
+            </p>
           </div>
 
-          {/* Progress Bar */}
-          <div className="w-full bg-slate-800/80 rounded-full h-2 mt-4 overflow-hidden border border-white/10">
-            <div 
-              className="bg-gradient-to-r from-blue-500 via-indigo-400 to-emerald-400 h-2 rounded-full transition-all duration-500"
-              style={{ width: `${(completedStepsCount / setupSteps.length) * 100}%` }}
-            />
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={applyRecommendedDefaults}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              title="Auto-fill recommended Indian factory configuration"
+            >
+              <Wand2 size={13} />
+              <span>Auto-Fill Defaults</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSetupAssistant(!showSetupAssistant)}
+              className="px-2.5 py-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+            >
+              <span>{showSetupAssistant ? 'Hide' : 'Show'}</span>
+              {showSetupAssistant ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </button>
           </div>
-
-          {/* Interactive Steps Grid */}
-          {showSetupAssistant && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 mt-4">
-              {setupSteps.map(step => (
-                <button
-                  key={step.id}
-                  onClick={() => setActiveTab(step.tab)}
-                  className={`p-3 rounded-2xl border text-left transition-all group flex flex-col justify-between ${
-                    step.done 
-                      ? 'bg-white/10 border-emerald-500/30 hover:bg-white/15' 
-                      : 'bg-white/5 border-white/10 hover:bg-white/10'
-                  } ${activeTab === step.tab ? 'ring-2 ring-indigo-400' : ''}`}
-                >
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] font-mono text-indigo-300">
-                      {step.tab}
-                    </span>
-                    {step.done ? (
-                      <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
-                    ) : (
-                      <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-                    )}
-                  </div>
-                  <div className="mt-2">
-                    <div className="text-xs font-bold text-white group-hover:text-indigo-200 transition-colors line-clamp-1">
-                      {step.label}
-                    </div>
-                    <div className="text-[10px] text-indigo-200/70 line-clamp-1 mt-0.5">
-                      {step.hint}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
+
+        {showSetupAssistant && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 mt-4 pt-4 border-t border-white/10">
+            {setupSteps.map(step => (
+              <button
+                key={step.id}
+                type="button"
+                onClick={() => setActiveTab(step.tab === 'GENERAL' ? 'SHIFTS' : step.tab)}
+                className={`p-3 rounded-xl border text-left transition-colors flex flex-col justify-between cursor-pointer ${
+                  step.done 
+                    ? 'bg-white/10 border-emerald-500/30 hover:bg-white/15' 
+                    : 'bg-white/5 border-white/10 hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] font-mono text-slate-300">
+                    {step.tab}
+                  </span>
+                  {step.done && <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />}
+                </div>
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-white line-clamp-1">{step.label}</div>
+                  <div className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">{step.hint}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* --- SEGMENTED TABS CONTROLS --- */}
+      {/* --- ADVANCED HR SEGMENTED TABS CONTROLS --- */}
       <div className="flex items-center gap-1.5 p-1.5 bg-slate-200/70 rounded-2xl overflow-x-auto scrollbar-none">
         {[
-          { id: 'GENERAL', label: 'General', icon: Building },
-          { id: 'ACCESSIBILITY', label: 'Field Mode & Accessibility', icon: Sun },
-          { id: 'SHIFTS', label: 'Shifts & Grace', icon: Clock },
+          { id: 'SHIFTS', label: 'Shifts & Overtime', icon: Clock },
+          { id: 'COMPLIANCE', label: '50% Rule & Statutory (PF/ESI)', icon: Shield },
           { id: 'CALENDAR', label: 'Holidays & Calendar', icon: CalendarDays },
           { id: 'LEAVES', label: 'Leave Policy', icon: Umbrella },
-          { id: 'COMPLIANCE', label: 'Statutory (PF & ESI)', icon: Shield },
           { id: 'BRANCHES', label: 'Locations & Geofence', icon: GitBranch },
           { id: 'DEPARTMENTS', label: 'Departments', icon: Layers },
           { id: 'TERMINALS', label: 'Kiosk Terminals', icon: ScanFace },
           { id: 'EWA', label: 'Earned Wage Access', icon: IndianRupee },
-          { id: 'WHATSAPP', label: 'WhatsApp Bridge (E11)', icon: MessageSquare }
+          { id: 'WHATSAPP', label: 'WhatsApp Bridge', icon: MessageSquare },
+          { id: 'ACCESSIBILITY', label: 'Field Mode & Accessibility', icon: Sun },
+          { id: 'GENERAL', label: 'Break & Liveness Rules', icon: Coffee },
         ].map(tab => (
           <button 
             key={tab.id}
+            type="button"
             onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all shrink-0 active:scale-95 ${
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               activeTab === tab.id 
                 ? 'bg-white text-slate-900 shadow-xs' 
                 : 'text-slate-600 hover:text-slate-900'
@@ -1538,6 +1717,34 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
               </div>
             </div>
           )}
+
+          {/* Overtime Multiplier Control (Nested in Advanced HR Settings) */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Overtime Pay Multiplier</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Multiplier applied to hourly wages when workers exceed standard shift hours. Factories Act standard is 2.0x.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl shrink-0">
+                {[1.0, 1.5, 2.0].map((mult) => (
+                  <button
+                    key={mult}
+                    type="button"
+                    onClick={() => setSettings(s => s ? { ...s, overtimeMultiplier: mult } : null)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors cursor-pointer ${
+                      (settings?.overtimeMultiplier ?? 2.0) === mult
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {mult.toFixed(1)}x
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           <div className="flex justify-between items-end px-1">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Active Shift Profiles</h3>
@@ -2661,6 +2868,36 @@ export const SettingsScreen: React.FC<{ onNavigate?: (screen: ScreenName) => voi
               <p className="text-xs text-indigo-200 mt-1 leading-relaxed">
                 Configure your establishment identification codes and contribution parameters. These values directly drive your monthly EPFO ECR 2.0 text file, ESIC portal upload sheets, and Form T Monthly Muster Roll.
               </p>
+            </div>
+          </div>
+
+          {/* 50% Wage Rule Calculation Engine Control (Nested in Advanced HR Settings) */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-slate-900">50% Basic Wage Rule Calculation (Code on Wages)</h3>
+              <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
+                Automatically checks that Basic + DA is at least 50% of total remuneration during salary calculation and flags excess allowances for statutory PF &amp; gratuity compliance.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              {onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('CTC_SIMULATOR')}
+                  className="px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  Open CTC Simulator
+                </button>
+              )}
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={settings?.enforceFiftyPercentWageRule ?? true}
+                  onChange={(e) => setSettings(s => s ? { ...s, enforceFiftyPercentWageRule: e.target.checked } : null)}
+                />
+                <div className="w-11 h-6 bg-slate-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
             </div>
           </div>
 

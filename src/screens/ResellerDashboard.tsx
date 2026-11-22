@@ -9,20 +9,32 @@ import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 import { WhiteLabelModal } from '../components/WhiteLabelModal';
 import { ClientEntitlementsModal } from '../components/ClientEntitlementsModal';
+import { useNavigate } from 'react-router-dom';
 import { employeeCapGuard, EmployeeCapStatus } from '../services/employeeCapGuard';
 
 // ---> CHANGE THIS NUMBER TO ADJUST THE FREE TRIAL DAYS <---
 const FREE_TRIAL_DAYS = 7;
-export const ResellerDashboard: React.FC = () => {
+
+interface ResellerDashboardProps {
+  initialTab?: 'OVERVIEW' | 'CLIENTS' | 'BILLING';
+}
+
+export const ResellerDashboard: React.FC<ResellerDashboardProps> = ({ initialTab = 'CLIENTS' }) => {
   const { user, profile, impersonateTenant } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [clients, setClients] = useState<any[]>([]);
   const [capStatuses, setCapStatuses] = useState<Record<string, EmployeeCapStatus>>({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Tabs
-  const [activeTab, setActiveTab] = useState<'CLIENTS' | 'BILLING'>('CLIENTS');
+  const resolvedTab: 'CLIENTS' | 'BILLING' = initialTab === 'BILLING' ? 'BILLING' : 'CLIENTS';
+  const [activeTab, setActiveTab] = useState<'CLIENTS' | 'BILLING'>(resolvedTab);
+
+  useEffect(() => {
+    setActiveTab(initialTab === 'BILLING' ? 'BILLING' : 'CLIENTS');
+  }, [initialTab]);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, active: 0, workers: 0 });
@@ -112,6 +124,7 @@ export const ResellerDashboard: React.FC = () => {
     try {
       await impersonateTenant(tenant.tenantId, tenant.companyName);
       toast.info(`Switched to ${tenant.companyName} workspace`);
+      navigate('/dashboard');
     } catch (err: any) {
       toast.error(err.message || "Access denied: Unauthorized tenant");
     }

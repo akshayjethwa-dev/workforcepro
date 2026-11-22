@@ -1,4 +1,5 @@
 import React from 'react';
+import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { EntitlementProvider } from './contexts/EntitlementContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -8,16 +9,18 @@ import { OfflineBanner } from './components/OfflineBanner';
 
 function App() {
   return (
-    <AuthProvider>
-      <EntitlementProvider>
-        <ThemeProvider>
-          <ToastProvider>
-            <OfflineBanner />
-            <RootNavigator />
-          </ToastProvider>
-        </ThemeProvider>
-      </EntitlementProvider>
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <EntitlementProvider>
+          <ThemeProvider>
+            <ToastProvider>
+              <OfflineBanner />
+              <RootNavigator />
+            </ToastProvider>
+          </ThemeProvider>
+        </EntitlementProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 

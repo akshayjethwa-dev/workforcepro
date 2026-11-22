@@ -1,15 +1,18 @@
 // src/screens/TeamScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Shield, Trash2, Lock, Users, AlertTriangle, Loader2 } from 'lucide-react';
+import { UserPlus, Shield, Trash2, Lock, Users, AlertTriangle, Loader2, MapPin } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
+import { Branch } from '../types/index';
 import { TruncatedText } from '../components/TruncatedText';
 
 export const TeamScreen: React.FC = () => {
   const { profile, limits } = useAuth();
   const { toast } = useToast();
   const [team, setTeam] = useState<any[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('default');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,8 +24,18 @@ export const TeamScreen: React.FC = () => {
   const loadTeam = async () => {
     if (profile?.tenantId) {
       try {
-        const data = await dbService.getTeam(profile.tenantId);
+        const [data, settings] = await Promise.all([
+          dbService.getTeam(profile.tenantId),
+          dbService.getOrgSettings(profile.tenantId),
+        ]);
         setTeam(data);
+        const branchList = settings.branches?.length
+          ? settings.branches
+          : [{ id: 'default', name: 'Main Branch (Head Office)' }];
+        setBranches(branchList);
+        if (!branchList.some(b => b.id === selectedBranchId)) {
+          setSelectedBranchId(branchList[0].id);
+        }
       } catch (err) {
         console.error("Failed to load team", err);
       }
@@ -60,8 +73,15 @@ export const TeamScreen: React.FC = () => {
 
     setLoading(true);
     try {
-      await dbService.inviteManager(profile!.tenantId, email.toLowerCase().trim(), name.trim());
-      toast.success(`Invite sent to ${email}. They can now log in.`);
+      const assignedBranch = branches.find(b => b.id === selectedBranchId);
+      await dbService.inviteManager(
+        profile!.tenantId,
+        email.toLowerCase().trim(),
+        name.trim(),
+        selectedBranchId,
+        assignedBranch?.name || 'Main Branch (Head Office)'
+      );
+      toast.success(`Branch Manager invite sent to ${email} (${assignedBranch?.name || 'Main Branch'}).`);
       setEmail('');
       setName('');
       loadTeam();
@@ -143,6 +163,24 @@ export const TeamScreen: React.FC = () => {
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Branch (Strict Access Scope)</label>
+                <select
+                  value={selectedBranchId}
+                  onChange={e => setSelectedBranchId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 outline-none focus:bg-white focus:border-blue-600 transition-all"
+                >
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Manager can only view Dashboard, Attendance &amp; Reports for this assigned branch.
+                </p>
+              </div>
+
               <button 
                 onClick={handleInvite} 
                 disabled={loading} 
@@ -194,6 +232,15 @@ export const TeamScreen: React.FC = () => {
                       <p className="text-fluid-xs text-slate-500 break-all [overflow-wrap:anywhere] mt-0.5">
                         {member.email}
                       </p>
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold">
+                          <MapPin size={10} />
+                          <span>{member.branchName || (member.branchId === 'branch-anand' ? 'Anand Manufacturing Unit' : 'Main Branch (Head Office)')}</span>
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-semibold">
+                          MANAGER
+                        </span>
+                      </div>
                     </div>
                   </div>
                   

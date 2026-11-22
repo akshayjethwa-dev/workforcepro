@@ -39,14 +39,14 @@ const EntitlementContext = createContext<EntitlementContextType>({
 export const useEntitlements = () => useContext(EntitlementContext);
 
 export const EntitlementProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { profile, tenantPlan, user } = useAuth();
+  const { profile, activeRole, tenantPlan } = useAuth();
   const [loading, setLoading] = useState<boolean>(true);
   const [resolutions, setResolutions] = useState<Record<FeatureFlagKey, FeatureResolution>>({} as any);
   const [pendingDowngrade, setPendingDowngrade] = useState<PendingDowngrade | null>(null);
   const [isInGracePeriod, setIsInGracePeriod] = useState<boolean>(false);
 
   const tenantId = profile?.tenantId;
-  const isSuperAdmin = profile?.role === 'SUPER_ADMIN';
+  const isSuperAdmin = activeRole === 'SUPER_ADMIN' || profile?.role === 'SUPER_ADMIN';
 
   const loadEntitlements = useCallback(async (forceFresh = false) => {
     if (!tenantId) {

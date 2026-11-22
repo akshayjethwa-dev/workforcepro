@@ -485,7 +485,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                 wageAudit={wageAudit}
                 activeTokensCount={activeTokensCount}
                 isInactive={isInactive}
-                isOwner={profile?.role === 'FACTORY_OWNER'}
+                isOwner={profile?.role === 'TENANT_ADMIN' || profile?.role === 'FACTORY_OWNER'}
                 allowancesEnabled={Boolean(limits?.allowancesAndDeductionsEnabled)}
                 onEdit={onEditWorker}
                 onExit={(w) => {

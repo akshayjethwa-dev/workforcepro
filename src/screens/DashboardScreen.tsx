@@ -1,16 +1,36 @@
 // src/screens/DashboardScreen.tsx
-import React, { useState, useEffect } from 'react';
-import { 
-  CheckCircle, Clock, Calendar, ChevronRight, RefreshCw, PlayCircle, XCircle, Timer, Activity, Lock, MapPin, Bot,
-  BookOpen, CheckCircle2, ArrowRight, Sparkles, X, Inbox, Navigation, ShieldAlert, AlertTriangle
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  CheckCircle,
+  Clock,
+  ChevronRight,
+  RefreshCw,
+  PlayCircle,
+  XCircle,
+  Timer,
+  Activity,
+  Lock,
+  MapPin,
+  ArrowRight,
+  Inbox,
+  Navigation,
+  ShieldAlert,
+  AlertTriangle,
+  Users,
+  IndianRupee,
+  Sliders,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useTheme } from '../contexts/ThemeContext'; // NEW: Import theme context
+import { useTheme } from '../contexts/ThemeContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
-import { AttendanceRecord, FnfSettlementRecord, OrgSettings, ScreenName } from '../types/index';
-import { AIChat } from '../components/AIChat';
-import { SetupGuideModal } from '../components/SetupGuideModal';
+import {
+  FnfSettlementRecord,
+  InboxItem,
+  OrgSettings,
+  ScreenName,
+  Worker,
+} from '../types/index';
 import { inboxService } from '../services/inboxService';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
 import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
@@ -27,55 +47,143 @@ interface Props {
   onNavigate?: (screen: ScreenName) => void;
 }
 
+/**
+ * Computes the estimated monthly payroll run cost for active workers
+ * using configured monthly/daily/piece-rate compensation plus overtime multiplier.
+ */
+function calculateEstimatedMonthlyPayroll(
+  activeWorkers: Worker[],
+  monthlyOvertimeHours: number,
+  overtimeMultiplier: number
+): { totalEstimate: number; baseEstimate: number; overtimeEstimate: number } {
+  const DEFAULT_WORKING_DAYS = 26;
+  let baseEstimate = 0;
+
+  for (const w of activeWorkers) {
+    const workingDays = w.wageConfig?.workingDaysPerMonth || w.wageConfig?.dailyMultiplier || DEFAULT_WORKING_DAYS;
+    const allowances = w.wageConfig?.allowances
+      ? Number(w.wageConfig.allowances.travel || 0) +
+        Number(w.wageConfig.allowances.food || 0) +
+        Number(w.wageConfig.allowances.nightShift || 0)
+      : 0;
+
+    if (w.wageConfig && Number(w.wageConfig.amount) > 0) {
+      if (w.wageConfig.type === 'MONTHLY') {
+        baseEstimate += Number(w.wageConfig.amount) + allowances;
+      } else {
+        baseEstimate += Number(w.wageConfig.amount) * workingDays + allowances;
+      }
+    } else if (w.monthlySalary && w.monthlySalary > 0) {
+      baseEstimate += Number(w.monthlySalary) + allowances;
+    } else if (w.dailyWage && w.dailyWage > 0) {
+      baseEstimate += Number(w.dailyWage) * workingDays + allowances;
+    } else if (w.hourlyWage && w.hourlyWage > 0) {
+      baseEstimate += Number(w.hourlyWage) * 8 * workingDays + allowances;
+    }
+  }
+
+  const avgHourlyRate =
+    activeWorkers.length > 0
+      ? baseEstimate / (activeWorkers.length * DEFAULT_WORKING_DAYS * 8)
+      : 0;
+  const overtimeEstimate = Math.round(monthlyOvertimeHours * avgHourlyRate * overtimeMultiplier);
+
+  return {
+    totalEstimate: Math.round(baseEstimate + overtimeEstimate),
+    baseEstimate: Math.round(baseEstimate),
+    overtimeEstimate,
+  };
+}
+
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) => {
-  const { profile, limits, user } = useAuth();
-  const { branding } = useTheme(); // NEW: Pull dynamic branding
-  
-  const [showGuide, setShowGuide] = useState(false);
-  const [hideChecklist, setHideChecklist] = useState(() => localStorage.getItem('hide_factory_checklist') === 'true');
-  
-  const [stats, setStats] = useState({ 
-      total: 0, 
-      present: 0, 
-      halfDay: 0,
-      absent: 0, 
-      late: 0, 
-      pending: 0, 
-      onLeave: 0 
+  const { profile, activeRole, limits, branchScope } = useAuth();
+  const { branding } = useTheme();
+
+  const isTenantAdmin = activeRole === 'TENANT_ADMIN';
+
+  const [stats, setStats] = useState({
+    total: 0,
+    present: 0,
+    halfDay: 0,
+    absent: 0,
+    late: 0,
+    pending: 0,
+    onLeave: 0,
   });
-  
+
+  const [payrollEstimate, setPayrollEstimate] = useState({
+    totalEstimate: 0,
+    baseEstimate: 0,
+    overtimeEstimate: 0,
+  });
+
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
-  const [selectedDashboardBranch, setSelectedDashboardBranch] = useState<string>('ALL');
+  const [selectedDashboardBranch, setSelectedDashboardBranch] = useState<string>(
+    branchScope.isBranchScoped && branchScope.primaryBranchId
+      ? branchScope.primaryBranchId
+      : 'ALL'
+  );
+
+  useEffect(() => {
+    if (branchScope.isBranchScoped && branchScope.primaryBranchId) {
+      setSelectedDashboardBranch(branchScope.primaryBranchId);
+    }
+  }, [branchScope.isBranchScoped, branchScope.primaryBranchId]);
+
   const [showKioskModal, setShowKioskModal] = useState(false);
   const [selectedKioskBranch, setSelectedKioskBranch] = useState<string>('default');
-  
-  // AI Chat state
-  const [showAIChat, setShowAIChat] = useState(false);
+
   const [inboxPendingCount, setInboxPendingCount] = useState<number>(0);
+  const [pendingInboxPreview, setPendingInboxPreview] = useState<InboxItem[]>([]);
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [activeShiftCount, setActiveShiftCount] = useState(0);
   const [showSafetyMonitorModal, setShowSafetyMonitorModal] = useState(false);
   const [activePanicCount, setActivePanicCount] = useState(0);
   const [fnfAlerts, setFnfAlerts] = useState<FnfSettlementRecord[]>([]);
 
+  const currentMonthLabel = useMemo(
+    () => new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+    []
+  );
+  const todayDateLabel = useMemo(
+    () =>
+      new Date().toLocaleDateString('en-IN', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      }),
+    []
+  );
+
   const refreshData = async () => {
     if (!profile?.tenantId) return;
     setLoading(true);
     try {
-      const [workers, attendance, settings] = await Promise.all([
-        dbService.getWorkers(profile.tenantId),
-        dbService.getTodayAttendance(profile.tenantId),
+      const branchOpt =
+        branchScope.isBranchScoped && branchScope.primaryBranchId
+          ? { branchId: branchScope.primaryBranchId }
+          : undefined;
+
+      const [workers, attendance, settings, attendanceHistory] = await Promise.all([
+        dbService.getWorkers(profile.tenantId, branchOpt),
+        dbService.getTodayAttendance(profile.tenantId, branchOpt),
         dbService.getOrgSettings(profile.tenantId),
+        isTenantAdmin
+          ? dbService.getAttendanceHistory(profile.tenantId, branchOpt).catch(() => [])
+          : Promise.resolve([]),
       ]);
 
-      const syncedFnf = await syncFnfBreachAlerts(
-        profile.tenantId,
-        profile.email || 'admin@workforcepro.in',
-        settings
-      ).catch(() => [] as FnfSettlementRecord[]);
+      const syncedFnf = isTenantAdmin
+        ? await syncFnfBreachAlerts(
+            profile.tenantId,
+            profile.email || 'admin@workforcepro.in',
+            settings
+          ).catch(() => [] as FnfSettlementRecord[])
+        : [];
       const activeFnf = syncedFnf.filter((r) => {
         if (r.status === 'SETTLED') return false;
         const wagePaid = r.paymentSchedules?.wageFnf?.status === 'PAID';
@@ -83,166 +191,187 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
       });
       setFnfAlerts(activeFnf);
 
-      const pendingActions = await inboxService.getPendingCount(profile.tenantId, profile).catch(() => 0);
+      if (isTenantAdmin) {
+        const inboxPayload = await inboxService
+          .getInboxItems(profile.tenantId, profile)
+          .catch(() => ({ pending: [] as InboxItem[], done: [] as InboxItem[] }));
+        setInboxPendingCount(inboxPayload.pending.length);
+        setPendingInboxPreview(inboxPayload.pending.slice(0, 2));
+      } else {
+        setInboxPendingCount(0);
+        setPendingInboxPreview([]);
+      }
 
-      setInboxPendingCount(pendingActions);
       setOrgSettings(settings);
 
-      // Check live field shift breadcrumb sessions (Key AC 6)
       const liveShifts = breadcrumbService.getActiveShiftWorkers(profile.tenantId);
       setActiveShiftCount(liveShifts.length);
 
-      // Check active emergency panic SOS alerts
       const livePanics = safetyCheckInService.getActivePanicAlerts(profile.tenantId);
       setActivePanicCount(livePanics.length);
 
-      const activeWorkers = workers.filter(w => 
-          w.status === 'ACTIVE' && 
-          (selectedDashboardBranch === 'ALL' || (w.branchId || 'default') === selectedDashboardBranch)
+      const activeWorkers = workers.filter(
+        (w) =>
+          w.status === 'ACTIVE' &&
+          (selectedDashboardBranch === 'ALL' ||
+            (w.branchId || 'default') === selectedDashboardBranch)
       );
-      
+
       const total = activeWorkers.length;
-      
+      const activeWorkerIds = new Set(activeWorkers.map((w) => w.id));
+
+      // Calculate monthly payroll estimate for SMB Owner view
+      if (isTenantAdmin) {
+        const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+        const monthOvertimeHours = attendanceHistory
+          .filter(
+            (r) =>
+              activeWorkerIds.has(r.workerId) &&
+              typeof r.date === 'string' &&
+              r.date.startsWith(currentMonthPrefix)
+          )
+          .reduce((sum, r) => sum + Number(r.hours?.overtime || 0), 0);
+        const otMult = settings.overtimeMultiplier || 2.0;
+        setPayrollEstimate(
+          calculateEstimatedMonthlyPayroll(activeWorkers, monthOvertimeHours, otMult)
+        );
+      }
+
       let presentCount = 0;
       let halfDayCount = 0;
       let lateCount = 0;
       let onLeaveCount = 0;
       let pendingCount = 0;
 
-      const activeWorkerIds = new Set(activeWorkers.map(w => w.id));
-      const filteredAttendance = attendance.filter(r => activeWorkerIds.has(r.workerId));
+      const filteredAttendance = attendance.filter((r) => activeWorkerIds.has(r.workerId));
 
-      const processedActivity = filteredAttendance.map(record => {
-          const currentHours = attendanceLogic.calculateHours(record.timeline, settings.enableBreakTracking);
-          
-          const lastPunch = record.timeline && record.timeline.length > 0 
-              ? record.timeline[record.timeline.length - 1] 
-              : null;
-          const isCurrentlyIn = lastPunch?.type === 'IN';
+      const processedActivity = filteredAttendance.map((record) => {
+        const currentHours = attendanceLogic.calculateHours(
+          record.timeline,
+          settings.enableBreakTracking
+        );
 
-          let dynamicallyCalculatedLate = false;
-          const shift = settings.shifts.find(s => s.id === record.shiftId) || settings.shifts[0];
-          const firstPunch = record.timeline?.find(p => p.type === 'IN');
-          
-          if (firstPunch && shift) {
-              const punchTime = new Date(firstPunch.timestamp);
-              const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
-              const shiftStartTime = new Date(punchTime);
-              shiftStartTime.setHours(shiftHour, shiftMin, 0, 0);
+        const lastPunch =
+          record.timeline && record.timeline.length > 0
+            ? record.timeline[record.timeline.length - 1]
+            : null;
+        const isCurrentlyIn = lastPunch?.type === 'IN';
 
-              const diffMs = punchTime.getTime() - shiftStartTime.getTime();
-              const lateByMins = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+        let dynamicallyCalculatedLate = false;
+        const shift =
+          settings.shifts.find((s) => s.id === record.shiftId) || settings.shifts[0];
+        const firstPunch = record.timeline?.find((p) => p.type === 'IN');
 
-              dynamicallyCalculatedLate = lateByMins > (shift.gracePeriodMins || 15);
-          }
+        if (firstPunch && shift) {
+          const punchTime = new Date(firstPunch.timestamp);
+          const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
+          const shiftStartTime = new Date(punchTime);
+          shiftStartTime.setHours(shiftHour, shiftMin, 0, 0);
 
-          let computedStatus = 'ABSENT';
-          
-          if (record.status === 'ON_LEAVE') {
-              computedStatus = 'ON_LEAVE';
-          } else {
-              if (currentHours >= 6) {
-                  computedStatus = 'PRESENT';
-              } else if (currentHours >= 4) {
-                  computedStatus = 'HALF_DAY';
-              } else {
-                  if (isCurrentlyIn) {
-                      computedStatus = 'PENDING'; 
-                  } else {
-                      computedStatus = 'ABSENT'; 
-                  }
-              }
-          }
+          const diffMs = punchTime.getTime() - shiftStartTime.getTime();
+          const lateByMins = Math.max(0, Math.floor(diffMs / (1000 * 60)));
 
-          if (dynamicallyCalculatedLate) {
-              lateCount++;
-          }
+          dynamicallyCalculatedLate = lateByMins > (shift.gracePeriodMins || 15);
+        }
 
-          return {
-              ...record,
-              currentHours,
-              computedStatus,
-              isCurrentlyIn,
-              isLate: dynamicallyCalculatedLate
-          };
+        let computedStatus = 'ABSENT';
+        if (record.status === 'ON_LEAVE') {
+          computedStatus = 'ON_LEAVE';
+        } else if (currentHours >= 6) {
+          computedStatus = 'PRESENT';
+        } else if (currentHours >= 4) {
+          computedStatus = 'HALF_DAY';
+        } else if (isCurrentlyIn) {
+          computedStatus = 'PENDING';
+        } else {
+          computedStatus = 'ABSENT';
+        }
+
+        if (dynamicallyCalculatedLate) {
+          lateCount++;
+        }
+
+        return {
+          ...record,
+          currentHours,
+          computedStatus,
+          isCurrentlyIn,
+          isLate: dynamicallyCalculatedLate,
+        };
       });
 
-      processedActivity.forEach(r => {
-          if (r.computedStatus === 'PRESENT') presentCount++;
-          else if (r.computedStatus === 'HALF_DAY') halfDayCount++;
-          else if (r.computedStatus === 'PENDING') pendingCount++;
-          else if (r.computedStatus === 'ON_LEAVE') onLeaveCount++;
+      processedActivity.forEach((r) => {
+        if (r.computedStatus === 'PRESENT') presentCount++;
+        else if (r.computedStatus === 'HALF_DAY') halfDayCount++;
+        else if (r.computedStatus === 'PENDING') pendingCount++;
+        else if (r.computedStatus === 'ON_LEAVE') onLeaveCount++;
       });
 
       const attendedOrLeaved = presentCount + halfDayCount + pendingCount + onLeaveCount;
       const absentCount = Math.max(0, total - attendedOrLeaved);
 
-      setStats({ 
-          total, 
-          present: presentCount, 
-          halfDay: halfDayCount,
-          absent: absentCount, 
-          late: lateCount, 
-          pending: pendingCount,
-          onLeave: onLeaveCount 
+      setStats({
+        total,
+        present: presentCount,
+        halfDay: halfDayCount,
+        absent: absentCount,
+        late: lateCount,
+        pending: pendingCount,
+        onLeave: onLeaveCount,
       });
 
       const sorted = processedActivity.sort((a, b) => {
         const getLastTime = (r: any) => {
-           if (r.timeline && r.timeline.length > 0) {
-              return new Date(r.timeline[r.timeline.length - 1].timestamp).getTime();
-           }
-           return new Date(r.date).getTime(); 
+          if (r.timeline && r.timeline.length > 0) {
+            return new Date(r.timeline[r.timeline.length - 1].timestamp).getTime();
+          }
+          return new Date(r.date).getTime();
         };
         return getLastTime(b) - getLastTime(a);
       });
-      
+
       setRecentActivity(sorted);
     } catch (e) {
-      console.error("Dashboard refresh error:", e);
+      console.error('Dashboard refresh error:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { refreshData(); }, [profile, selectedDashboardBranch]);
+  useEffect(() => {
+    refreshData();
+  }, [profile, selectedDashboardBranch, activeRole]);
 
   const handleKioskLaunch = () => {
-      const branches = orgSettings?.branches || [];
-      if (branches.length > 1) {
-          setSelectedKioskBranch(branches[0].id);
-          setShowKioskModal(true);
-      } else {
-          onOpenKiosk(branches[0]?.id || 'default');
-      }
+    const branches = orgSettings?.branches || [];
+    if (branches.length > 1) {
+      setSelectedKioskBranch(branches[0].id);
+      setShowKioskModal(true);
+    } else {
+      onOpenKiosk(branches[0]?.id || 'default');
+    }
   };
 
-  const handleAIChatOpen = () => {
-    if (!user) {
-      alert('Please log in to use AI Assistant');
-      return;
-    }
-    if (!profile?.tenantId) {
-      alert('Profile not loaded. Please refresh the page.');
-      return;
-    }
-    setShowAIChat(true);
-  };
+  const workersPresentTotal = stats.present + stats.halfDay + stats.pending;
+  const attendancePct =
+    stats.total > 0 ? Math.min(100, Math.round((workersPresentTotal / stats.total) * 100)) : 0;
 
   const StatCard = ({ icon: Icon, value, label, subLabel, accentColor }: any) => (
-    <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between min-h-[7.25rem] min-w-0 relative">
+    <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 hover:border-slate-300 transition-colors flex flex-col justify-between min-h-[7.25rem] min-w-0">
       <div className="flex items-center justify-between gap-2 min-w-0">
-        <span className="text-fluid-xs font-semibold text-slate-500 uppercase tracking-wider min-w-0 break-words">{label}</span>
-        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${accentColor}`}>
+        <span className="text-xs font-medium text-slate-500 min-w-0 break-words">{label}</span>
+        <div
+          className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${accentColor}`}
+        >
           <Icon size={17} />
         </div>
       </div>
       <div className="mt-2 min-w-0">
-        <div className="text-fluid-2xl font-extrabold font-mono tabular-nums text-slate-900 tracking-tight break-words">
+        <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 tracking-tight break-words">
           {value}
         </div>
         {subLabel && (
-          <div className="text-fluid-xs text-slate-500 mt-1 flex items-center flex-wrap gap-1.5 min-w-0">
+          <div className="text-xs text-slate-500 mt-1 flex items-center flex-wrap gap-1.5 min-w-0">
             <span className="break-words">{subLabel}</span>
           </div>
         )}
@@ -252,497 +381,617 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
 
   return (
     <div className="space-y-6 pb-12 min-w-0">
-        {/* PERSISTENT EMPLOYEE CAP BANNER */}
-        <EmployeeCapBanner 
-          tenantId={profile?.tenantId || 'demo-tenant-id'} 
-          onNavigateToBilling={() => onNavigate && onNavigate('BILLING')} 
+      {/* PERSISTENT EMPLOYEE CAP BANNER */}
+      {isTenantAdmin && (
+        <EmployeeCapBanner
+          tenantId={profile?.tenantId || 'demo-tenant-id'}
+          onNavigateToBilling={() => onNavigate && onNavigate('SETTINGS')}
         />
+      )}
 
-        {/* PAGE TOOLBAR */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
-            <div className="flex items-center gap-3 min-w-0">
-                {branding?.logoUrl ? (
-                    <img 
-                        src={branding.logoUrl} 
-                        alt="Logo"
-                        className="h-10 w-auto max-w-[100px] object-contain bg-white p-1 rounded-xl border border-slate-200 shadow-xs shrink-0" 
-                    />
-                ) : (
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
-                        {profile?.companyName ? profile.companyName.charAt(0).toUpperCase() : 'W'}
-                    </div>
-                )}
-                <div className="min-w-0 flex-1">
-                    <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">
-                        {branding?.appName || profile?.companyName || 'Factory Dashboard'}
-                    </h1>
-                    <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
-                        <span>Live Attendance &amp; Shift Status</span>
-                        <span aria-hidden="true" className="text-slate-300">·</span>
-                        <span className="font-mono tabular-nums text-slate-600">{stats.total} Active Personnel</span>
-                    </div>
-                </div>
+      {/* CLEAN EXECUTIVE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="flex items-center gap-3 min-w-0">
+          {branding?.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt="Company logo"
+              className="h-10 w-auto max-w-[100px] object-contain bg-white p-1 rounded-xl border border-slate-200 shrink-0"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shrink-0">
+              {profile?.companyName ? profile.companyName.charAt(0).toUpperCase() : 'W'}
             </div>
-            
-            <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
-                {orgSettings?.branches && orgSettings.branches.length > 1 && (
-                    <select 
-                       className="bg-white border border-slate-200 text-xs font-semibold text-slate-700 py-2 px-3 rounded-xl shadow-xs outline-none hover:border-slate-300 transition-colors"
-                       value={selectedDashboardBranch} 
-                       onChange={e => setSelectedDashboardBranch(e.target.value)}
-                    >
-                       <option value="ALL">All Branches & Godowns</option>
-                       {orgSettings.branches.map(b => (
-                           <option key={b.id} value={b.id}>{b.name}</option>
-                       ))}
-                    </select>
-                )}
-                <button 
-                  onClick={() => setShowRouteModal(true)}
-                  className="px-3 py-2 bg-slate-900 rounded-xl text-white shadow-xs hover:bg-slate-800 active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px]"
-                  title="Inspect live field routes and shift breadcrumbs"
-                >
-                  <Navigation size={15} className="text-emerald-400" />
-                  <span className="hidden sm:inline">Field Routes</span>
-                  {activeShiftCount > 0 && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
-                  )}
-                </button>
-                <button 
-                  onClick={() => setShowSafetyMonitorModal(true)}
-                  className={`px-3 py-2 rounded-xl text-white shadow-xs active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px] cursor-pointer ${
-                    activePanicCount > 0 ? 'bg-rose-700 hover:bg-rose-800 animate-pulse' : 'bg-slate-900 hover:bg-slate-800'
-                  }`}
-                  title="Inspect lone worker check-in statuses and panic SOS alerts"
-                >
-                  <ShieldAlert size={15} className={activePanicCount > 0 ? 'text-white' : 'text-rose-400'} />
-                  <span className="hidden sm:inline">Lone Safety</span>
-                  {activePanicCount > 0 && (
-                    <span className="px-1 py-0.2 rounded font-mono text-[9px] font-black bg-rose-500 text-white ml-0.5">
-                      {activePanicCount} SOS
-                    </span>
-                  )}
-                </button>
-                <button 
-                  onClick={() => setShowGuide(true)}
-                  className="px-3 py-2 bg-white rounded-xl border border-slate-200 shadow-xs hover:bg-slate-50 hover:border-slate-300 text-slate-700 active:scale-95 transition-all text-xs font-semibold flex items-center gap-1.5 min-h-[38px]"
-                  title="Factory Setup & Operational Guide"
-                >
-                  <BookOpen size={15} className="text-indigo-600" />
-                  <span className="hidden sm:inline">Setup Guide</span>
-                </button>
-                <button 
-                  onClick={refreshData} 
-                  title="Refresh live metrics"
-                  className="p-2 bg-white rounded-xl border border-slate-200 shadow-xs hover:bg-slate-50 hover:border-slate-300 text-slate-600 active:scale-95 transition-all min-w-[38px] min-h-[38px] flex items-center justify-center"
-                >
-                    <RefreshCw size={17} className={loading ? "animate-spin text-blue-600" : "text-slate-600"}/>
-                </button>
+          )}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-fluid-xl font-bold tracking-tight text-slate-900 break-words">
+              {branding?.appName || profile?.companyName || 'Business Overview'}
+            </h1>
+            <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+              <span>{todayDateLabel}</span>
+              <span aria-hidden="true" className="text-slate-300">
+                ·
+              </span>
+              <span className="font-mono tabular-nums text-slate-600">
+                {stats.total} active workers
+              </span>
             </div>
+          </div>
         </div>
 
-        {/* SECTION 17(2) FNF DEADLINE & BREACH ALERT BANNER */}
-        {fnfAlerts.length > 0 && (() => {
-          const breached = fnfAlerts.filter((r) => evaluateFnfDeadline(r, Date.now(), orgSettings).isBreached);
-          const totalInterest = breached.reduce(
-            (sum, r) => sum + evaluateFnfDeadline(r, Date.now(), orgSettings).accruedInterestPenalty,
-            0
-          );
-          const isBreachPresent = breached.length > 0;
-          return (
-            <div
-              className={`rounded-2xl p-4 sm:p-5 border-2 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
-                isBreachPresent
-                  ? 'bg-rose-50 border-rose-400 text-rose-950'
-                  : 'bg-amber-50 border-amber-300 text-amber-950'
+        <div className="flex items-center flex-wrap gap-2 self-start sm:self-auto max-w-full">
+          {branchScope.isBranchScoped ? (
+            <div className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold py-2 px-3 rounded-xl">
+              <MapPin size={14} className="text-emerald-600 shrink-0" />
+              <span>Branch: {branchScope.branchName}</span>
+            </div>
+          ) : (
+            orgSettings?.branches &&
+            orgSettings.branches.length > 1 && (
+              <select
+                aria-label="Filter by branch"
+                className="bg-white border border-slate-200 text-xs font-medium text-slate-700 py-2 px-3 rounded-xl outline-none hover:border-slate-300 transition-colors min-h-[38px]"
+                value={selectedDashboardBranch}
+                onChange={(e) => setSelectedDashboardBranch(e.target.value)}
+              >
+                <option value="ALL">All Locations</option>
+                {orgSettings.branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            )
+          )}
+
+          {/* Field Ops & Safety shortcuts stay accessible for Branch Managers */}
+          {!isTenantAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowRouteModal(true)}
+                className="px-3 py-2 bg-slate-900 rounded-xl text-white hover:bg-slate-800 transition-colors text-xs font-medium flex items-center gap-1.5 min-h-[38px] whitespace-nowrap shrink-0 cursor-pointer"
+                title="Inspect live field routes and shift breadcrumbs"
+              >
+                <Navigation size={14} className="text-emerald-400" />
+                <span className="hidden sm:inline">
+                  Field Routes{activeShiftCount > 0 ? ` (${activeShiftCount})` : ''}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSafetyMonitorModal(true)}
+                className={`px-3 py-2 rounded-xl text-white transition-colors text-xs font-medium flex items-center gap-1.5 min-h-[38px] whitespace-nowrap shrink-0 cursor-pointer ${
+                  activePanicCount > 0
+                    ? 'bg-rose-700 hover:bg-rose-800'
+                    : 'bg-slate-900 hover:bg-slate-800'
+                }`}
+                title="Inspect lone worker check-in statuses and panic SOS alerts"
+              >
+                <ShieldAlert
+                  size={14}
+                  className={activePanicCount > 0 ? 'text-white' : 'text-rose-400'}
+                />
+                <span className="hidden sm:inline">
+                  Safety Monitor{activePanicCount > 0 ? ` (${activePanicCount} SOS)` : ''}
+                </span>
+              </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={refreshData}
+            title="Refresh metrics"
+            aria-label="Refresh metrics"
+            className="p-2 bg-white rounded-xl border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-600 transition-colors min-w-[38px] min-h-[38px] flex items-center justify-center cursor-pointer"
+          >
+            <RefreshCw
+              size={16}
+              className={loading ? 'animate-spin text-blue-600' : 'text-slate-600'}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* =====================================================================
+          SIMPLIFIED SMB OWNER VIEW (TENANT_ADMIN)
+          Focus: 3 high-level business widgets — no complex HR config noise
+         ===================================================================== */}
+      {isTenantAdmin ? (
+        <>
+          {/* CRITICAL STATUTORY DEADLINE ALERT (Shown only if an active FnF breach exists) */}
+          {fnfAlerts.length > 0 &&
+            (() => {
+              const breached = fnfAlerts.filter(
+                (r) => evaluateFnfDeadline(r, Date.now(), orgSettings).isBreached
+              );
+              const isBreachPresent = breached.length > 0;
+              if (!isBreachPresent) return null;
+              const totalInterest = breached.reduce(
+                (sum, r) =>
+                  sum + evaluateFnfDeadline(r, Date.now(), orgSettings).accruedInterestPenalty,
+                0
+              );
+              return (
+                <div className="rounded-2xl p-4 sm:p-5 border border-rose-300 bg-rose-50 text-rose-950 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                      <AlertTriangle size={20} />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-bold text-sm text-rose-950">
+                        Urgent: {breached.length} Final Settlement{breached.length > 1 ? 's' : ''}{' '}
+                        Past Statutory Deadline
+                      </h3>
+                      <p className="text-xs text-rose-800">
+                        Accrued statutory interest:{' '}
+                        <span className="font-mono font-semibold tabular-nums">
+                          ₹{Math.round(totalInterest).toLocaleString('en-IN')}
+                        </span>
+                        . Review and settle to stop penalties.
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {breached.slice(0, 2).map((rec) => (
+                          <div
+                            key={rec.id}
+                            className="inline-flex items-center gap-2 bg-white px-2.5 py-1 rounded-lg border border-rose-200 text-xs"
+                          >
+                            <span className="font-semibold text-slate-900">{rec.workerName}</span>
+                            <FnfDeadlineBadge record={rec} orgSettings={orgSettings} compact />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  {onNavigate && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('GRATUITY')}
+                      className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 self-start lg:self-center cursor-pointer"
+                    >
+                      <span>Review Settlements</span>
+                      <ArrowRight size={14} />
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
+          {/* 3 HIGH-LEVEL EXECUTIVE BUSINESS WIDGETS */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+            {/* WIDGET 1: Total Workers Present Today */}
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('ATTENDANCE')}
+              className="text-left bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 hover:border-slate-300 transition-colors flex flex-col justify-between min-h-[11.5rem] group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-slate-500">
+                    Total Workers Present Today
+                  </p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-3xl font-bold font-mono tabular-nums text-slate-900 tracking-tight">
+                      {workersPresentTotal}/{stats.total}
+                    </span>
+                    <span className="text-xs font-semibold font-mono tabular-nums text-emerald-700">
+                      {attendancePct}% on site
+                    </span>
+                  </div>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                  <Users size={20} />
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2.5">
+                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                    style={{ width: `${attendancePct}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                  <span className="font-mono tabular-nums truncate">
+                    {stats.present + stats.halfDay} verified · {stats.pending} on shift ·{' '}
+                    {stats.absent} absent
+                  </span>
+                  <ChevronRight
+                    size={15}
+                    className="text-slate-400 group-hover:text-slate-700 group-hover:translate-x-0.5 transition-transform shrink-0"
+                  />
+                </div>
+              </div>
+            </button>
+
+            {/* WIDGET 2: Estimated Payroll Cost this Month */}
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('PAYROLL')}
+              className="text-left bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 hover:border-slate-300 transition-colors flex flex-col justify-between min-h-[11.5rem] group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-slate-500">
+                    Estimated Payroll Cost this Month
+                  </p>
+                  <div className="mt-2">
+                    <span className="text-3xl font-bold font-mono tabular-nums text-slate-900 tracking-tight">
+                      ₹{payrollEstimate.totalEstimate.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+                  <IndianRupee size={20} />
+                </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span className="truncate">
+                  {currentMonthLabel}
+                  {payrollEstimate.overtimeEstimate > 0
+                    ? ` · incl. ₹${payrollEstimate.overtimeEstimate.toLocaleString('en-IN')} OT`
+                    : ` · ${stats.total} active staff`}
+                </span>
+                <span className="font-semibold text-blue-700 group-hover:text-blue-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0">
+                  <span>Payroll</span>
+                  <ChevronRight
+                    size={14}
+                    className="group-hover:translate-x-0.5 transition-transform"
+                  />
+                </span>
+              </div>
+            </button>
+
+            {/* WIDGET 3: Action Inbox: N Pending Approvals */}
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('INBOX')}
+              className={`text-left p-5 sm:p-6 rounded-2xl border transition-colors flex flex-col justify-between min-h-[11.5rem] group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                inboxPendingCount > 0
+                  ? 'bg-slate-900 text-white border-slate-800 hover:bg-slate-800'
+                  : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300'
               }`}
             >
-              <div className="flex items-start gap-3.5">
-                <div
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
-                    isBreachPresent ? 'bg-rose-600 text-white animate-pulse' : 'bg-amber-600 text-white'
-                  }`}
-                >
-                  <AlertTriangle size={22} />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-black text-sm sm:text-base">
-                      {isBreachPresent
-                        ? `Section 17(2) FnF Deadline Breached (${breached.length} Employee${breached.length > 1 ? 's' : ''})`
-                        : `Active FnF Settlements Tracked (${fnfAlerts.length} Pending Off-Cycle Payout${fnfAlerts.length > 1 ? 's' : ''})`}
-                    </h3>
-                    {isBreachPresent && (
-                      <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
-                        12% P.A. INTEREST ACCRUING: ₹{Math.round(totalInterest).toLocaleString('en-IN')}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-2 min-w-0">
-                    {fnfAlerts.slice(0, 3).map((rec) => (
-                      <div key={rec.id} className="inline-flex items-center flex-wrap gap-2 max-w-full bg-white px-2.5 py-1 rounded-xl border border-slate-200 text-fluid-xs">
-                        <TruncatedText
-                          text={rec.workerName}
-                          modalTitle="FnF Settlement Worker"
-                          subtitle={`${rec.designation || 'Employee'} · Exit ${rec.exitDate}`}
-                          className="font-bold text-slate-900 max-w-[11rem]"
-                        />
-                        <FnfDeadlineBadge record={rec} orgSettings={orgSettings} compact />
-                      </div>
-                    ))}
-                    {fnfAlerts.length > 3 && (
-                      <span className="text-fluid-xs font-mono font-bold self-center">
-                        +{fnfAlerts.length - 3} more
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {onNavigate && (
-                <div className="flex items-center flex-wrap gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('GRATUITY')}
-                    className={`min-h-[2.5rem] px-3.5 py-2 rounded-xl font-bold text-fluid-xs text-white cursor-pointer flex items-center gap-1.5 ${
-                      isBreachPresent ? 'bg-rose-700 hover:bg-rose-800' : 'bg-amber-700 hover:bg-amber-800'
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p
+                    className={`text-xs font-medium ${
+                      inboxPendingCount > 0 ? 'text-slate-300' : 'text-slate-500'
                     }`}
                   >
-                    <span>Review &amp; Settle FnF</span>
-                    <ArrowRight size={14} className="shrink-0" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('PAYROLL')}
-                    className="min-h-[2.5rem] px-3.5 py-2 rounded-xl font-bold text-fluid-xs bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 cursor-pointer"
-                  >
-                    Off-Cycle Payroll
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* UNIFIED ACTION INBOX BANNER */}
-        {inboxPendingCount > 0 && (
-          <div 
-            onClick={() => onNavigate && onNavigate('INBOX')}
-            className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm border border-blue-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:border-blue-500 transition-all group active:scale-[0.99]"
-          >
-            <div className="flex items-center gap-3.5">
-              <div className="w-12 h-12 rounded-xl bg-blue-500/20 border border-blue-400/30 text-blue-300 flex items-center justify-center shrink-0">
-                <Inbox size={24} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-rose-500 text-white animate-pulse">
-                    {inboxPendingCount} Pending Actions
-                  </span>
-                  <h3 className="font-black text-base text-white tracking-tight">
-                    Unified Action Inbox
-                  </h3>
-                </div>
-                <p className="text-xs text-blue-200 mt-1">
-                  Advances, attendance exceptions & conflict items require your manager review.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs font-bold text-blue-200 group-hover:text-white shrink-0 self-end sm:self-auto">
-              <span>Open Action Inbox</span>
-              <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" />
-            </div>
-          </div>
-        )}
-
-        {/* HERO KIOSK LAUNCHER & QUICK WORKSPACE ACTIONS */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="lg:col-span-2">
-                {limits?.kioskEnabled !== false ? (
-                    <div 
-                        onClick={handleKioskLaunch}
-                        className="bg-slate-900 hover:bg-slate-800 text-white rounded-2xl p-5 shadow-xs transition-all cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-slate-800 active:scale-[0.99]"
-                    >
-                        <div className="flex items-start sm:items-center gap-4">
-                            <div className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-blue-900/40 group-hover:scale-105 transition-transform">
-                                <PlayCircle size={26} />
-                            </div>
-                            <div>
-                                <div className="flex items-center gap-2">
-                                    <h3 className="font-bold text-base text-white tracking-tight">Launch Attendance Kiosk</h3>
-                                    <span className="text-xs text-blue-400 font-mono">· Live Station</span>
-                                </div>
-                                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                                    Biometric Face Recognition & QR code check-in kiosk for factory gates & worker tablets.
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                            <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition-colors">Start Terminal</span>
-                            <ChevronRight size={16} className="text-slate-400 group-hover:translate-x-1 group-hover:text-white transition-all" />
-                        </div>
-                    </div>
-                ) : (
-                    <div 
-                        onClick={() => onNavigate && onNavigate('ATTENDANCE_KIOSK')}
-                        className="bg-slate-100 hover:bg-slate-200/70 cursor-pointer rounded-2xl p-5 border border-slate-200 flex items-center justify-between text-slate-500 transition-colors group"
-                    >
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                                <Lock size={20} />
-                            </div>
-                            <div>
-                                <div className="flex items-center gap-2">
-                                  <h4 className="font-bold text-sm text-slate-800">Face Scan Kiosk</h4>
-                                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                                    Available on Starter
-                                  </span>
-                                </div>
-                                <p className="text-xs text-slate-500 mt-0.5">Click to view feature details and upgrade subscription.</p>
-                            </div>
-                        </div>
-                        <ChevronRight size={16} className="text-slate-400 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                )}
-            </div>
-
-            {/* Quick Shift Summary Tile -> Navigates to ROSTER */}
-            <div 
-                onClick={() => onNavigate && onNavigate('ROSTER')}
-                className="bg-white hover:bg-slate-50/80 rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between cursor-pointer group transition-all"
-            >
-                <div>
-                    <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Weekly Roster &amp; Shifts</span>
-                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md group-hover:bg-blue-100 transition-colors">
-                            Pre-Publish Check
-                        </span>
-                    </div>
-                    <div className="text-base font-bold text-slate-900 mt-1 flex items-center justify-between">
-                        <span>{orgSettings?.shifts && orgSettings.shifts.length > 0 ? orgSettings.shifts[0].name : 'Production Roster'}</span>
-                        <ChevronRight size={16} className="text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1 font-mono tabular-nums">
-                        {orgSettings?.shifts && orgSettings.shifts.length > 0 
-                            ? `${orgSettings.shifts[0].startTime} — ${orgSettings.shifts[0].endTime}` 
-                            : '08:00 AM — 04:30 PM'}
-                    </div>
-                </div>
-                <div className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
-                    <span>Validation Engine</span>
-                    <span className="font-semibold text-emerald-600 flex items-center gap-1">
-                        <CheckCircle2 size={13} />
-                        Active
+                    Action Inbox
+                  </p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-3xl font-bold font-mono tabular-nums tracking-tight">
+                      {inboxPendingCount}
                     </span>
+                    <span
+                      className={`text-sm font-semibold ${
+                        inboxPendingCount > 0 ? 'text-amber-300' : 'text-emerald-700'
+                      }`}
+                    >
+                      {inboxPendingCount === 1
+                        ? 'Pending Approval'
+                        : inboxPendingCount > 1
+                        ? 'Pending Approvals'
+                        : 'All Caught Up'}
+                    </span>
+                  </div>
                 </div>
-            </div>
-        </div>
-
-        {showKioskModal && (
-            <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl border border-slate-100">
-                   <h2 className="text-base font-bold text-slate-900 mb-1">Select Kiosk Location</h2>
-                   <p className="text-xs text-slate-500 mb-5">Select factory or godown for this device terminal. Biometric face descriptors will be loaded specifically for this branch.</p>
-                   
-                   <div className="space-y-2 mb-6">
-                       {orgSettings?.branches?.map(b => (
-                           <div 
-                              key={b.id} 
-                              onClick={() => setSelectedKioskBranch(b.id)}
-                              className={`p-3.5 rounded-xl border cursor-pointer flex items-center transition-all ${
-                                selectedKioskBranch === b.id 
-                                  ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold shadow-xs' 
-                                  : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                              }`}
-                           >
-                              <MapPin size={17} className={selectedKioskBranch === b.id ? "text-blue-600 mr-2.5" : "text-slate-400 mr-2.5"} />
-                              <span className="text-xs font-semibold">{b.name}</span>
-                           </div>
-                       ))}
-                   </div>
-
-                   <div className="flex gap-2.5">
-                       <button 
-                         onClick={() => setShowKioskModal(false)} 
-                         className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs hover:bg-slate-200 transition-colors"
-                       >
-                         Cancel
-                       </button>
-                       <button 
-                          onClick={() => { setShowKioskModal(false); onOpenKiosk(selectedKioskBranch); }} 
-                          className="flex-1 py-2.5 bg-blue-600 text-white font-semibold rounded-xl text-xs shadow-xs hover:bg-blue-700 transition-colors"
-                       >
-                          Launch Device
-                       </button>
-                   </div>
-               </div>
-            </div>
-        )}
-
-        {/* // TEMPORARILY HIDDEN AI CHAT MODAL
-        {showAIChat && user && profile?.tenantId && (
-          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl w-full max-w-2xl h-150 shadow-2xl flex flex-col">
-              <div className="flex items-center justify-between p-4 border-b">
-                <div className="flex items-center gap-3">
-                  <Bot className="w-6 h-6 text-blue-600" />
-                  <h2 className="font-bold text-lg">AI Factory Assistant</h2>
-                </div>
-                <button 
-                  onClick={() => setShowAIChat(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    inboxPendingCount > 0
+                      ? 'bg-white/10 text-amber-300'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
                 >
-                  <XCircle size={24} />
+                  <Inbox size={20} />
+                </div>
+              </div>
+
+              <div
+                className={`mt-4 pt-3 border-t flex items-center justify-between gap-2 text-xs ${
+                  inboxPendingCount > 0
+                    ? 'border-white/10 text-slate-300'
+                    : 'border-slate-100 text-slate-500'
+                }`}
+              >
+                <span className="truncate">
+                  {pendingInboxPreview.length > 0
+                    ? pendingInboxPreview.map((i) => i.workerName.split(' ')[0]).join(', ') +
+                      ' awaiting review'
+                    : 'Advances, overtime & attendance alerts'}
+                </span>
+                <span
+                  className={`font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                    inboxPendingCount > 0 ? 'text-white' : 'text-slate-700'
+                  }`}
+                >
+                  <span>Review</span>
+                  <ArrowRight
+                    size={14}
+                    className="group-hover:translate-x-0.5 transition-transform"
+                  />
+                </span>
+              </div>
+            </button>
+          </div>
+
+          {/* QUICK BUSINESS ACTIONS ROW */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {limits?.kioskEnabled !== false ? (
+                <button
+                  type="button"
+                  onClick={handleKioskLaunch}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition-colors inline-flex items-center gap-2 min-h-[38px] whitespace-nowrap cursor-pointer"
+                >
+                  <PlayCircle size={15} />
+                  <span>Launch Attendance Kiosk</span>
                 </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <AIChat 
-                  tenantId={profile.tenantId} 
-                  language="english" 
-                />
-              </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigate && onNavigate('ATTENDANCE_KIOSK')}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors inline-flex items-center gap-2 min-h-[38px] whitespace-nowrap cursor-pointer"
+                >
+                  <Lock size={14} />
+                  <span>Attendance Kiosk (Starter)</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('WORKERS')}
+                className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-colors inline-flex items-center gap-2 min-h-[38px] whitespace-nowrap cursor-pointer"
+              >
+                <Users size={15} className="text-slate-500" />
+                <span>Manage Workers</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('SETTINGS')}
+                className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-colors inline-flex items-center gap-2 min-h-[38px] whitespace-nowrap cursor-pointer"
+              >
+                <span>Company, Billing &amp; Managers</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('ADVANCED_HR_SETTINGS')}
+              className="text-xs font-medium text-slate-500 hover:text-slate-900 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 self-start sm:self-auto px-2 py-1.5 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              <Sliders size={14} />
+              <span>Advanced HR Settings</span>
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </>
+      ) : (
+        /* ===================================================================
+           BRANCH MANAGER VIEW (Scoped Attendance Metrics — Zero Payroll Data)
+           =================================================================== */
+        <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
+          <StatCard
+            icon={CheckCircle}
+            value={`${workersPresentTotal}/${stats.total}`}
+            label="Present Today"
+            subLabel={`${stats.present} Full Day · ${stats.halfDay} Half Day`}
+            accentColor="bg-emerald-50 text-emerald-700"
+          />
+          <StatCard
+            icon={Timer}
+            value={stats.pending}
+            label="On Shift Now"
+            subLabel="Active Punch Timeline"
+            accentColor="bg-blue-50 text-blue-700"
+          />
+          <StatCard
+            icon={Clock}
+            value={stats.late}
+            label="Late Arrivals"
+            subLabel="Past Grace Window"
+            accentColor="bg-amber-50 text-amber-700"
+          />
+          <StatCard
+            icon={XCircle}
+            value={stats.absent}
+            label="Absent / Off"
+            subLabel={`Branch Staff: ${stats.total}`}
+            accentColor="bg-rose-50 text-rose-700"
+          />
+        </div>
+      )}
+
+      {/* KIOSK BRANCH PICKER MODAL */}
+      {showKioskModal && (
+        <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl border border-slate-100">
+            <h2 className="text-base font-bold text-slate-900 mb-1">Select Kiosk Location</h2>
+            <p className="text-xs text-slate-500 mb-5">
+              Choose the location for this attendance terminal.
+            </p>
+
+            <div className="space-y-2 mb-6">
+              {orgSettings?.branches?.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setSelectedKioskBranch(b.id)}
+                  className={`w-full text-left p-3.5 rounded-xl border cursor-pointer flex items-center transition-colors ${
+                    selectedKioskBranch === b.id
+                      ? 'border-blue-600 bg-blue-50/50 text-blue-900 font-semibold'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-700'
+                  }`}
+                >
+                  <MapPin
+                    size={16}
+                    className={
+                      selectedKioskBranch === b.id
+                        ? 'text-blue-600 mr-2.5 shrink-0'
+                        : 'text-slate-400 mr-2.5 shrink-0'
+                    }
+                  />
+                  <span className="text-xs font-semibold">{b.name}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowKioskModal(false)}
+                className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowKioskModal(false);
+                  onOpenKiosk(selectedKioskBranch);
+                }}
+                className="flex-1 py-2.5 bg-blue-600 text-white font-semibold rounded-xl text-xs hover:bg-blue-700 transition-colors cursor-pointer"
+              >
+                Launch Terminal
+              </button>
             </div>
           </div>
-        )} 
-        */}
+        </div>
+      )}
 
-        {/* RESPONSIVE METRIC KPIS: 1 col on ultra-small 320px/200% zoom, 2 cols on >=360px, 4 cols on desktop */}
-        <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
-            <StatCard 
-                icon={CheckCircle} 
-                value={stats.present + stats.halfDay} 
-                label="Present Today" 
-                subLabel={`${stats.present} Full Day · ${stats.halfDay} Half Day`}
-                accentColor="bg-emerald-50 text-emerald-600"
-            />
-            <StatCard 
-                icon={Timer} 
-                value={stats.pending} 
-                label="On Shift Now" 
-                subLabel="Active Punch Timeline"
-                accentColor="bg-blue-50 text-blue-600"
-            />
-            <StatCard 
-                icon={Clock} 
-                value={stats.late} 
-                label="Late Arrivals" 
-                subLabel="Past Grace Window"
-                accentColor="bg-amber-50 text-amber-600"
-            />
-            <StatCard 
-                icon={XCircle} 
-                value={stats.absent} 
-                label="Absent / Off" 
-                subLabel={`Staff Base: ${stats.total}`}
-                accentColor="bg-rose-50 text-rose-600"
-            />
+      {/* LIVE ATTENDANCE FEED */}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="p-4 sm:px-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/60">
+          <div className="flex items-center gap-2">
+            <Activity size={16} className="text-slate-500" />
+            <h2 className="font-semibold text-slate-900 text-sm">Today&apos;s Attendance Activity</h2>
+          </div>
+          <span className="text-xs font-mono text-slate-500 tabular-nums">
+            {recentActivity.length} logged today
+          </span>
         </div>
 
-        {/* LIVE ACTIVITY FEED */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-            <div className="p-4 sm:px-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                <div className="flex items-center gap-2">
-                    <Activity size={17} className="text-blue-600"/>
-                    <h3 className="font-bold text-slate-900 text-sm">Real-Time Punch Activity</h3>
-                </div>
-                <span className="text-xs font-mono text-slate-500 tabular-nums">
-                    {recentActivity.length} punches logged
-                </span>
-            </div>
-            
-            <div className="divide-y divide-slate-100">
-                {recentActivity.map(record => {
-                    const lastPunch = record.timeline && record.timeline.length > 0 
-                        ? record.timeline[record.timeline.length - 1] 
-                        : null;
-                        
-                    const timeStr = lastPunch 
-                        ? lastPunch.timestamp 
-                        : (record.inTime?.timestamp || new Date().toISOString());
+        <div className="divide-y divide-slate-100">
+          {recentActivity.map((record) => {
+            const lastPunch =
+              record.timeline && record.timeline.length > 0
+                ? record.timeline[record.timeline.length - 1]
+                : null;
 
-                    const typeStr = lastPunch ? lastPunch.type : 'IN';
-                    const isOut = typeStr === 'OUT';
+            const timeStr = lastPunch
+              ? lastPunch.timestamp
+              : record.inTime?.timestamp || new Date().toISOString();
 
-                    let statusTextColor = 'text-slate-600';
-                    let statusLabel = record.computedStatus;
+            const typeStr = lastPunch ? lastPunch.type : 'IN';
+            const isOut = typeStr === 'OUT';
 
-                    if (record.computedStatus === 'PRESENT') { statusTextColor = 'text-emerald-700 font-semibold'; statusLabel = 'Present'; }
-                    else if (record.computedStatus === 'HALF_DAY') { statusTextColor = 'text-amber-700 font-semibold'; statusLabel = 'Half Day'; }
-                    else if (record.computedStatus === 'PENDING') { statusTextColor = 'text-blue-700 font-semibold'; statusLabel = 'In Progress'; }
-                    else if (record.computedStatus === 'ABSENT') { statusTextColor = 'text-rose-700 font-semibold'; statusLabel = 'Absent (<4h)'; }
+            let statusLabel = record.computedStatus;
+            if (record.computedStatus === 'PRESENT') statusLabel = 'Present';
+            else if (record.computedStatus === 'HALF_DAY') statusLabel = 'Half Day';
+            else if (record.computedStatus === 'PENDING') statusLabel = 'On Shift';
+            else if (record.computedStatus === 'ABSENT') statusLabel = 'Absent';
 
-                    return (
-                        <div key={record.id} className="p-3.5 sm:px-6 flex items-center justify-between gap-3 flex-wrap xs:flex-nowrap hover:bg-slate-50/70 transition-colors min-w-0">
-                            <div className="flex items-center gap-3 min-w-0 flex-1">
-                                <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-fluid-sm border border-slate-200 shrink-0">
-                                    {record.workerName.charAt(0)}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <div className="min-w-0 flex-1">
-                                          <TruncatedText
-                                            text={record.workerName}
-                                            modalTitle="Attendance Activity"
-                                            subtitle={`${isOut ? 'Check Out' : 'Check In'} at ${new Date(timeStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                                            details={[
-                                              { label: 'Status', value: statusLabel },
-                                              { label: 'Logged Hours', value: `${record.currentHours.toFixed(1)} hrs`, mono: true },
-                                              ...(record.isLate ? [{ label: 'Punctuality', value: 'Late Arrival' }] : []),
-                                            ]}
-                                            className="text-fluid-sm font-bold text-slate-900"
-                                          />
-                                        </div>
-                                        <div className="shrink-0">
-                                          <FieldStatusBadge
-                                            status={record.computedStatus}
-                                            isLate={record.isLate}
-                                            size="sm"
-                                          />
-                                        </div>
-                                    </div>
-                                    <div className="text-fluid-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5 font-mono tabular-nums">
-                                        <span>{isOut ? 'Check Out' : 'Check In'} at {new Date(timeStr).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                                        {record.isLate && <span className="text-rose-600 font-bold">· LATE</span>}
-                                        {lastPunch?.isOutOfGeofence && (
-                                            <span className="text-amber-600 flex items-center gap-0.5" title="Punched outside factory radius">
-                                                <MapPin size={11} className="shrink-0" /> Outside Geofence
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="text-right shrink-0 ml-auto">
-                                <span className="font-mono text-fluid-sm font-semibold tabular-nums text-slate-900">
-                                    {record.currentHours.toFixed(1)} hrs
-                                </span>
-                            </div>
-                        </div>
-                    );
-                })}
-                {recentActivity.length === 0 && !loading && (
-                    <div className="p-10 text-center text-slate-400">
-                        <Clock className="mx-auto mb-2 text-slate-300" size={28}/>
-                        <p className="text-sm font-medium text-slate-600">No shift punches recorded yet today</p>
-                        <p className="text-xs text-slate-400 mt-1">Workers will appear here as they clock in via Face Kiosk or manual punch.</p>
+            return (
+              <div
+                key={record.id}
+                className="p-3.5 sm:px-6 flex items-center justify-between gap-3 flex-wrap xs:flex-nowrap hover:bg-slate-50/70 transition-colors min-w-0"
+              >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-semibold text-xs border border-slate-200 shrink-0">
+                    {record.workerName.charAt(0)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="min-w-0 flex-1">
+                        <TruncatedText
+                          text={record.workerName}
+                          modalTitle="Attendance Activity"
+                          subtitle={`${isOut ? 'Check Out' : 'Check In'} at ${new Date(
+                            timeStr
+                          ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                          details={[
+                            { label: 'Status', value: statusLabel },
+                            {
+                              label: 'Logged Hours',
+                              value: `${record.currentHours.toFixed(1)} hrs`,
+                              mono: true,
+                            },
+                            ...(record.isLate
+                              ? [{ label: 'Punctuality', value: 'Late Arrival' }]
+                              : []),
+                          ]}
+                          className="text-sm font-semibold text-slate-900"
+                        />
+                      </div>
+                      <div className="shrink-0">
+                        <FieldStatusBadge
+                          status={record.computedStatus}
+                          isLate={record.isLate}
+                          size="sm"
+                        />
+                      </div>
                     </div>
-                )}
+                    <div className="text-xs text-slate-500 flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5 font-mono tabular-nums">
+                      <span>
+                        {isOut ? 'Check Out' : 'Check In'} at{' '}
+                        {new Date(timeStr).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                      {record.isLate && <span className="text-rose-600 font-semibold">· Late</span>}
+                      {lastPunch?.isOutOfGeofence && (
+                        <span
+                          className="text-amber-600 flex items-center gap-0.5"
+                          title="Punched outside site radius"
+                        >
+                          <MapPin size={11} className="shrink-0" /> Outside Geofence
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0 ml-auto">
+                  <span className="font-mono text-sm font-semibold tabular-nums text-slate-900">
+                    {record.currentHours.toFixed(1)} hrs
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+
+          {recentActivity.length === 0 && !loading && (
+            <div className="p-10 text-center text-slate-400">
+              <Clock className="mx-auto mb-2 text-slate-300" size={26} />
+              <p className="text-sm font-medium text-slate-600">No check-ins recorded yet today</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Workers appear here as they check in via Attendance Kiosk or manual punch.
+              </p>
             </div>
+          )}
         </div>
+      </div>
 
-        {/* SHIFT-SCOPED BREADCRUMBS & FIELD ROUTE MODAL (KEY AC 6) */}
-        <ShiftRouteMapModal
-          isOpen={showRouteModal}
-          onClose={() => setShowRouteModal(false)}
-          tenantId={profile?.tenantId || ''}
-        />
+      {/* SHIFT-SCOPED BREADCRUMBS & FIELD ROUTE MODAL */}
+      <ShiftRouteMapModal
+        isOpen={showRouteModal}
+        onClose={() => setShowRouteModal(false)}
+        tenantId={profile?.tenantId || ''}
+      />
 
-        {/* LONE WORKER SAFETY COMMAND MODAL */}
-        <SupervisorSafetyMonitorModal
-          isOpen={showSafetyMonitorModal}
-          onClose={() => setShowSafetyMonitorModal(false)}
-          tenantId={profile?.tenantId || ''}
-          branches={orgSettings?.branches}
-        />
+      {/* LONE WORKER SAFETY COMMAND MODAL */}
+      <SupervisorSafetyMonitorModal
+        isOpen={showSafetyMonitorModal}
+        onClose={() => setShowSafetyMonitorModal(false)}
+        tenantId={profile?.tenantId || ''}
+        branches={orgSettings?.branches}
+      />
     </div>
   );
 };

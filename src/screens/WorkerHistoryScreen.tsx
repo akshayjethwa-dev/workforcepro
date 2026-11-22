@@ -577,7 +577,7 @@ export const WorkerHistoryScreen: React.FC = () => {
                                     <span className="text-green-600 font-bold">₹{log.pay.toFixed(2)}</span>
                                     <p className="text-[10px] text-gray-400">Daily Pay</p>
                                     
-                                    {(profile?.role === 'FACTORY_OWNER' || profile?.role === 'SUPERVISOR') && (
+                                    {(profile?.role === 'TENANT_ADMIN' || profile?.role === 'FACTORY_OWNER' || profile?.role === 'MANAGER' || profile?.role === 'SUPERVISOR') && (
                                       <button 
                                         onClick={() => {
                                             if (!limits?.regulatePunchEnabled) {

@@ -7,17 +7,23 @@ import {
 import { dbService } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { SubscriptionTier, PlanLimits, WorkerAccessToken, RevocationReason } from '../types/index';
+import { SubscriptionTier, PlanLimits, WorkerAccessToken, RevocationReason, CanonicalRole } from '../types/index';
 import { crossTenantVerification, CrossTenantVerificationReport } from '../services/crossTenantVerification';
 import { tenantSecurityService, SecurityAlert, TenantAuditLogEntry, SoftDeletedTenant } from '../services/tenantSecurityService';
 import { magicLinkService } from '../services/magicLinkService';
 import { WhiteLabelModal } from '../components/WhiteLabelModal';
 import { FeatureFlagsManager } from '../components/FeatureFlagsManager';
+import { useNavigate } from 'react-router-dom';
 import { PlanCatalogManager } from '../components/PlanCatalogManager';
 
-export const SuperAdminDashboard: React.FC = () => {
+interface SuperAdminDashboardProps {
+  initialTab?: 'ORGS' | 'PLANS' | 'PARTNERS' | 'SECURITY' | 'FLAGS';
+}
+
+export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ initialTab = 'ORGS' }) => {
   const { profile, impersonateTenant } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [tenants, setTenants] = useState<any[]>([]);
   const [resellers, setResellers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,7 +31,10 @@ export const SuperAdminDashboard: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
 
   // --- Tabs ---
-  const [activeTab, setActiveTab] = useState<'ORGS' | 'PLANS' | 'PARTNERS' | 'SECURITY' | 'FLAGS'>('ORGS');
+  const [activeTab, setActiveTab] = useState<'ORGS' | 'PLANS' | 'PARTNERS' | 'SECURITY' | 'FLAGS'>(initialTab);
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
   const [globalPlans, setGlobalPlans] = useState<Record<SubscriptionTier, PlanLimits> | null>(null);
   const [savingPlans, setSavingPlans] = useState(false);
 
@@ -36,7 +45,14 @@ export const SuperAdminDashboard: React.FC = () => {
   const [testReport, setTestReport] = useState<CrossTenantVerificationReport | null>(null);
   const [runningTests, setRunningTests] = useState(false);
   const [auditFilter, setAuditFilter] = useState({ tenantId: 'ALL', role: 'ALL', status: 'ALL', search: '' });
-  const [securitySubTab, setSecuritySubTab] = useState<'ALERTS' | 'AUDIT' | 'SOFT_DELETE' | 'VERIFICATION' | 'DPDP_REGISTRY'>('ALERTS');
+  const [securitySubTab, setSecuritySubTab] = useState<'ALERTS' | 'AUDIT' | 'SOFT_DELETE' | 'VERIFICATION' | 'DPDP_REGISTRY' | 'ROLE_GOVERNANCE'>('ALERTS');
+
+  // --- Role Governance & Mid-Session Enforcement State ---
+  const [roleTargetUid, setRoleTargetUid] = useState('demo-tenant-admin-uid');
+  const [roleTargetNewRole, setRoleTargetNewRole] = useState<CanonicalRole>('MANAGER');
+  const [roleTargetDualReseller, setRoleTargetDualReseller] = useState(false);
+  const [roleTargetBranchId, setRoleTargetBranchId] = useState('branch-anand');
+  const [roleUpdating, setRoleUpdating] = useState(false);
 
   // --- DPDP Subject-Access & Token Registry State ---
   const [dpdpTokens, setDpdpTokens] = useState<WorkerAccessToken[]>([]);
@@ -121,6 +137,50 @@ export const SuperAdminDashboard: React.FC = () => {
     }
   };
 
+  const handleApplyRoleGovernance = async (revokeSession = false) => {
+    if (!roleTargetUid.trim()) {
+      toast.warning('Select or enter a target User UID.');
+      return;
+    }
+    setRoleUpdating(true);
+    try {
+      const roles: CanonicalRole[] = roleTargetDualReseller && roleTargetNewRole === 'TENANT_ADMIN'
+        ? ['TENANT_ADMIN', 'RESELLER']
+        : [roleTargetNewRole];
+      const branchName = roleTargetBranchId === 'branch-anand' ? 'Anand Manufacturing Unit' : 'Main Branch (Head Office)';
+      await dbService.updateUserRole(roleTargetUid.trim(), {
+        role: roleTargetNewRole,
+        roles,
+        branchId: roleTargetNewRole === 'MANAGER' ? roleTargetBranchId : undefined,
+        branchName: roleTargetNewRole === 'MANAGER' ? branchName : undefined,
+        isActive: !revokeSession,
+        reason: revokeSession
+          ? 'Session revoked by Super Admin'
+          : `Role updated to ${roles.join(' + ')} by Super Admin`,
+      });
+      await tenantSecurityService.logTenantAccess({
+        tenantId: 'system-root',
+        userId: profile?.uid || 'super-admin',
+        userEmail: profile?.email || 'superadmin@workforcepro.app',
+        userRole: 'SUPER_ADMIN',
+        action: revokeSession ? 'REVOKE_USER_SESSION' : 'UPDATE_USER_ROLE',
+        resource: `users/${roleTargetUid.trim()}`,
+        status: 'SUCCESS',
+        details: { roles, branchId: roleTargetNewRole === 'MANAGER' ? roleTargetBranchId : null, isActive: !revokeSession },
+      });
+      toast.success(
+        revokeSession
+          ? `Session revoked for ${roleTargetUid.trim()}. Active sessions will be logged out.`
+          : `Updated ${roleTargetUid.trim()} to ${roles.join(' + ')}. Active sessions sync immediately (or within 5 min max).`
+      );
+      setAuditLogs(await tenantSecurityService.getAllAuditLogs());
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update user role');
+    } finally {
+      setRoleUpdating(false);
+    }
+  };
+
   const toggleStatus = async (id: string, currentStatus: boolean) => {
     setTenants(prev => prev.map(t => t.id === id ? { ...t, isActive: !currentStatus } : t));
     await dbService.toggleTenantStatus(id, currentStatus);
@@ -139,9 +199,10 @@ export const SuperAdminDashboard: React.FC = () => {
     }
   };
 
-  const handleImpersonate = (tenant: any) => {
+  const handleImpersonate = async (tenant: any) => {
+    await impersonateTenant(tenant.tenantId, tenant.companyName);
     toast.info(`Switched to ${tenant.companyName} workspace`);
-    impersonateTenant(tenant.tenantId, tenant.companyName);
+    navigate('/dashboard');
   };
 
   const openOverrideModal = (tenant: any) => {
@@ -647,6 +708,12 @@ export const SuperAdminDashboard: React.FC = () => {
                               className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'DPDP_REGISTRY' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
                           >
                               <Key size={14} /> DPDP Token Registry ({dpdpTokens.length})
+                          </button>
+                          <button
+                              onClick={() => setSecuritySubTab('ROLE_GOVERNANCE')}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 ${securitySubTab === 'ROLE_GOVERNANCE' ? 'bg-indigo-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}
+                          >
+                              <Users size={14} /> Role Governance
                           </button>
                       </div>
                   </div>
@@ -1194,6 +1261,129 @@ export const SuperAdminDashboard: React.FC = () => {
                               </div>
                           );
                       })()}
+
+                      {/* SUBTAB 6: ROLE GOVERNANCE & MID-SESSION ENFORCEMENT */}
+                      {securitySubTab === 'ROLE_GOVERNANCE' && (
+                          <div className="space-y-5">
+                              <div className="pb-3 border-b border-gray-100">
+                                  <h3 className="font-bold text-gray-900 text-sm">RBAC Role Governance &amp; Mid-Session Demotion Control</h3>
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                      Promote, demote, assign dual roles (e.g., Tenant Admin + Reseller), or revoke an active user session. Real-time listeners and 5-minute forced token refreshes enforce changes across open tabs.
+                                  </p>
+                              </div>
+
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
+                                      <div>
+                                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                                              Target User Account (UID)
+                                          </label>
+                                          <select
+                                              value={roleTargetUid}
+                                              onChange={e => setRoleTargetUid(e.target.value)}
+                                              className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                          >
+                                              <option value="demo-tenant-admin-uid">Demo Tenant Admin (owner@workforce.demo)</option>
+                                              <option value="demo-manager-uid">Demo Branch Manager (manager@workforce.demo)</option>
+                                              <option value="demo-reseller-uid">Demo Reseller Partner (partner@agency.demo)</option>
+                                              <option value="demo-dual-role-uid">Demo Dual-Role User (ca-owner@workforce.demo)</option>
+                                              {tenants.map(t => (
+                                                  <option key={t.id} value={t.id}>
+                                                      {t.companyName || t.email} ({t.id})
+                                                  </option>
+                                              ))}
+                                          </select>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                          <div>
+                                              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                                                  New Primary Role
+                                              </label>
+                                              <select
+                                                  value={roleTargetNewRole}
+                                                  onChange={e => setRoleTargetNewRole(e.target.value as CanonicalRole)}
+                                                  className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                              >
+                                                  <option value="TENANT_ADMIN">TENANT_ADMIN (SMB Owner)</option>
+                                                  <option value="MANAGER">MANAGER (Branch / HR)</option>
+                                                  <option value="RESELLER">RESELLER (Partner / CA)</option>
+                                                  <option value="WORKER">WORKER (Self-Service)</option>
+                                              </select>
+                                          </div>
+
+                                          {roleTargetNewRole === 'MANAGER' && (
+                                              <div>
+                                                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                                                      Assigned Branch Scope
+                                                  </label>
+                                                  <select
+                                                      value={roleTargetBranchId}
+                                                      onChange={e => setRoleTargetBranchId(e.target.value)}
+                                                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                  >
+                                                      <option value="default">Main Branch (Head Office)</option>
+                                                      <option value="branch-anand">Anand Manufacturing Unit</option>
+                                                  </select>
+                                              </div>
+                                          )}
+                                      </div>
+
+                                      {roleTargetNewRole === 'TENANT_ADMIN' && (
+                                          <label className="flex items-center gap-2.5 p-3 bg-white border border-indigo-100 rounded-lg cursor-pointer">
+                                              <input
+                                                  type="checkbox"
+                                                  checked={roleTargetDualReseller}
+                                                  onChange={e => setRoleTargetDualReseller(e.target.checked)}
+                                                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                              />
+                                              <div>
+                                                  <div className="text-xs font-bold text-slate-800">Grant Dual Role: TENANT_ADMIN + RESELLER</div>
+                                                  <div className="text-[11px] text-slate-500">Enables the Role Switcher dropdown in the top navigation bar.</div>
+                                              </div>
+                                          </label>
+                                      )}
+
+                                      <div className="flex flex-wrap gap-2.5 pt-2">
+                                          <button
+                                              type="button"
+                                              disabled={roleUpdating}
+                                              onClick={() => handleApplyRoleGovernance(false)}
+                                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+                                          >
+                                              {roleUpdating ? 'Applying...' : 'Apply Role Update'}
+                                          </button>
+                                          <button
+                                              type="button"
+                                              disabled={roleUpdating}
+                                              onClick={() => handleApplyRoleGovernance(true)}
+                                              className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+                                          >
+                                              Revoke Session &amp; Force Logout
+                                          </button>
+                                      </div>
+                                  </div>
+
+                                  <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Enforcement Matrix</h4>
+                                      <ul className="space-y-2.5 text-xs text-slate-600">
+                                          <li className="flex items-start gap-2">
+                                              <ShieldCheck size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                                              <span><strong>Real-Time + 5-Min Token Sync:</strong> Firestore <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">onSnapshot</code> and a 5-minute forced ID token refresh detect demotions mid-session and redirect restricted routes immediately.</span>
+                                          </li>
+                                          <li className="flex items-start gap-2">
+                                              <ShieldCheck size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                                              <span><strong>Router-Level Route Guards:</strong> Manual URL navigation (e.g. a Manager opening <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">/payroll</code> or <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">/settings</code>) redirects to <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">/dashboard</code> with an &ldquo;Access Denied.&rdquo; toast.</span>
+                                          </li>
+                                          <li className="flex items-start gap-2">
+                                              <ShieldCheck size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                                              <span><strong>Firestore Backend Rules:</strong> Queries from <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">MANAGER</code> accounts without a matching assigned <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">branchId</code> filter are rejected server-side with <code className="font-mono text-[11px] bg-slate-100 px-1 rounded">PERMISSION_DENIED</code>.</span>
+                                          </li>
+                                      </ul>
+                                  </div>
+                              </div>
+                          </div>
+                      )}
 
                   </div>
               </div>

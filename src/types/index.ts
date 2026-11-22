@@ -44,13 +44,18 @@ export const INDIAN_STATES = [
 
 export type IndianStateName = typeof INDIAN_STATES[number];
 
-export type Role = 
-  | 'SUPER_ADMIN'   // SaaS Owner
-  | 'CA'            // Chartered Accountant / Statutory Auditor
-  | 'RESELLER'      // NEW: Channel Partner / Agency
-  | 'FACTORY_OWNER' // Tenant Admin
-  | 'SUPERVISOR'    // Manager (Changed from MANAGER to match your DB logic)
-  | 'WORKER';
+export type CanonicalRole =
+  | 'SUPER_ADMIN'   // SaaS Owner / Platform Admin
+  | 'RESELLER'      // Channel Partner / Agency
+  | 'TENANT_ADMIN'  // SMB Owner / Factory Admin
+  | 'MANAGER'       // Branch / HR Manager
+  | 'WORKER';       // Frontline Employee
+
+export type Role =
+  | CanonicalRole
+  | 'CA'            // Chartered Accountant / Statutory Auditor (legacy / partner alias)
+  | 'FACTORY_OWNER' // Legacy DB alias for TENANT_ADMIN
+  | 'SUPERVISOR';   // Legacy DB alias for MANAGER
 
 export type SaturdayOffType = 'NONE' | 'ALL' | 'ALTERNATE' | 'FIRST_THIRD' | 'SECOND_FOURTH';
 
@@ -76,11 +81,21 @@ export interface LeavePolicy {
 export interface UserProfile {
   uid: string;
   email: string;
+  name?: string;
   role: Role;
+  roles?: Role[];               // Multiple assigned roles (e.g. ['TENANT_ADMIN', 'RESELLER'])
+  activeRole?: CanonicalRole;   // Currently active workspace role
   tenantId: string;
   companyName?: string;
   resellerId?: string;
   commissionRate?: number;
+  branchId?: string;            // Assigned branch ID for MANAGER branch-scoping
+  assignedBranchIds?: string[]; // Optional multi-branch scope for MANAGER
+  branchName?: string;          // Display name of assigned branch
+  workerId?: string;            // Linked worker ID when role is WORKER
+  isActive?: boolean;           // Account active flag (false triggers forced logout)
+  roleVersion?: number;         // Incremented by Super Admin on role change
+  roleUpdatedAt?: string;       // ISO timestamp of last role update
 }
 
 export type DomainVerificationStatus = 'PENDING' | 'VERIFIED' | 'FAILED';
@@ -219,6 +234,8 @@ export interface OrgSettings {
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
   enableSandwichRule?: boolean;
+  overtimeMultiplier?: number;
+  enforceFiftyPercentWageRule?: boolean;
   holidayPayMultiplier?: number; 
   leavePolicy?: LeavePolicy;
   ewaConfig?: EwaConfig;
@@ -717,6 +734,7 @@ export interface AttendanceCalculations {
 export interface AttendanceRecord {
   id: string;
   tenantId: string;
+  branchId?: string;
   workerId: string;
   workerName: string;
   date: string;
@@ -1186,7 +1204,39 @@ export const DEFAULT_PLAN_CONFIG: Record<SubscriptionTier, PlanLimits> = {
   }
 };
 
-export type ScreenName = 'LOGIN' | 'DASHBOARD' | 'WORKERS' | 'ADD_WORKER' | 'ATTENDANCE_KIOSK' | 'PAYROLL' | 'ATTENDANCE' | 'DAILY_LOGS' | 'TEAM' | 'SETTINGS' | 'WORKER_HISTORY' | 'SUPER_ADMIN_DASHBOARD' | 'REPORTS' | 'BILLING' | 'ID_CARDS' | 'TERMS' | 'PRIVACY' | 'RESELLER_DASHBOARD' | 'INBOX' | 'ROSTER' | 'CTC_SIMULATOR' | 'GRATUITY' | 'ANNUAL_BONUS' | 'POSH_ICC';
+export type ScreenName =
+  | 'LOGIN'
+  | 'DASHBOARD'
+  | 'WORKERS'
+  | 'ADD_WORKER'
+  | 'ATTENDANCE_KIOSK'
+  | 'PAYROLL'
+  | 'ATTENDANCE'
+  | 'DAILY_LOGS'
+  | 'TEAM'
+  | 'SETTINGS'
+  | 'ADVANCED_HR_SETTINGS'
+  | 'WORKER_HISTORY'
+  | 'WORKER_PORTAL'
+  | 'SUPER_ADMIN_DASHBOARD'
+  | 'SUPER_ADMIN_TENANTS'
+  | 'SUPER_ADMIN_RESELLERS'
+  | 'SUPER_ADMIN_REVENUE'
+  | 'SUPER_ADMIN_SETTINGS'
+  | 'RESELLER_DASHBOARD'
+  | 'RESELLER_CLIENTS'
+  | 'RESELLER_COMMISSIONS'
+  | 'REPORTS'
+  | 'BILLING'
+  | 'ID_CARDS'
+  | 'TERMS'
+  | 'PRIVACY'
+  | 'INBOX'
+  | 'ROSTER'
+  | 'CTC_SIMULATOR'
+  | 'GRATUITY'
+  | 'ANNUAL_BONUS'
+  | 'POSH_ICC';
 
 export interface PunchConflict {
   id: string;

@@ -12,7 +12,7 @@ interface Props {
 
 export const GracePeriodBanner: React.FC<Props> = ({ onNavigateToBilling }) => {
   const { pendingDowngrade, isInGracePeriod, refreshEntitlements } = useEntitlements();
-  const { profile } = useAuth();
+  const { profile, activeRole } = useAuth();
   const { toast } = useToast();
   const [dismissed, setDismissed] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -70,7 +70,7 @@ export const GracePeriodBanner: React.FC<Props> = ({ onNavigateToBilling }) => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
-          {profile?.role === 'FACTORY_OWNER' && (
+          {(activeRole === 'TENANT_ADMIN' || profile?.role === 'FACTORY_OWNER') && (
             <button
               onClick={handleCancelDowngrade}
               disabled={cancelling}

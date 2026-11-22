@@ -483,14 +483,17 @@ export class InboxService {
 
     // 4. Filter by role and branch
     let filtered = items;
-    if (profile && profile.role === 'SUPERVISOR') {
+    if (profile && (profile.role === 'MANAGER' || profile.role === 'SUPERVISOR')) {
       const delegations = this.getDelegations(tenantId);
       const isDelegatedToMe = delegations.some(d => d.delegateId === profile.uid && d.isActive);
+      const assignedBranchId = profile.branchId || profile.assignedBranchIds?.[0];
       
-      // If supervisor has a specific branch and is not covering delegation
-      if (profile.tenantId && !isDelegatedToMe) {
-        // Find supervisor's assigned branch if present
-        // (If not restricted, sees their branch)
+      // If manager has a specific branch and is not covering delegation, scope to assigned branch
+      if (assignedBranchId && !isDelegatedToMe) {
+        filtered = items.filter(item => {
+          const itemBranchId = item.details?.attendanceRecord?.branchId;
+          return !itemBranchId || itemBranchId === assignedBranchId;
+        });
       }
     }
 

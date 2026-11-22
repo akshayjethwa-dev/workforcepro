@@ -7,8 +7,9 @@ import {
   Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, 
   AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, 
   DEFAULT_PLAN_CONFIG, BrandingConfig, CustomDomainConfig,
-  WageComplianceAudit
+  WageComplianceAudit, CanonicalRole
 } from "../types/index";
+import { setMidSessionRoleOverride } from "./rbacService";
 import { tenantSecurityService } from "./tenantSecurityService";
 import { entitlementService } from "./entitlementService";
 import { employeeCapGuard, EmployeeCapExceededError } from "./employeeCapGuard";
@@ -176,7 +177,7 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     overtimeRate: 150,
     designation: 'Quality Inspector',
     department: 'Quality',
-    branchId: 'default',
+    branchId: 'branch-anand',
     shiftId: 'default',
     joinedDate: '2025-04-15',
     isActive: true,
@@ -316,7 +317,7 @@ const INITIAL_DEMO_WORKERS: Worker[] = [
     overtimeRate: 95,
     designation: 'Assembly Operator',
     department: 'Production',
-    branchId: 'default',
+    branchId: 'branch-anand',
     shiftId: 'default',
     joinedDate: '2026-01-05',
     isActive: true,
@@ -490,13 +491,13 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
   const records: AttendanceRecord[] = [];
 
   const demoWorkers = [
-    { id: 'worker-1', name: 'Ramesh Sharma' },
-    { id: 'worker-2', name: 'Priya Patel' },
-    { id: 'worker-3', name: 'Amit Kumar' },
-    { id: 'worker-4', name: 'Sunil Verma' },
-    { id: 'worker-5', name: 'Kavita Singh' },
-    { id: 'worker-6', name: 'Vikram Desai' },
-    { id: 'worker-7', name: 'Anjali Nair' },
+    { id: 'worker-1', name: 'Ramesh Sharma', branchId: 'default' },
+    { id: 'worker-2', name: 'Priya Patel', branchId: 'branch-anand' },
+    { id: 'worker-3', name: 'Amit Kumar', branchId: 'default' },
+    { id: 'worker-4', name: 'Sunil Verma', branchId: 'default' },
+    { id: 'worker-5', name: 'Kavita Singh', branchId: 'branch-anand' },
+    { id: 'worker-6', name: 'Vikram Desai', branchId: 'default' },
+    { id: 'worker-7', name: 'Anjali Nair', branchId: 'default' },
   ];
 
   for (let day = 1; day <= daysInMonth; day++) {
@@ -510,6 +511,7 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
         records.push({
           id: `att-${w.id}-${dateStr}`,
           tenantId,
+          branchId: w.branchId,
           workerId: w.id,
           workerName: w.name,
           date: dateStr,
@@ -571,6 +573,7 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
         records.push({
           id: `att-${w.id}-${dateStr}`,
           tenantId,
+          branchId: w.branchId,
           workerId: w.id,
           workerName: w.name,
           date: dateStr,
@@ -587,6 +590,7 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
         records.push({
           id: `att-${w.id}-${dateStr}`,
           tenantId,
+          branchId: w.branchId,
           workerId: w.id,
           workerName: w.name,
           date: dateStr,
@@ -606,6 +610,7 @@ const generateMonthDemoAttendance = (tenantId: string, monthStr: string): Attend
       records.push({
         id: `att-${w.id}-${dateStr}`,
         tenantId,
+        branchId: w.branchId,
         workerId: w.id,
         workerName: w.name,
         date: dateStr,
@@ -720,7 +725,7 @@ export const dbService = {
 
   getAllTenants: async (includeSoftDeleted = false) => {
     try {
-      const q = query(collection(db, 'users'), where('role', '==', 'FACTORY_OWNER'));
+      const q = query(collection(db, 'users'), where('role', 'in', ['TENANT_ADMIN', 'FACTORY_OWNER']));
       const snapshot = await getDocs(q);
       
       const tenants = await Promise.all(snapshot.docs.map(async (docSnap) => {
@@ -998,7 +1003,7 @@ export const dbService = {
         const data = docSnap.data();
         const clientsQ = query(
             collection(db, 'users'), 
-            where('role', '==', 'FACTORY_OWNER'), 
+            where('role', 'in', ['TENANT_ADMIN', 'FACTORY_OWNER']), 
             where('resellerId', '==', docSnap.id)
         );
         const clientsSnap = await getDocs(clientsQ);
@@ -1038,7 +1043,7 @@ export const dbService = {
     try {
       const q = query(
           collection(db, 'users'), 
-          where('role', '==', 'FACTORY_OWNER'),
+          where('role', 'in', ['TENANT_ADMIN', 'FACTORY_OWNER']),
           where('resellerId', '==', resellerUid)
       );
       const snapshot = await getDocs(q);
@@ -1106,7 +1111,7 @@ export const dbService = {
     await setDoc(doc(db, "invites", email), {
       email, 
       companyName, 
-      role: 'FACTORY_OWNER', 
+      role: 'TENANT_ADMIN', 
       resellerId: resellerUid, 
       plan: plan,
       trialEndsAt: trialEndsAt,
@@ -1115,31 +1120,37 @@ export const dbService = {
   },
 
   // --- WORKER MANAGEMENT ---
-  getWorkers: async (tenantId: string): Promise<Worker[]> => {
+  getWorkers: async (tenantId: string, options?: { branchId?: string }): Promise<Worker[]> => {
     if (!tenantId) return [];
     if (await tenantSecurityService.isTenantSoftDeleted(tenantId)) {
       return [];
     }
+    const branchId = options?.branchId;
     await tenantSecurityService.logTenantAccess({
       tenantId,
       userId: 'current-user',
       userEmail: 'session-user',
-      userRole: 'TENANT_MEMBER',
+      userRole: branchId ? 'MANAGER' : 'TENANT_ADMIN',
       action: 'QUERY_WORKERS',
-      resource: 'workers',
+      resource: branchId ? `workers?branchId=${branchId}` : 'workers',
       status: 'SUCCESS',
-      details: { tenantId, filter: 'deletedAt IS NULL' }
+      details: { tenantId, branchId: branchId || 'ALL', filter: 'deletedAt IS NULL' }
     });
-    if (tenantId === 'demo-tenant-id') return getStoredDemoWorkers();
+    const filterByBranch = (list: Worker[]) =>
+      branchId ? list.filter(w => (w.branchId || 'default') === branchId) : list;
+
+    if (tenantId === 'demo-tenant-id') return filterByBranch(getStoredDemoWorkers());
     try {
-      const q = query(getWorkersRef(), where("tenantId", "==", tenantId));
+      const q = branchId
+        ? query(getWorkersRef(), where("tenantId", "==", tenantId), where("branchId", "==", branchId))
+        : query(getWorkersRef(), where("tenantId", "==", tenantId));
       const snapshot = await getDocs(q);
       const list = snapshot.docs.map(doc => normalizeWorker({ id: doc.id, ...doc.data() }));
-      if (list.length > 0) return list;
+      if (list.length > 0) return filterByBranch(list);
       return [];
     } catch (e) {
       console.warn("Firestore getWorkers fallback to demo:", e);
-      return getStoredDemoWorkers();
+      return filterByBranch(getStoredDemoWorkers());
     }
   },
 
@@ -1412,8 +1423,22 @@ export const dbService = {
   },
 
   // --- ATTENDANCE ---
-  getTodayAttendance: async (tenantId: string) => {
+  getTodayAttendance: async (tenantId: string, options?: { branchId?: string }) => {
     if (!tenantId) return [];
+    const branchId = options?.branchId;
+
+    let allowedWorkerIds: Set<string> | null = null;
+    if (branchId) {
+      const branchWorkers = await dbService.getWorkers(tenantId, { branchId });
+      allowedWorkerIds = new Set(branchWorkers.map(w => w.id));
+    }
+    const filterAttendance = (records: AttendanceRecord[]) => {
+      if (!branchId) return records;
+      return records.filter(r =>
+        (r.branchId && r.branchId === branchId) ||
+        (allowedWorkerIds ? allowedWorkerIds.has(r.workerId) : false)
+      );
+    };
     
     let localList: AttendanceRecord[] = [];
     const today = new Date().toISOString().split('T')[0];
@@ -1429,15 +1454,22 @@ export const dbService = {
 
     if (tenantId === 'demo-tenant-id') {
       const all = getStoredDemoAttendance(tenantId);
-      return all.filter(r => (r.date || '').slice(0, 10) === today);
+      return filterAttendance(all.filter(r => (r.date || '').slice(0, 10) === today));
     }
 
     try {
-      const q = query(
-        getAttendanceRef(), 
-        where("tenantId", "==", tenantId),
-        where("date", "==", today)
-      );
+      const q = branchId
+        ? query(
+            getAttendanceRef(),
+            where("tenantId", "==", tenantId),
+            where("branchId", "==", branchId),
+            where("date", "==", today)
+          )
+        : query(
+            getAttendanceRef(),
+            where("tenantId", "==", tenantId),
+            where("date", "==", today)
+          );
       const snapshot = await getDocs(q);
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
       
@@ -1450,14 +1482,28 @@ export const dbService = {
       });
 
       const merged = Array.from(recordMap.values());
-      return merged.length > 0 ? merged : localList;
+      return filterAttendance(merged.length > 0 ? merged : localList);
     } catch {
-      return localList.length > 0 ? localList : getStoredDemoAttendance(tenantId);
+      return filterAttendance(localList.length > 0 ? localList : getStoredDemoAttendance(tenantId));
     }
   },
 
-  getAttendanceHistory: async (tenantId: string): Promise<AttendanceRecord[]> => {
+  getAttendanceHistory: async (tenantId: string, options?: { branchId?: string }): Promise<AttendanceRecord[]> => {
     if (!tenantId) return [];
+    const branchId = options?.branchId;
+
+    let allowedWorkerIds: Set<string> | null = null;
+    if (branchId) {
+      const branchWorkers = await dbService.getWorkers(tenantId, { branchId });
+      allowedWorkerIds = new Set(branchWorkers.map(w => w.id));
+    }
+    const filterAttendance = (records: AttendanceRecord[]) => {
+      if (!branchId) return records;
+      return records.filter(r =>
+        (r.branchId && r.branchId === branchId) ||
+        (allowedWorkerIds ? allowedWorkerIds.has(r.workerId) : false)
+      );
+    };
     
     let localList: AttendanceRecord[] = [];
     try {
@@ -1471,22 +1517,22 @@ export const dbService = {
     } catch {}
 
     if (tenantId === 'demo-tenant-id') {
-      return getStoredDemoAttendance(tenantId);
+      return filterAttendance(getStoredDemoAttendance(tenantId));
     }
 
     try {
-      const q = query(getAttendanceRef(), where("tenantId", "==", tenantId));
+      const q = branchId
+        ? query(getAttendanceRef(), where("tenantId", "==", tenantId), where("branchId", "==", branchId))
+        : query(getAttendanceRef(), where("tenantId", "==", tenantId));
       const snapshot = await getDocs(q);
       const firestoreList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
       
       const recordMap = new Map<string, AttendanceRecord>();
-      // Seed with local records
       localList.forEach(r => {
         if (r.workerId && r.date) {
           recordMap.set(`${r.workerId}_${r.date.slice(0, 10)}`, r);
         }
       });
-      // Merge with Firestore records
       firestoreList.forEach(r => {
         if (r.workerId && r.date) {
           recordMap.set(`${r.workerId}_${r.date.slice(0, 10)}`, r);
@@ -1494,17 +1540,17 @@ export const dbService = {
       });
 
       const merged = Array.from(recordMap.values());
-      if (merged.length > 0) return merged;
-      return localList.length > 0 ? localList : [];
+      if (merged.length > 0) return filterAttendance(merged);
+      return filterAttendance(localList.length > 0 ? localList : []);
     } catch (e) {
       console.warn("getAttendanceHistory Firestore fallback:", e);
-      return localList.length > 0 ? localList : getStoredDemoAttendance(tenantId);
+      return filterAttendance(localList.length > 0 ? localList : getStoredDemoAttendance(tenantId));
     }
   },
 
   markAttendanceOnline: async (record: AttendanceRecord) => {
     const recordId = `${record.tenantId}_${record.workerId}_${record.date}`;
-    const finalRecord = { ...record, id: recordId };
+    const finalRecord = { ...record, id: recordId, branchId: record.branchId || 'default' };
     saveDemoAttendanceRecord(finalRecord);
     if (record.tenantId !== 'demo-tenant-id') {
       try {
@@ -1517,7 +1563,7 @@ export const dbService = {
 
   markAttendance: async (record: AttendanceRecord) => {
     const recordId = `${record.tenantId}_${record.workerId}_${record.date}`;
-    const finalRecord = { ...record, id: recordId };
+    const finalRecord = { ...record, id: recordId, branchId: record.branchId || 'default' };
     saveDemoAttendanceRecord(finalRecord);
     if (record.tenantId !== 'demo-tenant-id') {
       try {
@@ -1769,14 +1815,15 @@ export const dbService = {
       try {
         const stored = localStorage.getItem('demo_supervisors');
         return stored ? JSON.parse(stored) : [
-          { uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'SUPERVISOR', tenantId }
+          { uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId },
+          { uid: 'demo-sup-2', name: 'Neha Desai', email: 'neha.anand@factory.demo', role: 'MANAGER', branchId: 'branch-anand', branchName: 'Anand Manufacturing Unit', tenantId }
         ];
       } catch {
-        return [{ uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'SUPERVISOR', tenantId }];
+        return [{ uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId }];
       }
     }
     try {
-      const q = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "==", "SUPERVISOR"));
+      const q = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "in", ["MANAGER", "SUPERVISOR"]));
       const snapshot = await getDocs(q);
       return snapshot.docs.map(doc => doc.data());
     } catch (e) {
@@ -1790,8 +1837,8 @@ export const dbService = {
     }
   },
 
-  inviteManager: async (adminTenantId: string, managerEmail: string, managerName: string) => {
-    const newSup = { uid: 'sup-' + Date.now(), name: managerName, email: managerEmail, role: 'SUPERVISOR', tenantId: adminTenantId };
+  inviteManager: async (adminTenantId: string, managerEmail: string, managerName: string, branchId = 'default', branchName = 'Main Branch (Head Office)') => {
+    const newSup = { uid: 'sup-' + Date.now(), name: managerName, email: managerEmail, role: 'MANAGER', branchId, branchName, tenantId: adminTenantId };
     try {
       const key = adminTenantId === 'demo-tenant-id' ? 'demo_supervisors' : `supervisors_${adminTenantId}`;
       const stored = localStorage.getItem(key);
@@ -1804,7 +1851,7 @@ export const dbService = {
 
     try {
       await setDoc(doc(db, "invites", managerEmail), {
-        email: managerEmail, name: managerName, tenantId: adminTenantId, role: 'SUPERVISOR', createdAt: new Date().toISOString()
+        email: managerEmail, name: managerName, tenantId: adminTenantId, role: 'MANAGER', branchId, branchName, createdAt: new Date().toISOString()
       });
     } catch (e) {
       console.warn("inviteManager fallback:", e);
@@ -2139,10 +2186,10 @@ export const dbService = {
       const notifDeletes = notifSnap.docs.map(d => deleteDoc(doc(db, "notifications", d.id)));
       await Promise.all(notifDeletes);
 
-      // 7. Unlink all supervisors associated with this tenant
-      const usersQ = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "==", "SUPERVISOR"));
+      // 7. Unlink all managers/supervisors/workers associated with this tenant
+      const usersQ = query(collection(db, "users"), where("tenantId", "==", tenantId), where("role", "in", ["MANAGER", "SUPERVISOR", "WORKER"]));
       const usersSnap = await getDocs(usersQ);
-      const supervisorUnlinks = usersSnap.docs.map(d => updateDoc(doc(db, "users", d.id), { tenantId: null, role: null }));
+      const supervisorUnlinks = usersSnap.docs.map(d => updateDoc(doc(db, "users", d.id), { tenantId: null, role: null, isActive: false }));
       await Promise.all(supervisorUnlinks);
 
       // 8. Delete Tenant Settings
@@ -2158,6 +2205,59 @@ export const dbService = {
     } catch (error) {
       console.error("Critical error during tenant deletion:", error);
       throw error;
+    }
+  },
+
+  // --- SUPER ADMIN ROLE GOVERNANCE & MID-SESSION ENFORCEMENT ---
+  updateUserRole: async (
+    userId: string,
+    payload: {
+      role: CanonicalRole;
+      roles?: CanonicalRole[];
+      branchId?: string;
+      branchName?: string;
+      isActive?: boolean;
+      reason?: string;
+    }
+  ): Promise<void> => {
+    const nowIso = new Date().toISOString();
+    const resolvedRoles = payload.roles && payload.roles.length > 0 ? payload.roles : [payload.role];
+
+    // 1. Broadcast mid-session role change locally (for cross-tab & demo immediate enforcement)
+    setMidSessionRoleOverride({
+      uid: userId,
+      role: payload.role,
+      roles: resolvedRoles,
+      branchId: payload.branchId,
+      branchName: payload.branchName,
+      isActive: payload.isActive !== false,
+      roleVersion: Date.now(),
+      updatedAt: nowIso,
+      updatedBy: payload.reason || 'Super Admin',
+    });
+
+    // 2. Persist to Firestore users/{userId} so live onSnapshot + 5-min token sync enforces it
+    if (!userId.startsWith('demo-')) {
+      try {
+        const userRef = doc(db, 'users', userId);
+        const snap = await getDoc(userRef);
+        const currentVersion = snap.exists() ? Number(snap.data().roleVersion || 1) : 1;
+        await setDoc(
+          userRef,
+          {
+            role: payload.role,
+            roles: resolvedRoles,
+            ...(payload.branchId ? { branchId: payload.branchId, assignedBranchIds: [payload.branchId] } : {}),
+            ...(payload.branchName ? { branchName: payload.branchName } : {}),
+            isActive: payload.isActive !== false,
+            roleVersion: currentVersion + 1,
+            roleUpdatedAt: nowIso,
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('updateUserRole Firestore sync notice:', err);
+      }
     }
   }
 };

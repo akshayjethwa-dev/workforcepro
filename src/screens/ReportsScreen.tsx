@@ -22,7 +22,7 @@ import { Capacitor } from '@capacitor/core';
 import ReportWorker from '../workers/reportWorker?worker';
 
 export const ReportsScreen: React.FC = () => {
-  const { profile, limits, tenantPlan } = useAuth();
+  const { profile, limits, tenantPlan, branchScope } = useAuth();
   const { toast } = useToast();
   const workerRef = useRef<Worker | null>(null);
 
@@ -98,9 +98,12 @@ export const ReportsScreen: React.FC = () => {
       setError(null);
 
       try {
+        const branchOpt = branchScope.isBranchScoped && branchScope.primaryBranchId
+          ? { branchId: branchScope.primaryBranchId }
+          : undefined;
         const [workers, allAttendance, settings] = await Promise.all([
-          dbService.getWorkers(profile.tenantId),
-          dbService.getAttendanceHistory(profile.tenantId),
+          dbService.getWorkers(profile.tenantId, branchOpt),
+          dbService.getAttendanceHistory(profile.tenantId, branchOpt),
           dbService.getOrgSettings(profile.tenantId)
         ]);
 
@@ -128,7 +131,7 @@ export const ReportsScreen: React.FC = () => {
     };
 
     fetchReportData();
-  }, [profile, reportMonth]);
+  }, [profile, reportMonth, branchScope.isBranchScoped, branchScope.primaryBranchId]);
 
   // Unique departments for filter
   const departments = useMemo(() => {

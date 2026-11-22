@@ -12,7 +12,7 @@ interface Props {
 }
 
 export const UpgradeRequiredView: React.FC<Props> = ({ featureKey, onNavigate }) => {
-  const { profile, tenantPlan } = useAuth();
+  const { profile, activeRole, tenantPlan } = useAuth();
   const { getResolution } = useEntitlements();
   const resolution = getResolution(featureKey);
 
@@ -24,8 +24,8 @@ export const UpgradeRequiredView: React.FC<Props> = ({ featureKey, onNavigate })
     minRecommendedTier: 'PRO',
   };
 
-  const isOwner = profile?.role === 'FACTORY_OWNER';
-  const isReseller = profile?.role === 'RESELLER';
+  const isOwner = activeRole === 'TENANT_ADMIN' || profile?.role === 'FACTORY_OWNER';
+  const isReseller = activeRole === 'RESELLER' || profile?.role === 'RESELLER';
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center p-4">

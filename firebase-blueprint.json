@@ -2,16 +2,29 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "User profile and authentication identity mapping with role-based access control",
+      "description": "User profile and authentication identity mapping with canonical RBAC roles, multi-role support, and branch scoping",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "format": "email", "maxLength": 256 },
         "name": { "type": "string", "maxLength": 128 },
-        "role": { "type": "string", "enum": ["SUPER_ADMIN", "RESELLER", "FACTORY_OWNER", "SUPERVISOR", "KIOSK"] },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "RESELLER", "TENANT_ADMIN", "MANAGER", "WORKER", "FACTORY_OWNER", "SUPERVISOR", "CA"] },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["SUPER_ADMIN", "RESELLER", "TENANT_ADMIN", "MANAGER", "WORKER", "FACTORY_OWNER", "SUPERVISOR", "CA"] }
+        },
         "tenantId": { "type": "string", "maxLength": 128 },
         "resellerId": { "type": "string", "maxLength": 128 },
+        "branchId": { "type": "string", "maxLength": 128 },
+        "assignedBranchIds": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 128 }
+        },
+        "branchName": { "type": "string", "maxLength": 128 },
+        "workerId": { "type": "string", "maxLength": 128 },
         "isActive": { "type": "boolean" },
+        "roleVersion": { "type": "number" },
+        "roleUpdatedAt": { "type": "string" },
         "createdAt": { "type": "string" }
       },
       "required": ["uid", "email", "role"]
@@ -35,11 +48,12 @@
     },
     "Worker": {
       "title": "Worker",
-      "description": "Worker profile partitioned strictly by tenantId",
+      "description": "Worker profile partitioned strictly by tenantId and branchId",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "tenantId": { "type": "string", "maxLength": 128 },
+        "branchId": { "type": "string", "maxLength": 128 },
         "name": { "type": "string", "maxLength": 128 },
         "phone": { "type": "string", "maxLength": 20 },
         "wageType": { "type": "string", "enum": ["DAILY", "MONTHLY", "PIECE_RATE"] },
@@ -47,21 +61,44 @@
         "isActive": { "type": "boolean" },
         "deletedAt": { "type": "string" }
       },
-      "required": ["id", "tenantId", "name", "wageType"]
+      "required": ["id", "tenantId", "branchId", "name", "wageType"]
     },
     "Attendance": {
       "title": "Attendance",
-      "description": "Attendance punch record partitioned strictly by tenantId",
+      "description": "Attendance punch record partitioned strictly by tenantId and branchId",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "tenantId": { "type": "string", "maxLength": 128 },
+        "branchId": { "type": "string", "maxLength": 128 },
         "workerId": { "type": "string", "maxLength": 128 },
-        "date": { "type": "string", "maxLength": 10 },
+        "date": { "type": "string", "maxLength": 16 },
         "status": { "type": "string", "enum": ["PRESENT", "ABSENT", "HALF_DAY", "WEEKLY_OFF", "ON_LEAVE", "HOLIDAY"] },
         "deletedAt": { "type": "string" }
       },
-      "required": ["id", "tenantId", "workerId", "date", "status"]
+      "required": ["id", "tenantId", "branchId", "workerId", "date", "status"]
+    },
+    "Payroll": {
+      "title": "Payroll",
+      "description": "Monthly payroll run accessible strictly to TENANT_ADMIN and SUPER_ADMIN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "month": { "type": "string", "maxLength": 16 },
+        "status": { "type": "string", "enum": ["DRAFT", "FINALIZED", "PAID"] }
+      },
+      "required": ["id", "tenantId", "month", "status"]
+    },
+    "OrgSettings": {
+      "title": "OrgSettings",
+      "description": "Tenant configuration (shifts, branches, statutory settings) writable only by TENANT_ADMIN and SUPER_ADMIN",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "enableBreakTracking": { "type": "boolean" }
+      },
+      "required": ["tenantId"]
     },
     "Advance": {
       "title": "Advance",
@@ -75,6 +112,21 @@
         "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REPAID", "REJECTED"] }
       },
       "required": ["id", "tenantId", "workerId", "amount", "status"]
+    },
+    "Invite": {
+      "title": "Invite",
+      "description": "Role-scoped invitation for branch managers, workers, or reseller clients",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "maxLength": 256 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "resellerId": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "maxLength": 64 },
+        "branchId": { "type": "string", "maxLength": 128 },
+        "branchName": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["email", "role"]
     },
     "AuditLog": {
       "title": "AuditLog",
@@ -115,7 +167,7 @@
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "User profiles with role and tenant assignment"
+      "description": "User profiles with canonical RBAC roles, multi-role list, tenantId, and assigned branchId"
     },
     "/tenants/{tenantId}": {
       "schema": "Tenant",
@@ -123,19 +175,31 @@
     },
     "/workers/{workerId}": {
       "schema": "Worker",
-      "description": "Worker profiles strictly isolated by tenantId"
+      "description": "Worker profiles strictly isolated by tenantId and branchId"
     },
     "/attendance/{attId}": {
       "schema": "Attendance",
-      "description": "Attendance logs strictly isolated by tenantId"
+      "description": "Attendance logs strictly isolated by tenantId and branchId"
+    },
+    "/payroll/{payrollId}": {
+      "schema": "Payroll",
+      "description": "Monthly payroll ledgers restricted to TENANT_ADMIN and SUPER_ADMIN"
+    },
+    "/settings/{tenantId}": {
+      "schema": "OrgSettings",
+      "description": "Organization configuration writable only by TENANT_ADMIN and SUPER_ADMIN"
     },
     "/advances/{advId}": {
       "schema": "Advance",
       "description": "Wage advances strictly isolated by tenantId"
     },
+    "/invites/{inviteId}": {
+      "schema": "Invite",
+      "description": "Role-scoped user invitations"
+    },
     "/audit_logs/{logId}": {
       "schema": "AuditLog",
-      "description": "Immutable security audit logs"
+      "description": "Immutable security and RBAC audit logs"
     },
     "/security_alerts/{alertId}": {
       "schema": "SecurityAlert",

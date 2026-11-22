@@ -53,7 +53,7 @@ import { breadcrumbService } from '../services/breadcrumbService';
 import { safetyCheckInService } from '../services/safetyCheckInService';
 
 export const AttendanceScreen: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, branchScope } = useAuth();
   const { toast } = useToast();
   const { isFieldMode, toggleFieldMode } = useTheme();
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
@@ -163,12 +163,15 @@ export const AttendanceScreen: React.FC = () => {
     const loadData = async () => {
       if (profile?.tenantId) {
         try {
+          const branchOpt = branchScope.isBranchScoped && branchScope.primaryBranchId
+            ? { branchId: branchScope.primaryBranchId }
+            : undefined;
           const [fetchedWorkers, fetchedAttendance, fetchedSettings, fetchedAdvances, fetchedHistory] = await Promise.all([
-            dbService.getWorkers(profile.tenantId),
-            dbService.getTodayAttendance(profile.tenantId),
+            dbService.getWorkers(profile.tenantId, branchOpt),
+            dbService.getTodayAttendance(profile.tenantId, branchOpt),
             dbService.getOrgSettings(profile.tenantId),
             dbService.getAdvances(profile.tenantId),
-            dbService.getAttendanceHistory(profile.tenantId)
+            dbService.getAttendanceHistory(profile.tenantId, branchOpt)
           ]);
           
           setWorkers(fetchedWorkers);
@@ -200,7 +203,7 @@ export const AttendanceScreen: React.FC = () => {
         window.removeEventListener('online', handleOnline);
         window.removeEventListener('offline', handleOffline);
     };
-  }, [profile]);
+  }, [profile, branchScope.isBranchScoped, branchScope.primaryBranchId]);
 
   const handlePunch = async (worker: Worker, type: 'IN' | 'OUT') => {
     if (!profile?.tenantId || isScreenLockedForWipe) return;
@@ -283,9 +286,14 @@ export const AttendanceScreen: React.FC = () => {
             console.warn("Offline: Could not fetch late count");
         }
 
-        const baseRecord: AttendanceRecord = existingRecord || {
+        const resolvedBranchId = worker.branchId || branchScope.primaryBranchId || 'default';
+        const baseRecord: AttendanceRecord = existingRecord ? {
+            ...existingRecord,
+            branchId: existingRecord.branchId || resolvedBranchId,
+        } : {
             id: recordId,
             tenantId: profile.tenantId,
+            branchId: resolvedBranchId,
             workerId: worker.id,
             workerName: worker.name,
             date: todayDate,
@@ -389,6 +397,7 @@ export const AttendanceScreen: React.FC = () => {
       const leaveRecord: AttendanceRecord = {
           id: recordId,
           tenantId: profile.tenantId,
+          branchId: worker.branchId || branchScope.primaryBranchId || 'default',
           workerId: worker.id,
           workerName: worker.name,
           date: todayDate,
@@ -734,6 +743,12 @@ export const AttendanceScreen: React.FC = () => {
 
       {/* METRIC STRIP (Tabular figures) */}
       <div className="flex items-center gap-3 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono tabular-nums">
+        {branchScope.isBranchScoped && (
+          <div className="bg-emerald-50 px-4 py-2 rounded-2xl border border-emerald-200 shadow-xs flex items-center gap-2 shrink-0 text-emerald-900 font-sans">
+            <MapPin size={14} className="text-emerald-600 shrink-0" />
+            <span className="text-[11px] font-bold">Branch Scope: {branchScope.branchName}</span>
+          </div>
+        )}
         <div className="bg-white px-4 py-2 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-2.5 shrink-0">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
           <span className="text-slate-500 text-[11px] font-sans">On Floor:</span>
