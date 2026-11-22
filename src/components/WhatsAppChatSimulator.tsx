@@ -3,11 +3,25 @@ import {
   X, Send, Phone, Video, MoreVertical, CheckCheck, Clock, 
   MapPin, Camera, AlertTriangle, ShieldCheck, Sparkles, RefreshCw, 
   ExternalLink, User, Lock, MessageSquare, Bell, ArrowRight, 
-  FileText, Calendar, IndianRupee, HelpCircle, Check, Slash
+  FileText, Calendar, IndianRupee, HelpCircle, Check, Slash,
+  Mail, Info
 } from 'lucide-react';
 import { Worker, WhatsAppMessage, WhatsAppCommandKey, ShiftConfig } from '../types/index';
 import { whatsappService } from '../services/whatsappService';
 import { dbService } from '../services/db';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 👇 NEW: Demo / Coming Soon + Contact Support configuration
+// ─────────────────────────────────────────────────────────────────────────────
+const SUPPORT_EMAIL = 'hello@ashreysystems.com'; // 🔁 replace with your real support email
+const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+  'WhatsApp Integration — Early Access Request'
+)}&body=${encodeURIComponent(
+  'Hi team,\n\nI saw the WhatsApp punch-in demo in WorkforcePro. Please notify me when the real WhatsApp integration becomes available.\n\nThanks!'
+)}`;
+const SECURE_PUNCH_URL = '/punch'; // 🔁 point at your real secure web punch URL
+const TOOLTIP_TEXT =
+  'Currently, workers punch in via a secure web link. WhatsApp integration is under development.';
 
 interface WhatsAppChatSimulatorProps {
   isOpen: boolean;
@@ -100,15 +114,12 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
     let locationData = undefined;
     if (attachLocation || simulateOutsideGeofence) {
       if (simulateOutsideGeofence) {
-        // 800m away from site
         locationData = { lat: 28.5450, lng: 77.4050, address: 'Expressway Flyover (800m away from Plant)' };
       } else {
-        // calibrated inside plant boundary
         locationData = { lat: 28.5355, lng: 77.3910, address: 'Plant #1 Geofence Gate 2' };
       }
     }
 
-    // Prepare photo if selfie attached
     const photoUrl = attachSelfie || simulateSelfieMismatch 
       ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop'
       : undefined;
@@ -141,7 +152,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
       setBannerAlert({ type: 'error', text: err.message || 'Failed to process message' });
     } finally {
       setIsSending(false);
-      // Reset one-time flags
       setAttachLocation(false);
       setAttachSelfie(false);
       setSimulateSelfieMismatch(false);
@@ -149,7 +159,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
     }
   };
 
-  // Trigger Proactive Notifications (Story E11-S1)
   const triggerShiftReminder = async () => {
     if (!currentWorker) return;
     const shift: ShiftConfig = {
@@ -177,7 +186,7 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
 
   const triggerPayslipReady = async () => {
     if (!currentWorker) return;
-    const res = await whatsappService.sendPayslipReadyNotification(tenantId, currentWorker);
+    await whatsappService.sendPayslipReadyNotification(tenantId, currentWorker);
     loadMessages();
     setBannerAlert({ type: 'success', text: `Payslip-Ready notification sent with 72h scoped link!` });
   };
@@ -189,7 +198,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
     setBannerAlert({ type: 'warn', text: `Missing Punch-Out alert delivered to worker WhatsApp!` });
   };
 
-  // Simulate Rate Limit (10 rapid calls)
   const simulateRateLimitFired = async () => {
     if (!currentWorker) return;
     setIsSending(true);
@@ -246,7 +254,7 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-4xl h-[92vh] max-h-[850px] rounded-2xl shadow-2xl flex flex-col md:flex-row overflow-hidden border border-slate-200">
         
-        {/* LEFT / TOP CONTROL PANEL: Worker selection, test configurations, edge cases */}
+        {/* LEFT / TOP CONTROL PANEL */}
         <div className="w-full md:w-80 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-200 p-4 flex flex-col overflow-y-auto shrink-0">
           <div className="flex items-center justify-between pb-3 border-b border-slate-200">
             <div className="flex items-center gap-2">
@@ -470,6 +478,28 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
             )}
           </div>
 
+          {/* 👇 NEW: Contact Support / Early-Access card */}
+          <div className="mt-3 p-3 bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-200 rounded-xl">
+            <div className="flex items-start gap-2">
+              <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                <Sparkles size={12} />
+              </div>
+              <div className="flex-1">
+                <p className="text-[11px] font-bold text-emerald-900">Want this feature today?</p>
+                <p className="text-[10px] text-emerald-800 mt-0.5 leading-snug">
+                  The real WhatsApp integration is under development. Contact our team for early access.
+                </p>
+                <a
+                  href={SUPPORT_MAILTO}
+                  className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 text-[11px] font-semibold shadow-xs transition-colors"
+                >
+                  <Mail size={12} />
+                  Contact Support
+                </a>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-auto pt-4 flex gap-2">
             <button
               type="button"
@@ -491,7 +521,7 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
           </div>
         </div>
 
-        {/* RIGHT / MAIN CHAT SIMULATOR INTERFACE */}
+        {/* RIGHT / MAIN CHAT SIMULATOR */}
         <div className="flex-1 flex flex-col bg-[#efeae2] relative min-w-0">
           
           {/* WHATSAPP TOP HEADER */}
@@ -504,22 +534,29 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-400 border-2 border-[#075e54] rounded-full"></span>
               </div>
               <div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <h4 className="font-bold text-sm tracking-tight leading-tight">WorkforcePro Attendance Bot</h4>
-                  <span className="w-3.5 h-3.5 bg-emerald-400 text-[#075e54] rounded-full flex items-center justify-center text-[9px] font-black" title="Verified Business Account">
-                    ✓
+                  {/* 👇 NEW: Coming Soon badge */}
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 text-[9px] font-black text-amber-950 uppercase tracking-wide"
+                    title={TOOLTIP_TEXT}
+                  >
+                    <span className="w-1.5 h-1.5 bg-amber-700 rounded-full animate-pulse" />
+                    Coming Soon
                   </span>
                 </div>
+                {/* 👇 CHANGED: no longer claims "Official WhatsApp Business API" */}
                 <p className="text-[11px] text-emerald-100 flex items-center gap-1 leading-tight">
-                  <span className="w-1.5 h-1.5 bg-emerald-300 rounded-full animate-ping"></span>
-                  Official WhatsApp Business API • +91 98200 12345
+                  <span className="w-1.5 h-1.5 bg-amber-300 rounded-full animate-ping"></span>
+                  Demo Preview • Not connected to WhatsApp
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
+              {/* 👇 CHANGED: prefix with DEMO */}
               <span className="text-[11px] bg-emerald-800/80 text-emerald-100 px-2.5 py-1 rounded-full font-mono hidden sm:inline">
-                Calling as: +91 {getActivePhone().slice(-10)}
+                DEMO · +91 {getActivePhone().slice(-10)}
               </span>
               <button 
                 onClick={onClose}
@@ -530,7 +567,33 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
             </div>
           </div>
 
-          {/* BANNER NOTIFICATION (If Anomaly or Punch Event triggered) */}
+          {/* 👇 NEW: Persistent Demo / Coming Soon banner */}
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-start gap-2 shrink-0">
+            <Info size={16} className="text-amber-600 mt-0.5 shrink-0" />
+            <div className="flex-1 text-xs text-amber-900 leading-relaxed">
+              <p>
+                <span className="font-bold">Demo Preview · Feature Coming Soon.</span>{' '}
+                For Real WhatsApp integration Contact support. Today, workers punch in via a{' '}
+                <a
+                  href={SECURE_PUNCH_URL}
+                  className="underline font-semibold hover:text-amber-950"
+                >
+                  secure web link
+                </a>
+                .
+              </p>
+            </div>
+            <a
+              href={SUPPORT_MAILTO}
+              className="inline-flex items-center gap-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-[11px] font-semibold shrink-0 whitespace-nowrap transition-colors"
+              title={TOOLTIP_TEXT}
+            >
+              <Mail size={12} />
+              Contact Support
+            </a>
+          </div>
+
+          {/* BANNER NOTIFICATION (if anomaly or punch event triggered) */}
           {bannerAlert && (
             <div className={`px-4 py-2 text-xs font-semibold flex items-center justify-between shrink-0 shadow-xs transition-all ${
               bannerAlert.type === 'error' ? 'bg-rose-600 text-white' :
@@ -555,12 +618,12 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
               backgroundSize: '16px 16px'
             }}
           >
-            {/* End-to-end encryption / DPDP compliance notice banner */}
+            {/* Compliance notice */}
             <div className="flex justify-center my-1">
               <div className="bg-[#ffeecd] border border-[#f0dfb8] text-[#54656f] text-[11px] px-3 py-1.5 rounded-lg max-w-md text-center shadow-xs flex items-center justify-center gap-1.5">
                 <Lock size={12} className="text-[#54656f] shrink-0" />
                 <span>
-                  Messages are securely audited with DPDP India consent. Scoped links expire in 72h to keep PII out of WhatsApp storage.
+                  Simulated for demo purposes. In production, messages are audited with DPDP India consent and scoped links expire in 72h.
                 </span>
               </div>
             </div>
@@ -569,7 +632,9 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
               <div className="text-center py-12 text-slate-500 text-xs">
                 <MessageSquare size={36} className="mx-auto text-slate-400 mb-2 opacity-50" />
                 <p className="font-semibold text-slate-600">No messages in chat history.</p>
-                <p className="mt-1">Tap one of the quick command buttons below (e.g. IN, OUT, payslip, schedule) to test conversational flow.</p>
+                <p className="mt-1">
+                  Tap one of the quick command buttons below (e.g. IN, OUT, payslip, schedule) to preview the conversational flow. <strong>(Demo only)</strong>
+                </p>
               </div>
             ) : (
               messages.slice().reverse().map((msg) => {
@@ -592,7 +657,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
                           : 'bg-white text-[#111b21] rounded-tl-xs'
                       }`}
                     >
-                      {/* Attached Location Pill */}
                       {msg.location && (
                         <div className="mb-2 p-2 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2">
                           <MapPin size={16} className="text-emerald-700 shrink-0" />
@@ -603,7 +667,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
                         </div>
                       )}
 
-                      {/* Attached Selfie Pill */}
                       {msg.mediaUrl && (
                         <div className="mb-2 p-2 bg-slate-100 border border-slate-200 rounded-xl flex items-center gap-2">
                           <Camera size={16} className="text-slate-700 shrink-0" />
@@ -614,12 +677,10 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
                         </div>
                       )}
 
-                      {/* Message Text with preserved line breaks */}
                       <div className="whitespace-pre-line leading-relaxed text-[13px]">
                         {msg.content}
                       </div>
 
-                      {/* Clickable Scoped Link Button (if generated for payslip / schedule) */}
                       {msg.scopedLinkUrl && (
                         <div className="mt-2.5 pt-2 border-t border-slate-200/80">
                           <a
@@ -637,7 +698,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
                         </div>
                       )}
 
-                      {/* Audit metadata & Double check mark */}
                       <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-slate-400">
                         {msg.isAnomaly && (
                           <span className="text-rose-600 font-bold mr-1">E9 Anomaly</span>
@@ -657,7 +717,7 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
             <div ref={messagesEndRef} />
           </div>
 
-          {/* QUICK COMMAND PILLS (Language-aware) */}
+          {/* QUICK COMMAND PILLS */}
           <div className="bg-[#f0f2f5] border-t border-slate-200 px-3 py-2 flex items-center gap-1.5 overflow-x-auto shrink-0">
             <span className="text-[11px] font-bold text-slate-500 shrink-0 flex items-center gap-1">
               <Sparkles size={12} className="text-emerald-600" />
@@ -678,7 +738,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
 
           {/* MESSAGE INPUT BAR */}
           <div className="bg-[#f0f2f5] border-t border-slate-300 px-3 py-2 flex items-center gap-2 shrink-0">
-            {/* Location Toggle */}
             <button
               type="button"
               onClick={() => setAttachLocation(!attachLocation)}
@@ -690,7 +749,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
               <MapPin size={18} />
             </button>
 
-            {/* Selfie Toggle */}
             <button
               type="button"
               onClick={() => setAttachSelfie(!attachSelfie)}
@@ -702,7 +760,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
               <Camera size={18} />
             </button>
 
-            {/* Input Field */}
             <div className="flex-1 relative">
               <input
                 type="text"
@@ -725,7 +782,6 @@ export const WhatsAppChatSimulator: React.FC<WhatsAppChatSimulatorProps> = ({
               />
             </div>
 
-            {/* Send Button */}
             <button
               type="button"
               onClick={() => handleSendMessage()}
