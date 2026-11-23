@@ -54,6 +54,7 @@ export default function PartnersPage() {
             just earn.
           </p>
           <button
+            type="button"
             onClick={openModal}
             className="bg-blue-600 text-white font-semibold px-8 py-3 rounded-lg hover:bg-blue-700 transition text-lg shadow-lg"
           >
@@ -167,7 +168,7 @@ export default function PartnersPage() {
             </div>
 
             <p className="text-xs text-gray-500 mt-4">
-              * Based on ~₹
+              Based on ~₹
               {COMMISSION_PER_CLIENT.toLocaleString('en-IN')}/month per active
               client (20% of our standard ₹
               {PLAN_PRICE.toLocaleString('en-IN')}/month plan, rounded). Actual
@@ -276,6 +277,7 @@ export default function PartnersPage() {
             from your existing client base.
           </p>
           <button
+            type="button"
             onClick={openModal}
             className="bg-white text-blue-600 font-semibold px-8 py-3 rounded-lg hover:bg-blue-50 transition text-lg shadow-lg"
           >

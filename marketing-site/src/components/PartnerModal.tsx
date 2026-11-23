@@ -16,9 +16,12 @@ const initialForm = {
 type FormState = typeof initialForm;
 type Status = 'idle' | 'submitting' | 'success' | 'error';
 
+const DEMO_ENDPOINT = import.meta.env.VITE_DEMO_ENDPOINT as string | undefined;
+
 export default function PartnerModal({ isOpen, onClose }: PartnerModalProps) {
   const [form, setForm] = useState<FormState>(initialForm);
   const [status, setStatus] = useState<Status>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -27,49 +30,82 @@ export default function PartnerModal({ isOpen, onClose }: PartnerModalProps) {
       setForm((prev) => ({ ...prev, [field]: e.target.value }));
     };
 
+  const handleClose = () => {
+    setStatus('idle');
+    setErrorMessage(null);
+    onClose();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatus('submitting');
+    setErrorMessage(null);
 
-    // -------------------------------------------------------------
-    // 🔌 TODO: Wire to your real backend (same one used by DemoModal,
-    // or a HubSpot / Tally form). Two common examples below.
-    // -------------------------------------------------------------
-    //
-    // Option A — HubSpot Forms API:
-    // await fetch(
-    //   'https://api.hsforms.com/submissions/v3/integration/submit/<PORTAL_ID>/<FORM_ID>',
-    //   {
-    //     method: 'POST',
-    //     headers: { 'Content-Type': 'application/json' },
-    //     body: JSON.stringify({
-    //       fields: [
-    //         { name: 'firstname',   value: form.name },
-    //         { name: 'company',     value: form.firm },
-    //         { name: 'email',       value: form.email },
-    //         { name: 'phone',       value: form.phone },
-    //         { name: 'num_clients', value: form.clients },
-    //       ],
-    //     }),
-    //   },
-    // );
-    //
-    // Option B — Tally form (redirect):
-    // window.location.href = 'https://tally.so/r/<FORM_ID>?name=...';
-    //
-    // Option C — Your own API (same endpoint as DemoModal):
-    // await fetch('/api/partner-leads', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify(form),
-    // });
+    const trimmedName = form.name.trim();
+    const trimmedFirm = form.firm.trim();
+    const trimmedEmail = form.email.trim();
+    const trimmedPhone = form.phone.trim();
+    const trimmedClients = form.clients.trim();
+
+    if (!trimmedName || !trimmedFirm || !trimmedEmail || !trimmedPhone) {
+      setErrorMessage('Please fill in your name, firm name, email, and phone number.');
+      return;
+    }
+
+    setStatus('submitting');
+    const submittedAt = new Date().toISOString();
+    const endpointUrl = DEMO_ENDPOINT?.trim();
+
+    const payload = JSON.stringify({
+      name: trimmedName,
+      firm: trimmedFirm,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      clients: trimmedClients,
+      // Mapped fields for compatibility with generic lead receivers:
+      company: trimmedFirm,
+      notes: trimmedClients ? `Approx. SMB clients: ${trimmedClients}` : '',
+      submittedAt,
+      source: 'marketing-site-become-partner',
+    });
 
     try {
-      // Placeholder simulation — remove when wired to real backend.
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (endpointUrl) {
+        const isGoogleAppsScript = endpointUrl.includes('script.google.com');
+
+        if (isGoogleAppsScript) {
+          await fetch(endpointUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8',
+            },
+            body: payload,
+          });
+        } else {
+          const response = await fetch(endpointUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: payload,
+          });
+
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+        }
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+
       setStatus('success');
       setForm(initialForm);
-    } catch {
+    } catch (err) {
+      console.error('Partner submission error:', err);
+      setErrorMessage(
+        'Could not submit your application right now. Please check your connection or email partners@workforcepro.in.'
+      );
       setStatus('error');
     }
   };
@@ -77,14 +113,15 @@ export default function PartnerModal({ isOpen, onClose }: PartnerModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg p-8 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          onClick={onClose}
+          type="button"
+          onClick={handleClose}
           className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
           aria-label="Close"
         >
@@ -97,12 +134,15 @@ export default function PartnerModal({ isOpen, onClose }: PartnerModalProps) {
             <h3 className="text-2xl font-bold text-gray-900 mb-2">
               Application received!
             </h3>
-            <p className="text-gray-600 mb-6">
-              Thanks for your interest in the WorkforcePro Partner Program. Our
-              partner team will reach out within 24 hours.
+            <p className="text-gray-600 mb-2">
+              Thanks for your interest in the WorkforcePro Partner Program. Team will contact you for this.
+            </p>
+            <p className="text-sm text-gray-500 mb-6">
+              Our partner team will reach out within 24 hours.
             </p>
             <button
-              onClick={onClose}
+              type="button"
+              onClick={handleClose}
               className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition"
             >
               Close
@@ -189,15 +229,16 @@ export default function PartnerModal({ isOpen, onClose }: PartnerModalProps) {
               </div>
 
               {status === 'error' && (
-                <p className="text-sm text-red-600">
-                  Something went wrong. Please try again or email{' '}
-                  <a
-                    href="mailto:partners@workforcepro.in"
-                    className="underline"
-                  >
-                    partners@workforcepro.in
-                  </a>
-                  .
+                <p role="alert" className="text-sm text-red-600">
+                  {errorMessage ?? 'Something went wrong. Please try again or email '}
+                  {!errorMessage && (
+                    <a
+                      href="mailto:partners@workforcepro.in"
+                      className="underline"
+                    >
+                      partners@workforcepro.in
+                    </a>
+                  )}
                 </p>
               )}
 
