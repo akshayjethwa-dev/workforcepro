@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import AnnouncementBar from './components/AnnouncementBar';
 import Navbar from './components/Navbar';
 import DemoModal from './components/DemoModal';
 import Hero from './components/Hero';
 import ProblemSection from './components/ProblemSection';
+import UseCasesSection from './components/UseCasesSection';   // 👈 NEW
 import SolutionSection from './components/SolutionSection';
 import FeaturesSection from './components/FeaturesSection';
 import HowItWorksSection from './components/HowItWorksSection';
@@ -15,6 +17,7 @@ import PricingSection from './components/PricingSection';
 import FaqSection from './components/FaqSection';
 import FinalCtaSection from './components/FinalCtaSection';
 import Footer from './components/Footer';
+import PartnersPage from './components/Partners';
 
 const ANNOUNCEMENT_DISMISSED_KEY = 'workforcepro_announcement_dismissed_v1';
 
@@ -28,7 +31,7 @@ function getInitialDismissedState(): boolean {
 }
 
 function App() {
-  const [isDismissed, setIsDismissed] = useState<boolean>(getInitialDismissedState);
+  const [isDismissed, setIsDismissed] = useState(getInitialDismissedState);
   const [isDemoOpen, setIsDemoOpen] = useState(false);
 
   const handleDismissAnnouncement = () => {
@@ -36,34 +39,53 @@ function App() {
     try {
       window.localStorage.setItem(ANNOUNCEMENT_DISMISSED_KEY, 'true');
     } catch {
-      // Ignore storage quota or private-mode errors
+      /* Ignore storage quota or private-mode errors */
     }
   };
 
   const showAnnouncement = !isDismissed;
 
   return (
-    <div className="min-h-screen font-sans">
-      {showAnnouncement && <AnnouncementBar onDismiss={handleDismissAnnouncement} />}
-      <Navbar hasAnnouncement={showAnnouncement} onOpenDemo={() => setIsDemoOpen(true)} />
-      <main className={showAnnouncement ? 'pt-9' : ''}>
-        <Hero />
-        <ProblemSection />
-        <SolutionSection />
-        <FeaturesSection />
-        <HowItWorksSection />
-        <ResultsSection />
-        <SecurityComplianceSection />
-        <TestimonialsSection />
-        <ComparisonSection />
-        <PricingSection />
-        <FaqSection />
-        <FinalCtaSection />
-      </main>
+    <>
+      {showAnnouncement && (
+        <AnnouncementBar onDismiss={handleDismissAnnouncement} />
+      )}
+      <Navbar
+        hasAnnouncement={showAnnouncement}
+        onOpenDemo={() => setIsDemoOpen(true)}
+      />
+
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <>
+              <Hero />
+              <ProblemSection />
+              <UseCasesSection />          {/* 👈 NEW */}
+              <SolutionSection />
+              <FeaturesSection />
+              <HowItWorksSection />
+              <ResultsSection />
+              <SecurityComplianceSection />
+              <TestimonialsSection />
+              <ComparisonSection />
+              <PricingSection />
+              <FaqSection />
+              <FinalCtaSection />
+            </>
+          }
+        />
+
+        <Route path="/partners" element={<PartnersPage />} />
+      </Routes>
 
       <Footer />
-      <DemoModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
-    </div>
+      <DemoModal
+        isOpen={isDemoOpen}
+        onClose={() => setIsDemoOpen(false)}
+      />
+    </>
   );
 }
 
