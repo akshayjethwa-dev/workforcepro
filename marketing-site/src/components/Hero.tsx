@@ -25,18 +25,16 @@ export default function Hero() {
             >
               Start Your Free Trial
             </a>
-            <button className="bg-white text-blue-600 font-semibold px-8 py-3 rounded-lg border border-blue-600 hover:bg-blue-50 transition text-lg">
-              Watch 2‑Min Demo
-            </button>
           </div>
         </div>
 
-        {/* Hero Image / App Screenshot Placeholder */}
+        {/* Hero Image / App Screenshot */}
         <div className="mt-16 relative">
-          {/* Replace this div with your actual app screenshot */}
-          <div className="bg-white rounded-2xl shadow-2xl p-8 text-center text-gray-400 border border-gray-200">
-            [ Insert Dashboard Screenshot Here ]
-          </div>
+          <img
+            src="/Screenshot.png"
+            alt="WorkforcePro attendance and payroll dashboard screenshot"
+            className="w-full h-auto rounded-2xl shadow-2xl border border-gray-200 object-cover"
+          />
 
           {/* Decorative floating elements */}
           <div className="absolute -top-4 -left-4 bg-green-100 text-green-700 text-sm font-medium px-4 py-2 rounded-full shadow">

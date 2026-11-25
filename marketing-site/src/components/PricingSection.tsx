@@ -18,7 +18,9 @@ const PRICING_TIERS: PricingTier[] = [
     description: 'Start tracking daily attendance with zero upfront spend.',
     features: [
       'Up to 10 workers',
-      'Attendance only',
+      'Attendance & Time Tracking',
+      'Basic Reports & Exports',
+      'Biometric Face Kiosk (limited)',
     ],
     ctaLabel: 'Start Free Trial',
     href: 'https://workforcepro-saas.web.app/login?plan=growth',
@@ -31,8 +33,9 @@ const PRICING_TIERS: PricingTier[] = [
     description: 'Ideal for growing workshops and teams running regular payroll.',
     features: [
       'Up to 50 workers',
-      'Basic Payroll',
-      'Advances',
+      'Basic Payroll & Slips',
+      'Salary Advances',
+      'Shift Roster & Scheduling',
     ],
     ctaLabel: 'Get Started with Growth',
     href: 'https://workforcepro-saas.web.app/login?plan=growth',
@@ -47,7 +50,9 @@ const PRICING_TIERS: PricingTier[] = [
     features: [
       'Up to 100 workers',
       'Full Statutory Compliance',
+      'AI Anomaly & Fraud Detection',
       '50% Wage Rule Auto-Fix',
+      'Multi-Branch & Locations',
     ],
     ctaLabel: 'Choose Pro Plan',
     href: 'https://workforcepro-saas.web.app/login?plan=growth',

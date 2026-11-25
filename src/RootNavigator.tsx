@@ -44,6 +44,10 @@ import { UpgradeRequiredView } from './components/UpgradeRequiredView';
 // SCOPED MAGIC LINK PORTAL
 import { WorkerMagicLinkPortalView } from './components/WorkerMagicLinkPortalView';
 
+// MIGRATION WIZARD
+import { SetupWizardScreen } from './screens/SetupWizardScreen';
+import { getMigrationProgress, isDemoTenant } from './services/migrationService';
+
 // RBAC ROUTING HELPERS
 import {
   getDefaultPathForRole,
@@ -53,7 +57,7 @@ import {
 } from './services/rbacService';
 
 export const RootNavigator: React.FC = () => {
-  const { user, activeRole, loading, logout, roleChangeEvent, clearRoleChangeEvent } = useAuth();
+  const { user, activeRole, loading, logout, roleChangeEvent, clearRoleChangeEvent, profile } = useAuth();
   const { isEntitled } = useEntitlements();
   const { toast } = useToast();
   const location = useLocation();
@@ -62,6 +66,10 @@ export const RootNavigator: React.FC = () => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [workerToEdit, setWorkerToEdit] = useState<Worker | undefined>(undefined);
   const [kioskBranchId, setKioskBranchId] = useState<string>('default');
+
+  // Track which tenant we have already evaluated for migration-redirect,
+  // so we only force the wizard on the first visit per tenant.
+  const [migrationCheckedForTenant, setMigrationCheckedForTenant] = useState<string | null>(null);
 
   // Magic Link Token State: parses /w/:token, ?w=:token, or #/w/:token
   const [magicToken, setMagicToken] = useState<string | null>(() => {
@@ -134,6 +142,68 @@ export const RootNavigator: React.FC = () => {
       navigate(getDefaultPathForRole(activeRole), { replace: true });
     }
   }, [user, loading, activeRole, location.pathname, navigate]);
+
+  // ---------------------------------------------------------------
+  // FIRST-LOGIN MIGRATION WIZARD REDIRECT
+  // Only runs once per tenant session. If the tenant has never
+  // opened the wizard (no migration doc exists), redirect them to
+  // /setup-wizard. Subsequent visits are NOT forced — the persistent
+  // banner in the Layout reminds them, and they can bypass freely.
+  // ---------------------------------------------------------------
+  useEffect(() => {
+    if (magicToken || kioskConfig) return;
+    if (!user || loading) return;
+    if (activeRole !== 'TENANT_ADMIN') return;
+
+    const tenantId = profile?.tenantId;
+
+    // Demo / unauthenticated tenant sentinel → never redirect.
+    if (isDemoTenant(tenantId)) {
+      if (tenantId) setMigrationCheckedForTenant(tenantId);
+      return;
+    }
+
+    if (!tenantId) return;
+    if (migrationCheckedForTenant === tenantId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const progress = await getMigrationProgress(tenantId);
+        if (cancelled) return;
+
+        const isWizardPath = location.pathname === '/setup-wizard';
+
+        // Redirect only if the tenant has NEVER started the wizard.
+        // (Existing/legacy tenants who already have data will have a doc,
+        // or — if not — will simply see the dashboard once and the banner.)
+        if (!progress && !isWizardPath) {
+          navigate('/setup-wizard', { replace: true });
+        }
+      } catch (err) {
+        console.error('Migration redirect check failed:', err);
+      } finally {
+        if (!cancelled) {
+          setMigrationCheckedForTenant(tenantId);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    magicToken,
+    kioskConfig,
+    user,
+    loading,
+    activeRole,
+    profile?.tenantId,
+    location.pathname,
+    navigate,
+    migrationCheckedForTenant,
+  ]);
 
   useBackButton(() => {
     if (kioskConfig) return true;
@@ -241,6 +311,18 @@ export const RootNavigator: React.FC = () => {
       <Route path="/" element={<Navigate to={defaultHomePath} replace />} />
       <Route path="/login" element={<Navigate to={defaultHomePath} replace />} />
       <Route path="/register" element={<Navigate to={defaultHomePath} replace />} />
+
+      {/* ================================================================
+          MIGRATION WIZARD (Full-page, NOT wrapped in shell)
+         ================================================================ */}
+      <Route
+        path="/setup-wizard"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+            <SetupWizardScreen />
+          </RoleProtectedRoute>
+        }
+      />
 
       {/* ================================================================
           SUPER_ADMIN ROUTES: Tenants, Resellers, Revenue, System Settings

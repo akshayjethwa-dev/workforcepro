@@ -72,33 +72,7 @@ export default function SecurityComplianceSection() {
               Recommend WorkforcePro to your clients with confidence. Every attendance log, wage structure, and statutory calculation is engineered for accuracy and accountability.
             </p>
 
-            <div className="mt-8 flex flex-wrap items-center gap-4">
-              <a
-                href="/workforcepro-security-whitepaper.pdf"
-                download="WorkforcePro-Security-Whitepaper.pdf"
-                className="inline-flex items-center gap-2.5 bg-brand-blue hover:bg-blue-800 text-white font-semibold px-5 py-3 rounded-xl transition-colors shadow-sm"
-              >
-                <svg
-                  className="w-5 h-5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" x2="12" y1="15" y2="3" />
-                </svg>
-                <span>Download our Security Whitepaper</span>
-              </a>
-              <span className="text-xs sm:text-sm text-slate-500">
-                PDF overview • Compliance &amp; encryption brief
-              </span>
-            </div>
-          </div>
+                      </div>
 
           {/* Right Column: Explicit Compliance Checklist */}
           <div className="lg:col-span-6">

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { attendanceLogic } from '../services/attendanceLogic';
 import {
@@ -30,8 +31,10 @@ import {
   OrgSettings,
   ScreenName,
   Worker,
+  MigrationProgress,
 } from '../types/index';
 import { inboxService } from '../services/inboxService';
+import { getMigrationProgress } from '../services/migrationService';
 import { FieldStatusBadge } from '../components/FieldStatusBadge';
 import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
 import { ShiftRouteMapModal } from '../components/ShiftRouteMapModal';
@@ -98,6 +101,7 @@ function calculateEstimatedMonthlyPayroll(
 export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) => {
   const { profile, activeRole, limits, branchScope } = useAuth();
   const { branding } = useTheme();
+  const { toast } = useToast();
 
   const isTenantAdmin = activeRole === 'TENANT_ADMIN';
 
@@ -126,6 +130,39 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
       ? branchScope.primaryBranchId
       : 'ALL'
   );
+
+  // -----------------------------------------------------------------
+  // MIGRATION WIZARD STATE
+  // -----------------------------------------------------------------
+  const [migration, setMigration] = useState<MigrationProgress | null>(null);
+
+  useEffect(() => {
+    if (!isTenantAdmin || !profile?.tenantId) return;
+    let cancelled = false;
+    getMigrationProgress(profile.tenantId)
+      .then((progress) => {
+        if (!cancelled) setMigration(progress);
+      })
+      .catch(() => {
+        if (!cancelled) setMigration(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isTenantAdmin, profile?.tenantId]);
+
+  /**
+   * Payroll is blocked only when:
+   *  - a migration doc exists (wizard was started), AND
+   *  - migration is not yet completed (Go-Live not clicked), AND
+   *  - Step 2 (Add Workers) is not marked COMPLETED.
+   * If no doc exists (legacy tenant / dashboard-only access), we do NOT block
+   * so we don't break existing customers.
+   */
+  const isPayrollBlocked =
+    migration !== null &&
+    !migration.completedAt &&
+    migration.steps.find((s) => s.id === 2)?.status !== 'COMPLETED';
 
   useEffect(() => {
     if (branchScope.isBranchScoped && branchScope.primaryBranchId) {
@@ -350,6 +387,17 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
     } else {
       onOpenKiosk(branches[0]?.id || 'default');
     }
+  };
+
+  const handlePayrollClick = () => {
+    if (isPayrollBlocked) {
+      toast.warning(
+        'Complete Step 2 (Add Workers) in the Migration Wizard before running payroll.',
+        'Payroll Locked'
+      );
+      return;
+    }
+    onNavigate && onNavigate('PAYROLL');
   };
 
   const workersPresentTotal = stats.present + stats.halfDay + stats.pending;
@@ -605,11 +653,15 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
               </div>
             </button>
 
-            {/* WIDGET 2: Estimated Payroll Cost this Month */}
+            {/* WIDGET 2: Estimated Payroll Cost this Month — GATED BY MIGRATION */}
             <button
               type="button"
-              onClick={() => onNavigate && onNavigate('PAYROLL')}
-              className="text-left bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 hover:border-slate-300 transition-colors flex flex-col justify-between min-h-[11.5rem] group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+              onClick={handlePayrollClick}
+              aria-disabled={isPayrollBlocked}
+              title={isPayrollBlocked ? 'Complete Step 2 (Add Workers) in the Migration Wizard to unlock payroll' : undefined}
+              className={`text-left bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 transition-colors flex flex-col justify-between min-h-[11.5rem] group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                isPayrollBlocked ? 'opacity-60 cursor-not-allowed' : 'hover:border-slate-300 cursor-pointer'
+              }`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -622,7 +674,11 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                     </span>
                   </div>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    isPayrollBlocked ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-700'
+                  }`}
+                >
                   <IndianRupee size={20} />
                 </div>
               </div>
@@ -634,12 +690,25 @@ export const DashboardScreen: React.FC<Props> = ({ onOpenKiosk, onNavigate }) =>
                     ? ` · incl. ₹${payrollEstimate.overtimeEstimate.toLocaleString('en-IN')} OT`
                     : ` · ${stats.total} active staff`}
                 </span>
-                <span className="font-semibold text-blue-700 group-hover:text-blue-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0">
-                  <span>Payroll</span>
-                  <ChevronRight
-                    size={14}
-                    className="group-hover:translate-x-0.5 transition-transform"
-                  />
+                <span
+                  className={`font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                    isPayrollBlocked ? 'text-slate-500' : 'text-blue-700 group-hover:text-blue-800'
+                  }`}
+                >
+                  {isPayrollBlocked ? (
+                    <>
+                      <Lock size={12} />
+                      <span>Locked</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Payroll</span>
+                      <ChevronRight
+                        size={14}
+                        className="group-hover:translate-x-0.5 transition-transform"
+                      />
+                    </>
+                  )}
                 </span>
               </div>
             </button>

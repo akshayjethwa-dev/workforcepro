@@ -2906,3 +2906,64 @@ export interface AnnualPoshDistrictReport {
   natureOfActionsSummary: { action: string; count: number }[];
   reportText: string;
 }
+
+// --------------------------------------------------
+// MIGRATION WIZARD TYPES
+// --------------------------------------------------
+
+export type MigrationStepStatus =
+  | 'NOT_STARTED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'SKIPPED';
+
+export interface MigrationStep {
+  id: number;
+  title: string;
+  description: string;
+  status: MigrationStepStatus;
+  isOptional?: boolean;   // Steps 3 & 4 are optional
+}
+
+export interface MigrationProgress {
+  steps: MigrationStep[];
+  currentStepIndex: number;   // 0-based index of the active step
+  completedAt?: string;       // ISO timestamp when Go‑Live was clicked
+  isDismissed?: boolean;      // user chose to bypass the wizard
+}
+
+// Default step definitions
+export const DEFAULT_MIGRATION_STEPS: MigrationStep[] = [
+  {
+    id: 1,
+    title: 'Company Profile & Statutory State',
+    description: 'Set your company details and statutory state.',
+    status: 'NOT_STARTED',
+  },
+  {
+    id: 2,
+    title: 'Add Workers (Bulk or Manual)',
+    description: 'Import or add at least one worker. This step is required before you can run payroll.',
+    status: 'NOT_STARTED',
+  },
+  {
+    id: 3,
+    title: 'Import Opening Leave Balances',
+    description: 'Upload a CSV/Excel file with opening leave balances.',
+    status: 'NOT_STARTED',
+    isOptional: true,
+  },
+  {
+    id: 4,
+    title: 'Import Pending Advances / Loans',
+    description: 'Upload a CSV/Excel file with any outstanding advances or loans.',
+    status: 'NOT_STARTED',
+    isOptional: true,
+  },
+  {
+    id: 5,
+    title: 'Review & Go‑Live',
+    description: 'Review your setup and start using WorkforcePro.',
+    status: 'NOT_STARTED',
+  },
+];

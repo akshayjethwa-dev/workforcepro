@@ -1,4 +1,6 @@
+// src/components/Layout.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Home,
   Users,
@@ -23,8 +25,9 @@ import {
   Sliders,
   HardHat,
   FileText,
+  Rocket,
 } from 'lucide-react';
-import { ScreenName, AppNotification } from '../types/index';
+import { ScreenName, AppNotification, MigrationProgress } from '../types/index';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { Sidebar } from './Sidebar';
@@ -34,6 +37,7 @@ import { SetupGuideModal } from './SetupGuideModal';
 import { A11yAuditModal } from './A11yAuditModal';
 import { WhatsAppChatSimulator } from './WhatsAppChatSimulator';
 import { dbService } from '../services/db';
+import { getMigrationProgress } from '../services/migrationService';
 import {
   scrollElementAboveKeyboard,
   useKeyboardAwareLayout,
@@ -99,6 +103,7 @@ export const Layout: React.FC<LayoutProps> = ({
     limits,
   } = useAuth();
   const { effectiveBranding, isFieldMode, toggleFieldMode } = useTheme();
+  const navigate = useNavigate();
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -115,6 +120,34 @@ export const Layout: React.FC<LayoutProps> = ({
   const isTenantAdmin = activeRole === 'TENANT_ADMIN';
   const isManager = activeRole === 'MANAGER';
   const isWorker = activeRole === 'WORKER';
+
+  // -----------------------------------------------------------------
+  // MIGRATION WIZARD STATE (banner + gating reminder)
+  // -----------------------------------------------------------------
+  const [migration, setMigration] = useState<MigrationProgress | null>(null);
+  const [migrationLoaded, setMigrationLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!isTenantAdmin || !profile?.tenantId) {
+      setMigrationLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    getMigrationProgress(profile.tenantId)
+      .then((progress) => {
+        if (!cancelled) setMigration(progress);
+      })
+      .catch((err) => {
+        console.warn('Migration progress load error:', err);
+        if (!cancelled) setMigration(null);
+      })
+      .finally(() => {
+        if (!cancelled) setMigrationLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isTenantAdmin, profile?.tenantId]);
 
   // Keyboard shortcut listener for Command Palette (⌘K or Ctrl+K)
   useEffect(() => {
@@ -191,6 +224,19 @@ export const Layout: React.FC<LayoutProps> = ({
     tenantPlan === 'TRIAL' && trialDaysLeft !== null && isTenantAdmin && !isImpersonating
   );
 
+  // Show the migration banner for Tenant Admins whenever the wizard is still
+  // incomplete (either the doc was never created OR Go-Live hasn't happened).
+  // Skip while impersonating to keep the Super-Admin UI uncluttered.
+  const showMigrationBanner =
+    isTenantAdmin &&
+    !isImpersonating &&
+    migrationLoaded &&
+    (!migration || !migration.completedAt);
+
+  const migrationCurrentStepNum = migration ? migration.currentStepIndex + 1 : 1;
+  const migrationTotalSteps = migration?.steps.length ?? 5;
+  const migrationCurrentStepTitle = migration?.steps[migration.currentStepIndex]?.title;
+
   const MobileNavItem = ({
     screen,
     icon: Icon,
@@ -244,7 +290,7 @@ export const Layout: React.FC<LayoutProps> = ({
         onOpenGuide={() => setGuideOpen(true)}
       />
 
-      {/* TOP NOTIFICATION BANNERS (Impersonation / Trial) */}
+      {/* TOP NOTIFICATION BANNERS (Impersonation / Trial / Migration) */}
       {showImpersonationBanner && (
         <div
           className="bg-rose-600 shrink-0 text-white text-fluid-xs font-semibold px-3 sm:px-4 py-2 flex items-center justify-between flex-wrap gap-2 z-50 shadow-xs"
@@ -291,6 +337,48 @@ export const Layout: React.FC<LayoutProps> = ({
           <span className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-0.5 rounded text-fluid-2xs font-bold uppercase tracking-wider transition-colors shrink-0">
             Upgrade Plan
           </span>
+        </div>
+      )}
+
+      {/* PERSISTENT MIGRATION WIZARD BANNER (Tenant Admin only) */}
+      {showMigrationBanner && (
+        <div
+          className="shrink-0 bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-b border-amber-200 px-3 sm:px-4 py-2.5 flex items-center justify-between gap-2 flex-wrap z-40 shadow-2xs"
+          style={{
+            paddingTop:
+              showImpersonationBanner || showTrialBanner
+                ? '10px'
+                : 'calc(env(safe-area-inset-top, 0px) + 10px)',
+          }}
+        >
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <div className="w-7 h-7 rounded-lg bg-amber-600 text-white flex items-center justify-center shrink-0">
+              <Rocket size={15} />
+            </div>
+            <span className="text-fluid-xs text-amber-950 min-w-0 break-words">
+              <strong className="font-semibold">
+                {migration
+                  ? `Migration in progress — Step ${migrationCurrentStepNum} of ${migrationTotalSteps}`
+                  : 'Finish setting up WorkforcePro'}
+              </strong>
+              {migrationCurrentStepTitle ? (
+                <span className="text-amber-800"> · {migrationCurrentStepTitle}</span>
+              ) : (
+                <span className="text-amber-800">
+                  {' '}
+                  · Import your workers and opening balances to unlock payroll.
+                </span>
+              )}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/setup-wizard')}
+            className="inline-flex items-center gap-1 px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white text-fluid-2xs font-bold uppercase tracking-wider rounded-lg transition-colors shrink-0 cursor-pointer shadow-2xs"
+          >
+            <span>{migration ? 'Resume Wizard' : 'Start Wizard'}</span>
+            <ChevronRight size={12} />
+          </button>
         </div>
       )}
 

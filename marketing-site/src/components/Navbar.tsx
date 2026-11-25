@@ -24,7 +24,7 @@ export default function Navbar({ onOpenDemo }: NavbarProps) {
             <Link to="/#how-it-works" className="text-gray-700 hover:text-blue-600 font-medium">
               How it Works
             </Link>
-            <Link to="/#pricing" className="text-gray-700 hover:text-blue-600 font-medium">
+            <Link to="/#PricingSection" className="text-gray-700 hover:text-blue-600 font-medium">
               Pricing
             </Link>
             {/* 👇 New prominent "For CA Partners" link */}

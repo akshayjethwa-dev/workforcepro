@@ -9,10 +9,10 @@ interface StepItem {
 const STEPS: StepItem[] = [
   {
     stepNumber: '01',
-    title: 'CA sets up the account',
+    title: 'Sets up the account',
     subtitle: 'Takes 2 minutes',
     description:
-      'Create your client workspace, set shift rules, and configure statutory defaults without spending hours on setup.',
+      'Create your workspace, set shift rules, and configure statutory defaults without spending hours on setup.',
     icon: 'userPlus',
   },
   {
