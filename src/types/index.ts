@@ -2,7 +2,7 @@ export type SyncStatus = 'PENDING_LOCAL' | 'SYNCING' | 'SYNCED' | 'CONFLICT' | '
 
 export interface OfflineQueueItem {
   id?: number;
-  entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK';
+  entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE';
   recordId: string;
   tenantId: string;
   workerId: string;
@@ -1394,8 +1394,46 @@ export interface ConflictAuditEntry {
   notes?: string;
 }
 
+export type ExpenseCategory = 'PETROL' | 'FOOD' | 'TRAVEL' | 'OTHER';
+
+export type ExpenseClaimStatus = 'PENDING_LOCAL' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+
+export type ExpenseRiskFlag = 'NONE' | 'HIGH_RISK_DUPLICATE';
+
+export interface ExpenseClaim {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  workerDesignation?: string;
+  branchId?: string;
+  amount: number;
+  category: ExpenseCategory;
+  expenseDate: string; // YYYY-MM-DD (defaults to Today; max 30 days in past)
+  receiptImageDataUrl: string; // Direct camera capture only (no gallery uploads)
+  receiptImageHash: string; // SHA-256 hash of image bytes for cross-worker duplicate detection
+  captureSource: 'CAMERA_DIRECT';
+  status: ExpenseClaimStatus;
+  syncStatus: SyncStatus;
+  managerName: string;
+  statusMessage: string;
+  riskFlag: ExpenseRiskFlag;
+  duplicateOfClaimId?: string;
+  duplicateOfWorkerId?: string;
+  duplicateOfWorkerName?: string;
+  duplicateOfExpenseDate?: string;
+  createdAt: string;
+  offlineTimestamp?: string;
+  syncedAt?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  rejectionReason?: string;
+}
+
 export type InboxActionType = 
   | 'ADVANCE_APPROVAL' 
+  | 'EXPENSE_APPROVAL'
   | 'ATTENDANCE_EXCEPTION' 
   | 'OVERTIME_APPROVAL'
   | 'PAYROLL_SIGNOFF' 
@@ -1432,6 +1470,7 @@ export interface InboxItem {
     punch?: Punch;
     attendanceRecord?: AttendanceRecord;
     advance?: Advance;
+    expenseClaim?: ExpenseClaim;
     conflict?: PunchConflict;
     fnfSettlement?: FnfSettlementRecord;
     overdueDays?: number;

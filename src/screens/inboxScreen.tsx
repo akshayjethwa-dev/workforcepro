@@ -3,7 +3,7 @@ import {
   Inbox, CheckCircle2, XCircle, AlertTriangle, Clock, MapPin, 
   IndianRupee, ShieldAlert, Filter, RefreshCw, 
   ChevronRight, Sparkles, UserCheck, Eye, X, FileCheck,
-  Calendar, ShieldCheck, ArrowUpRight, Smartphone, Navigation, Cpu, Shield
+  Calendar, ShieldCheck, ArrowUpRight, Smartphone, Navigation, Cpu, Shield, Receipt
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -51,6 +51,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
   // Review drawer state
   const [reviewingItem, setReviewingItem] = useState<InboxItem | null>(null);
   const [reviewNotes, setReviewNotes] = useState('');
+  const [inspectingExpenseItem, setInspectingExpenseItem] = useState<InboxItem | null>(null);
 
   // Delegation modal
   const [showDelegationModal, setShowDelegationModal] = useState(false);
@@ -218,6 +219,8 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
     switch (type) {
       case 'ADVANCE_APPROVAL':
         return { label: 'Advance Request', icon: IndianRupee, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
+      case 'EXPENSE_APPROVAL':
+        return { label: 'Expense Claim', icon: Receipt, color: 'text-teal-700 bg-teal-50 border-teal-200' };
       case 'ATTENDANCE_EXCEPTION':
         return { label: 'Attendance Alert', icon: AlertTriangle, color: 'text-amber-700 bg-amber-50 border-amber-200' };
       case 'OVERTIME_APPROVAL':
@@ -417,6 +420,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                   { id: 'ALL', label: 'All' },
                   { id: 'ATTENDANCE_EXCEPTION', label: 'Attendance' },
                   { id: 'OVERTIME_APPROVAL', label: 'Overtime' },
+                  { id: 'EXPENSE_APPROVAL', label: 'Expenses' },
                   { id: 'ADVANCE_APPROVAL', label: 'Advances' },
                   { id: 'CONFLICT_RESOLUTION', label: 'Conflicts' },
                   { id: 'PAYROLL_SIGNOFF', label: 'Payroll' },
@@ -623,6 +627,79 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                             )}
                           </div>
                         )}
+
+                        {/* Expense Claim Receipt Preview & HIGH_RISK_DUPLICATE Flag */}
+                        {item.actionType === 'EXPENSE_APPROVAL' && item.details?.expenseClaim && (() => {
+                          const claim = item.details.expenseClaim;
+                          const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
+                          return (
+                            <div className="mb-3 space-y-2">
+                              {isDup && (
+                                <div className="p-3 rounded-xl bg-rose-50 border-2 border-rose-300 flex items-start gap-2.5 text-xs text-rose-900">
+                                  <ShieldAlert size={16} className="text-rose-700 shrink-0 mt-0.5" />
+                                  <div>
+                                    <div className="font-black uppercase tracking-wider text-rose-800">
+                                      HIGH_RISK_DUPLICATE — Identical Receipt Detected
+                                    </div>
+                                    <p className="mt-0.5 leading-relaxed">
+                                      Exact SHA-256 image match with a receipt already submitted by{' '}
+                                      <strong>{claim.duplicateOfWorkerName || 'another worker'}</strong> on{' '}
+                                      <span className="font-mono font-bold">{claim.duplicateOfExpenseDate || 'earlier'}</span>.
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectingExpenseItem(item)}
+                                  className="relative group shrink-0 rounded-xl overflow-hidden border border-slate-300 cursor-pointer"
+                                  title="Inspect full-size receipt photo"
+                                >
+                                  <img
+                                    src={claim.receiptImageDataUrl}
+                                    alt="Expense receipt"
+                                    className="w-16 h-16 object-cover"
+                                  />
+                                  <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                    <Eye size={16} />
+                                  </div>
+                                </button>
+                                <div className="min-w-0 flex-1 text-xs space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-black font-mono text-base text-slate-900">
+                                      ₹{claim.amount.toLocaleString('en-IN')}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-800 font-bold text-[11px]">
+                                      {claim.category}
+                                    </span>
+                                    <span className="font-mono text-slate-500">{claim.expenseDate}</span>
+                                  </div>
+                                  <div className="flex items-center gap-3 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectingExpenseItem(item)}
+                                      className="inline-flex items-center gap-1 font-bold text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                                    >
+                                      <Eye size={12} />
+                                      <span>Inspect Receipt Photo</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isProcessing}
+                                      onClick={() =>
+                                        handleReject(item, 'Receipt photo is blurry or unreadable — please retake clearly.')
+                                      }
+                                      className="text-[11px] font-bold text-rose-700 hover:text-rose-900 underline cursor-pointer disabled:opacity-50"
+                                    >
+                                      Reject (Blurry / Unreadable)
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {/* Worker Identity + Role-Gated "View technical details" Link (CA / Super Admin only) */}
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-fluid-xs text-slate-500 font-medium min-w-0">
@@ -1326,6 +1403,118 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
           </div>
         </div>
       )}
+
+      {/* Manager Receipt Inspection Lightbox (All Managers can inspect receipt clarity & duplicates) */}
+      {inspectingExpenseItem?.details?.expenseClaim && (() => {
+        const claim = inspectingExpenseItem.details.expenseClaim;
+        const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
+        const isProc = actionLoadingId === inspectingExpenseItem.id;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150">
+              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-black">
+                    Receipt Review · ₹{claim.amount.toLocaleString('en-IN')} ({claim.category})
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    {claim.workerName} · Expense Date: {claim.expenseDate}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInspectingExpenseItem(null)}
+                  className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                {isDup && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-300 flex items-start gap-2.5 text-xs text-rose-900">
+                    <ShieldAlert size={18} className="text-rose-700 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-black uppercase text-rose-800">HIGH_RISK_DUPLICATE</div>
+                      <p className="mt-0.5">
+                        This exact receipt image hash (<code className="font-mono">{claim.receiptImageHash.slice(0, 14)}…</code>) was already uploaded by{' '}
+                        <strong>{claim.duplicateOfWorkerName || 'another worker'}</strong> on{' '}
+                        <strong>{claim.duplicateOfExpenseDate || 'earlier'}</strong>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-950 flex items-center justify-center">
+                  <img
+                    src={claim.receiptImageDataUrl}
+                    alt="Full-size expense receipt"
+                    className="max-h-80 w-full object-contain"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 text-xs">
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Capture Method</span>
+                    <span className="font-bold text-emerald-700">Live Camera (No Gallery)</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Image SHA-256 Hash</span>
+                    <span className="font-mono font-semibold text-slate-800 truncate block">
+                      {claim.receiptImageHash.slice(0, 16)}…
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isProc}
+                    onClick={async () => {
+                      await handleReject(
+                        inspectingExpenseItem,
+                        'Receipt photo is blurry or unreadable — please retake clearly.'
+                      );
+                      setInspectingExpenseItem(null);
+                    }}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-xs cursor-pointer disabled:opacity-50"
+                  >
+                    Reject: Blurry / Unreadable
+                  </button>
+                  {isDup && (
+                    <button
+                      type="button"
+                      disabled={isProc}
+                      onClick={async () => {
+                        await handleReject(
+                          inspectingExpenseItem,
+                          'Rejected: HIGH_RISK_DUPLICATE receipt already submitted.'
+                        );
+                        setInspectingExpenseItem(null);
+                      }}
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs cursor-pointer disabled:opacity-50"
+                    >
+                      Reject: Duplicate
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isProc}
+                    onClick={async () => {
+                      await handleApprove(inspectingExpenseItem, 'Receipt verified and approved for reimbursement.');
+                      setInspectingExpenseItem(null);
+                    }}
+                    className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer disabled:opacity-50"
+                  >
+                    Approve ₹{claim.amount.toLocaleString('en-IN')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

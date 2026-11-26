@@ -460,6 +460,47 @@ export class InboxService {
       console.warn('Could not sync overtime attendance into inbox', e);
     }
 
+    // 2.7 Sync submitted expense claims from expenseService into Manager Inbox
+    try {
+      const { expenseService, getExpenseCategoryLabel } = await import('./expenseService');
+      const submittedClaims = expenseService
+        .getClaimsForTenant(tenantId)
+        .filter((c) => c.status === 'SUBMITTED');
+      for (const claim of submittedClaims) {
+        const inboxId = `inbox-expense-${claim.id}`;
+        if (!items.some((i) => i.id === inboxId)) {
+          didMutate = true;
+          const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
+          const catLabel = getExpenseCategoryLabel(claim.category);
+          items.unshift({
+            id: inboxId,
+            tenantId,
+            branchId: claim.branchId,
+            actionType: 'EXPENSE_APPROVAL',
+            urgency: isDup ? 'URGENT' : claim.amount > 1000 ? 'HIGH' : 'NORMAL',
+            status: 'PENDING',
+            workerId: claim.workerId,
+            workerName: claim.workerName,
+            workerPhone: claim.workerPhone,
+            workerDesignation: claim.workerDesignation,
+            title: `${claim.workerName.split(' ')[0]} claimed ₹${claim.amount.toLocaleString('en-IN')} for ${catLabel}`,
+            description: isDup
+              ? `HIGH_RISK_DUPLICATE: Exact same receipt image was already submitted by ${claim.duplicateOfWorkerName || 'another worker'} on ${claim.duplicateOfExpenseDate || 'an earlier date'}.`
+              : `${catLabel} receipt for ${claim.expenseDate} captured via live camera.`,
+            timestamp: claim.syncedAt || claim.createdAt,
+            amount: claim.amount,
+            isLowRisk: false,
+            details: {
+              expenseClaim: claim,
+              reason: `${catLabel} expense on ${claim.expenseDate}`,
+            },
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Could not sync expense claims into inbox', e);
+    }
+
     if (didMutate) {
       this.saveStoredItems(tenantId, items);
     }
@@ -609,6 +650,19 @@ export class InboxService {
         }
       } catch (e) {
         console.warn('DB advance status update error:', e);
+      }
+    } else if (targetItem.actionType === 'EXPENSE_APPROVAL' && targetItem.details?.expenseClaim) {
+      try {
+        const { expenseService } = await import('./expenseService');
+        expenseService.updateExpenseClaimResolution(
+          tenantId,
+          targetItem.details.expenseClaim.id,
+          action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+          resolvedBy,
+          notes
+        );
+      } catch (e) {
+        console.warn('Expense claim status update error:', e);
       }
     } else if (targetItem.actionType === 'CONFLICT_RESOLUTION' && targetItem.details?.conflict) {
       try {

@@ -14,6 +14,7 @@ import { ctcSimulatorService } from '../services/ctcSimulatorService';
 import { evaluateFnfDeadline, getSyncFnfSettlementForWorker, getSyncOffCycleFnfPayrolls } from '../services/fnfService';
 import { DeviceBoundPunchView } from './DeviceBoundPunchView';
 import { PoshComplaintForm } from './PoshComplaintForm';
+import { WorkerExpenseQuickPanel } from './WorkerExpenseQuickPanel';
 
 interface Props {
   token: string;
@@ -374,6 +375,14 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
             </div>
           </div>
         )}
+        <div className="max-w-md mx-auto w-full px-3 pt-3">
+          <WorkerExpenseQuickPanel
+            tenantId={tokenRecord.tenantId}
+            worker={worker}
+            orgSettings={orgSettings}
+            compact
+          />
+        </div>
         <DeviceBoundPunchView
           tokenRecord={tokenRecord}
           worker={worker}
@@ -515,6 +524,17 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* PROMINENT ONE-TAP EXPENSE CLAIM CTA ON WORKER PORTAL HOME */}
+      {worker && tokenRecord && (
+        <div className="max-w-3xl mx-auto px-4 mt-4 w-full print:hidden">
+          <WorkerExpenseQuickPanel
+            tenantId={tokenRecord.tenantId}
+            worker={worker}
+            orgSettings={orgSettings}
+          />
         </div>
       )}
 

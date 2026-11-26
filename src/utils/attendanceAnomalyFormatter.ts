@@ -245,6 +245,26 @@ export function getSimplifiedInboxPresentation(item: InboxItem): SimplifiedInbox
     };
   }
 
+  // 9.5 Expense claim approval (with duplicate receipt risk visibility)
+  if (item.actionType === 'EXPENSE_APPROVAL' || details.expenseClaim) {
+    const claim = details.expenseClaim;
+    const isDuplicate = claim?.riskFlag === 'HIGH_RISK_DUPLICATE';
+    const catLabel = claim?.category
+      ? claim.category.charAt(0) + claim.category.slice(1).toLowerCase()
+      : 'Expense';
+    return {
+      anomalyKind: 'OTHER',
+      headline:
+        item.title ||
+        `${firstName} claimed ₹${(claim?.amount || item.amount || 0).toLocaleString('en-IN')} for ${catLabel}`,
+      subtext: isDuplicate
+        ? `HIGH_RISK_DUPLICATE: Identical receipt image already submitted by ${claim?.duplicateOfWorkerName || 'another worker'} (${claim?.duplicateOfExpenseDate || 'earlier'}).`
+        : item.description || `${catLabel} receipt dated ${claim?.expenseDate || 'Today'}. Inspect receipt clarity before approving.`,
+      categoryLabel: isDuplicate ? 'Duplicate Receipt Risk' : 'Expense Claim',
+      hasTechnicalDetails: false,
+    };
+  }
+
   // 10. Default (Advance / EWA / Payroll / Leave / FnF)
   return {
     anomalyKind: 'OTHER',

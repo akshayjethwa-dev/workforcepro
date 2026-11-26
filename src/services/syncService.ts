@@ -103,7 +103,7 @@ export const syncService = {
 
   // 4. Save a new punch or record to the offline queue immediately (Optimistic Local Write)
   async enqueueRecord(
-    entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK',
+    entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE',
     recordId: string,
     tenantId: string,
     workerId: string,
@@ -361,6 +361,13 @@ export const syncService = {
             syncedCount++;
           } else if (item.entityType === 'ADVANCE') {
             await dbService.addAdvance(item.payload);
+            item.syncStatus = 'SYNCED';
+            await this.updateItem(item);
+            setTimeout(() => this.removeItem(item.id!), 2000);
+            syncedCount++;
+          } else if (item.entityType === 'EXPENSE') {
+            const { expenseService } = await import('./expenseService');
+            await expenseService.syncExpenseClaimToServer(item.payload);
             item.syncStatus = 'SYNCED';
             await this.updateItem(item);
             setTimeout(() => this.removeItem(item.id!), 2000);

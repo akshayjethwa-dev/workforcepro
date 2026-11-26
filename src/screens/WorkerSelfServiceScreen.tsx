@@ -13,7 +13,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { dbService } from '../services/db';
-import { AttendanceRecord, ScreenName, Worker } from '../types/index';
+import { AttendanceRecord, OrgSettings, ScreenName, Worker } from '../types/index';
+import { WorkerExpenseQuickPanel } from '../components/WorkerExpenseQuickPanel';
 
 interface WorkerSelfServiceScreenProps {
   onNavigate: (screen: ScreenName) => void;
@@ -24,6 +25,7 @@ export const WorkerSelfServiceScreen: React.FC<WorkerSelfServiceScreenProps> = (
 }) => {
   const { profile } = useAuth();
   const [workerRecord, setWorkerRecord] = useState<Worker | null>(null);
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
   const [recentAttendance, setRecentAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,10 +37,12 @@ export const WorkerSelfServiceScreen: React.FC<WorkerSelfServiceScreenProps> = (
       }
       setLoading(true);
       try {
-        const [workers, history] = await Promise.all([
+        const [workers, history, fetchedSettings] = await Promise.all([
           dbService.getWorkers(profile.tenantId),
           dbService.getAttendanceHistory(profile.tenantId),
+          dbService.getOrgSettings(profile.tenantId).catch(() => null),
         ]);
+        setOrgSettings(fetchedSettings);
 
         const matched =
           workers.find((w) => w.id === profile.workerId) ||
@@ -104,6 +108,21 @@ export const WorkerSelfServiceScreen: React.FC<WorkerSelfServiceScreenProps> = (
           </div>
         </div>
       </div>
+
+      {/* Prominent One-Tap Expense Claim Card */}
+      {profile?.tenantId && (
+        <WorkerExpenseQuickPanel
+          tenantId={profile.tenantId}
+          worker={
+            workerRecord || {
+              id: profile.workerId || profile.uid || 'worker-self',
+              name: profile.name || 'Employee',
+              branchId: profile.branchId,
+            }
+          }
+          orgSettings={orgSettings}
+        />
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
