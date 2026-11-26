@@ -480,19 +480,40 @@ export const WorkerHistoryScreen: React.FC = () => {
                   </button>
                </div>
                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
-                     <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Casual (CL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.cl ?? settings?.leavePolicy?.cl ?? 0}</p>
-                  </div>
-                  <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
-                     <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Sick (SL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.sl ?? settings?.leavePolicy?.sl ?? 0}</p>
-                  </div>
-                  <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
-                     <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Privilege (PL)</p>
-                     <p className="text-xl font-black text-slate-800">{selectedWorker?.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0}</p>
-                  </div>
+                  {(() => {
+                    const clVal = selectedWorker?.leaveBalances?.cl ?? settings?.leavePolicy?.cl ?? 0;
+                    const slVal = selectedWorker?.leaveBalances?.sl ?? settings?.leavePolicy?.sl ?? 0;
+                    const plVal = selectedWorker?.leaveBalances?.pl ?? settings?.leavePolicy?.pl ?? 0;
+                    return (
+                      <>
+                        <div className={`p-3 rounded-xl text-center border ${plVal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-100'}`}>
+                           <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Earned (EL / PL)</p>
+                           <p className={`text-xl font-black font-mono ${plVal < 0 ? 'text-rose-700' : 'text-slate-800'}`}>{plVal}</p>
+                        </div>
+                        <div className={`p-3 rounded-xl text-center border ${slVal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-100'}`}>
+                           <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Sick (SL)</p>
+                           <p className={`text-xl font-black font-mono ${slVal < 0 ? 'text-rose-700' : 'text-slate-800'}`}>{slVal}</p>
+                        </div>
+                        <div className={`p-3 rounded-xl text-center border ${clVal < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-100'}`}>
+                           <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Casual (CL)</p>
+                           <p className={`text-xl font-black font-mono ${clVal < 0 ? 'text-rose-700' : 'text-slate-800'}`}>{clVal}</p>
+                        </div>
+                      </>
+                    );
+                  })()}
                </div>
+               {selectedWorker?.leaveBalances?.migrationDate && (
+                 <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+                   <span>
+                     Opening Balance effective <strong className="font-mono text-slate-800">{selectedWorker.leaveBalances.migrationDate}</strong> · Future accruals apply from <strong className="font-mono text-slate-800">{selectedWorker.leaveBalances.accrualStartDate || selectedWorker.leaveBalances.migrationDate}</strong> forward
+                   </span>
+                   {(selectedWorker.leaveBalances.negativeBalanceDeductionPending || 0) > 0 && (
+                     <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-bold text-[10px]">
+                       -{selectedWorker.leaveBalances.negativeBalanceDeductionPending}d Next Payroll Deduction
+                     </span>
+                   )}
+                 </div>
+               )}
             </div>
 
             {/* Kharchi / Advances Ledger */}

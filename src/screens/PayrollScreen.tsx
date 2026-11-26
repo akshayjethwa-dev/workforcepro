@@ -8,9 +8,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
+import { PayrollEngine, formatInrWhole } from '../services/PayrollEngine';
 import { statutoryEngine, StatutoryEngine } from '../services/statutoryEngine';
-import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings, WageComplianceAudit } from '../types/index';
+import { MonthlyPayroll, Worker, AttendanceRecord, Advance, OrgSettings, WageComplianceAudit, ActiveLoan } from '../types/index';
 import { Payslip } from '../components/Payslip';
+import { BulkLoanLedgerImportModal } from '../components/BulkLoanLedgerImportModal';
 import { StatutoryTraceModal } from '../components/StatutoryTraceModal';
 import { TaxDeclarationModal } from '../components/TaxDeclarationModal';
 import { Form16Modal } from '../components/Form16Modal';
@@ -51,6 +53,8 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
+  const [activeLoans, setActiveLoans] = useState<ActiveLoan[]>([]);
+  const [isLoanImportModalOpen, setIsLoanImportModalOpen] = useState(false);
   
   const [savedPayrolls, setSavedPayrolls] = useState<MonthlyPayroll[]>([]); 
   const [siteAddress, setSiteAddress] = useState<string>(''); 
@@ -106,6 +110,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
       const fetchedWorkers = await dbService.getWorkers(tenantId);
       const fetchedAttendance = await dbService.getAttendanceHistory(tenantId);
       const fetchedAdvances = await dbService.getAdvances(tenantId);
+      const fetchedLoans = await dbService.getActiveLoans(tenantId);
       const fetchedSettings = await dbService.getOrgSettings(tenantId);
       
       let fetchedPayrolls: MonthlyPayroll[] = [];
@@ -124,6 +129,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
 
       setWorkers(fetchedWorkers);
       setAdvances(fetchedAdvances);
+      setActiveLoans(fetchedLoans);
       setSettings(fetchedSettings);
       setSiteAddress(fetchedSettings?.baseLocation?.address || '');
       setSavedPayrolls(fetchedPayrolls);
@@ -188,9 +194,23 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         conflictService.getUnresolvedPayrollConflicts(profile.tenantId, currentMonthStr).then(setUnresolvedConflicts);
       }
     };
+    const handleActiveLoansChanged = () => {
+      if (profile?.tenantId) {
+        dbService.getActiveLoans(profile.tenantId).then(setActiveLoans).catch(() => {});
+      }
+    };
     window.addEventListener('punchConflictsChanged', handleConflictsChanged);
-    return () => window.removeEventListener('punchConflictsChanged', handleConflictsChanged);
+    window.addEventListener('activeLoansChanged', handleActiveLoansChanged);
+    return () => {
+      window.removeEventListener('punchConflictsChanged', handleConflictsChanged);
+      window.removeEventListener('activeLoansChanged', handleActiveLoansChanged);
+    };
   }, [profile?.tenantId, currentMonthStr]);
+
+  const loanRecoverySummary = useMemo(
+    () => PayrollEngine.calculateMonthlyLoanRecoverySummary(activeLoans, currentMonthStr),
+    [activeLoans, currentMonthStr]
+  );
 
   const payrolls = useMemo(() => {
     if (!profile?.tenantId || workers.length === 0) return [];
@@ -202,15 +222,16 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         return alreadySaved;
       }
 
-      return wageService.calculateMonthlyPayroll(
+      return PayrollEngine.calculateMonthlyPayroll(
         worker,
         currentMonthStr,
         attendanceHistory,
         advances,
-        settings || { shifts: [], enableBreakTracking: false }
+        settings || { shifts: [], enableBreakTracking: false },
+        activeLoans
       );
     });
-  }, [workers, currentMonthStr, attendanceHistory, advances, settings, savedPayrolls, profile]);
+  }, [workers, currentMonthStr, attendanceHistory, advances, activeLoans, settings, savedPayrolls, profile]);
 
   const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
     e.stopPropagation(); 
@@ -643,6 +664,21 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
             />
           </div>
 
+          <button
+            type="button"
+            onClick={() => setIsLoanImportModalOpen(true)}
+            className="inline-flex items-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            title="Bulk import outstanding worker loans via Loan_Ledger_Template.xlsx"
+          >
+            <Landmark size={14} className="text-amber-700 shrink-0" />
+            <span>Import Loans</span>
+            {loanRecoverySummary.activeLoanCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-950 font-mono text-[10px]">
+                {loanRecoverySummary.activeLoanCount}
+              </span>
+            )}
+          </button>
+
           {/* Summary vs Detailed View Switcher */}
           <div className="inline-flex items-center p-1 bg-slate-100 border border-slate-200 rounded-xl">
             <button
@@ -672,6 +708,39 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
           </div>
         </div>
       </div>
+
+      {/* ACTIVE LOAN RECOVERY SUMMARY BANNER */}
+      {!fetchError && loanRecoverySummary.activeLoanCount > 0 && (
+        <div className="bg-amber-50/90 border border-amber-300 rounded-2xl px-4 py-3.5 flex items-center justify-between gap-3 flex-wrap shadow-2xs animate-in fade-in">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <Landmark size={18} className="text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-amber-950">
+                {loanRecoverySummary.summaryMessage}
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                {loanRecoverySummary.activeLoanCount} active loan
+                {loanRecoverySummary.activeLoanCount === 1 ? '' : 's'} across{' '}
+                {loanRecoverySummary.affectedWorkersCount} worker
+                {loanRecoverySummary.affectedWorkersCount === 1 ? '' : 's'} · Total remaining
+                principal{' '}
+                <span className="font-mono font-bold">
+                  {formatInrWhole(loanRecoverySummary.totalOutstandingPrincipal)}
+                </span>{' '}
+                · Automatically added as &ldquo;Loan Recovery&rdquo; on payslips
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsLoanImportModalOpen(true)}
+            className="px-3.5 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+          >
+            <span>Manage / Import Loans</span>
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
 
       {/* SIMPLE MISSING PAN/UAN BANNER (SHOWN WHENEVER ANY WORKER IS MISSING PAN OR UAN) */}
       {!fetchError && workersMissingPanOrUan.length > 0 && (
@@ -2626,6 +2695,18 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         onRunForReadyOnly={async () => {
           await executeRunPayrollAndGeneratePayslips({ skipMissingBank: true });
         }}
+      />
+
+      {/* BULK ADVANCE / LOAN LEDGER IMPORT MODAL */}
+      <BulkLoanLedgerImportModal
+        isOpen={isLoanImportModalOpen}
+        onClose={() => setIsLoanImportModalOpen(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        orgSettings={settings}
+        existingWorkers={workers}
+        actorEmail={profile?.email || 'admin@workforcepro.in'}
+        defaultStartMonth={currentMonthStr}
+        onSuccess={loadData}
       />
     </div>
   );

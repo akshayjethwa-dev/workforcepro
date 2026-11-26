@@ -5,7 +5,7 @@ import {
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
   CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
   IndianRupee, MessageSquare, Navigation, ShieldAlert, PhoneCall,
-  CreditCard, Users, Sliders, ArrowLeft
+  CreditCard, Users, Sliders, ArrowLeft, Upload, Download, AlertTriangle
 } from 'lucide-react';
 import { BillingScreen } from './BillingScreen';
 import { TeamScreen } from './TeamScreen';
@@ -25,6 +25,13 @@ import { FIELD_MODE_FALLBACK_MAPPINGS } from '../utils/wcagColor';
 import { SalaryStructureAuditPanel } from '../components/SalaryStructureAuditPanel';
 import { MinimumWageSchedulePanel } from '../components/MinimumWageSchedulePanel';
 import { PtLwfConfigPanel } from '../components/PtLwfConfigPanel';
+import { BulkLeaveBalanceImportModal } from '../components/BulkLeaveBalanceImportModal';
+import { ShiftStatutoryImportModal } from '../components/ShiftStatutoryImportModal';
+import {
+  downloadLeaveBalanceTemplate,
+  LEAVE_BALANCE_TEMPLATE_FILENAME,
+} from '../utils/workerExcelTemplate';
+import { detectOverlappingShiftPairs } from '../utils/shiftStatutoryImportEngine';
 import {
   DEFAULT_SCHEDULED_EMPLOYMENT,
   getDefaultZoneForState,
@@ -54,6 +61,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
   );
   const [showGuide, setShowGuide] = useState(false);
   const [showSetupAssistant, setShowSetupAssistant] = useState(false);
+  const [showBulkLeaveImport, setShowBulkLeaveImport] = useState(false);
+  const [showShiftStatutoryWizard, setShowShiftStatutoryWizard] = useState(false);
+  const [shiftWizardInitialStep, setShiftWizardInitialStep] = useState<'SHIFTS' | 'STATUTORY'>('SHIFTS');
   
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [initialSettings, setInitialSettings] = useState<OrgSettings | null>(null);
@@ -1415,6 +1425,57 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
                     </p>
                 </div>
             )}
+
+            {/* BULK LEAVE BALANCE MIGRATION CARD */}
+            <div className="mt-6 bg-white rounded-3xl shadow-sm border border-indigo-100 p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Bulk Leave Balance Import (Opening Balance Migration)
+                    </h4>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Transactional
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
+                    Switching from another payroll or HR system mid-year? Upload an Excel sheet with workers&apos; current Earned (EL), Sick (SL), and Casual (CL) balances to set absolute opening balances from your migration date forward.
+                  </p>
+                </div>
+
+                <div className="flex items-center flex-wrap gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const liveWorkers = profile?.tenantId
+                          ? await dbService.getWorkers(profile.tenantId)
+                          : [];
+                        const fileName = downloadLeaveBalanceTemplate({
+                          existingWorkers: liveWorkers,
+                          prefillExistingWorkers: true,
+                        });
+                        toast.success(`Downloaded ${fileName}`);
+                      } catch {
+                        toast.error(`Failed to download ${LEAVE_BALANCE_TEMPLATE_FILENAME}`);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold cursor-pointer"
+                  >
+                    <Download size={14} />
+                    <span>Download Template</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkLeaveImport(true)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  >
+                    <Upload size={14} />
+                    <span>Import Leave Balances</span>
+                  </button>
+                </div>
+              </div>
+            </div>
         </div>
       )}
 
@@ -1746,22 +1807,64 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
             </div>
           </div>
 
-          <div className="flex justify-between items-end px-1">
+          <div className="flex flex-wrap justify-between items-center gap-3 px-1">
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Active Shift Profiles</h3>
-              <button onClick={addShift} className="text-indigo-600 text-sm font-bold flex items-center bg-indigo-50 px-4 min-h-11 rounded-xl hover:bg-indigo-100 transition-colors">
-                  <Plus size={16} className="mr-1"/> Add New
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShiftWizardInitialStep('SHIFTS');
+                    setShowShiftStatutoryWizard(true);
+                  }}
+                  className="text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 px-3.5 min-h-11 rounded-xl transition-colors cursor-pointer"
+                >
+                  <Upload size={15} /> Import Shifts &amp; Statutory
+                </button>
+                <button onClick={addShift} className="text-indigo-600 text-sm font-bold flex items-center bg-indigo-50 px-4 min-h-11 rounded-xl hover:bg-indigo-100 transition-colors cursor-pointer">
+                    <Plus size={16} className="mr-1"/> Add New
+                </button>
+              </div>
           </div>
+
+          {(() => {
+            const overlapPairs = detectOverlappingShiftPairs(settings?.shifts || []);
+            if (overlapPairs.length === 0) return null;
+            return (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-amber-900">
+                    Overlapping Shifts Detected ({overlapPairs.length}) — Allowed with Assignment Caution
+                  </p>
+                  <p className="text-xs text-amber-800 leading-relaxed">
+                    Overlapping factory shifts are permitted, but avoid assigning the same worker to two overlapping shifts on the same day.
+                  </p>
+                  <ul className="space-y-1 pt-1">
+                    {overlapPairs.map((pair, idx) => (
+                      <li key={idx} className="text-[11px] font-medium text-amber-900">
+                        • {pair.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            );
+          })()}
 
           {settings?.shifts.map((shift) => (
             <div key={shift.id} className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden transition-all">
-              <div className="p-5 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
-                  <div className="flex items-center space-x-3 w-full">
+              <div className="p-5 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 gap-2">
+                  <div className="flex items-center space-x-3 w-full min-w-0">
                       <div className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 shrink-0">
                           <Clock className="text-indigo-500" size={18} />
                       </div>
                       <input className="font-black text-slate-800 bg-transparent border-b-2 border-transparent focus:border-indigo-500 outline-none px-1 w-full min-h-11" value={shift.name} onChange={(e) => updateShift(shift.id, { name: e.target.value })} disabled={shift.id === 'default'}/>
                   </div>
+                  {typeof shift.minHalfDayHours === 'number' && shift.minHalfDayHours > 0 && (
+                    <span className="shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 whitespace-nowrap">
+                      Half-Day: {shift.minHalfDayHours}h
+                    </span>
+                  )}
                   {shift.id !== 'default' && (
                     <div className="w-11 h-11 flex items-center justify-center shrink-0">
                       <button onClick={() => removeShift(shift.id)} className="text-slate-300 hover:text-red-500 transition-colors p-2"><Trash2 size={18} /></button>
@@ -2871,6 +2974,63 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
             </div>
           </div>
 
+          {/* Primary State Statutory Mapping & Lock Status Card */}
+          <div className={`rounded-2xl border p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
+            settings?.compliance?.statutoryMapping?.locked
+              ? 'bg-emerald-50/60 border-emerald-200'
+              : 'bg-white border-slate-200'
+          }`}>
+            <div className="space-y-1.5 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                {settings?.compliance?.statutoryMapping?.locked ? (
+                  <Lock size={15} className="text-emerald-700 shrink-0" />
+                ) : (
+                  <MapPin size={15} className="text-indigo-600 shrink-0" />
+                )}
+                <h3 className="text-sm font-bold text-slate-900">
+                  {settings?.compliance?.statutoryMapping?.locked
+                    ? `Statutory Rules Locked: ${settings.compliance.statutoryMapping.primaryState}`
+                    : 'Primary State Statutory Mapping (Strict Dropdown Only)'}
+                </h3>
+                {settings?.compliance?.statutoryMapping?.locked && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    Locked &amp; Active
+                  </span>
+                )}
+              </div>
+              {settings?.compliance?.statutoryMapping?.locked ? (
+                <div className="text-xs text-slate-700 space-y-1 leading-relaxed">
+                  <p>
+                    <strong>PT Slabs:</strong> {settings.compliance.statutoryMapping.ptSummary}
+                  </p>
+                  <p>
+                    <strong>LWF Schedule:</strong> {settings.compliance.statutoryMapping.lwfScheduleLabel} ·{' '}
+                    <strong>Central PF/ESI:</strong> EPF 12% (₹15,000 cap) &amp; ESIC 0.75%/3.25% (₹21,000 cap)
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
+                  Select your factory&apos;s Primary State from the verified dropdown to auto-apply State PT slabs, LWF deduction dates, and Central PF/ESI rules from day one. Excel upload of statutory slabs is blocked to prevent compliance errors.
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShiftWizardInitialStep('STATUTORY');
+                  setShowShiftStatutoryWizard(true);
+                }}
+                className="px-4 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap"
+              >
+                <ShieldCheck size={15} />
+                {settings?.compliance?.statutoryMapping?.locked
+                  ? 'Review / Update State Mapping'
+                  : 'Select & Lock Primary State'}
+              </button>
+            </div>
+          </div>
+
           {/* 50% Wage Rule Calculation Engine Control (Nested in Advanced HR Settings) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
@@ -3757,6 +3917,38 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
         isOpen={isA11yModalOpen}
         onClose={() => setA11yModalOpen(false)}
       />
+
+      {/* Bulk Leave Balance Migration Modal */}
+      <BulkLeaveBalanceImportModal
+        isOpen={showBulkLeaveImport}
+        onClose={() => setShowBulkLeaveImport(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        orgSettings={settings}
+        actorEmail={profile?.email || 'admin@factory.in'}
+        onSuccess={() => {
+          toast.success('Worker opening leave balances have been migrated.');
+        }}
+        onOrgSettingsUpdated={(updated) => {
+          setSettings(updated);
+          setInitialSettings(updated);
+        }}
+      />
+
+      {/* Shift Rule & Primary State Statutory Mapping Wizard */}
+      {settings && (
+        <ShiftStatutoryImportModal
+          isOpen={showShiftStatutoryWizard}
+          onClose={() => setShowShiftStatutoryWizard(false)}
+          tenantId={profile?.tenantId || 'demo-tenant-id'}
+          orgSettings={settings}
+          actorEmail={profile?.email || 'admin@factory.in'}
+          initialStep={shiftWizardInitialStep}
+          onApplied={(updated) => {
+            setSettings(updated);
+            setInitialSettings(updated);
+          }}
+        />
+      )}
 
       {/* --- FLOATING SAVE ACTION BAR --- */}
       {hasChanges && (

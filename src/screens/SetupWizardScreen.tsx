@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   RefreshCw,
   Rocket,
+  Lock,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -21,6 +23,8 @@ import {
   MigrationProgress,
   MigrationStepStatus,
   DEFAULT_MIGRATION_STEPS,
+  Worker,
+  OrgSettings,
 } from '../types/index';
 import {
   getMigrationProgress,
@@ -30,6 +34,15 @@ import {
   initialiseMigration,
   isDemoTenant,
 } from '../services/migrationService';
+import { dbService } from '../services/db';
+import {
+  downloadLeaveBalanceTemplate,
+  downloadLoanLedgerTemplate,
+  downloadShiftRulesTemplate,
+} from '../utils/workerExcelTemplate';
+import { BulkLeaveBalanceImportModal } from '../components/BulkLeaveBalanceImportModal';
+import { BulkLoanLedgerImportModal } from '../components/BulkLoanLedgerImportModal';
+import { ShiftStatutoryImportModal } from '../components/ShiftStatutoryImportModal';
 
 type LoadState = 'bootstrapping' | 'loading' | 'ready' | 'error';
 
@@ -45,6 +58,11 @@ export const SetupWizardScreen: React.FC = () => {
   const [loadState, setLoadState] = useState<LoadState>('bootstrapping');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [wizardWorkers, setWizardWorkers] = useState<Worker[]>([]);
+  const [wizardOrgSettings, setWizardOrgSettings] = useState<OrgSettings | null>(null);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [showLoanModal, setShowLoanModal] = useState(false);
+  const [showShiftStatutoryModal, setShowShiftStatutoryModal] = useState(false);
 
   // ---------------------------------------------------------------
   // DEMO-TENANT REDIRECT: skip the wizard entirely in demo/unauthenticated mode.
@@ -72,7 +90,13 @@ export const SetupWizardScreen: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const existing = await getMigrationProgress(tenantId);
+      const [existing, fetchedWorkers, fetchedSettings] = await Promise.all([
+        getMigrationProgress(tenantId),
+        dbService.getWorkers(tenantId).catch(() => [] as Worker[]),
+        dbService.getOrgSettings(tenantId).catch(() => null),
+      ]);
+      setWizardWorkers(fetchedWorkers);
+      setWizardOrgSettings(fetchedSettings);
       if (existing) {
         setProgress(existing);
       } else {
@@ -177,26 +201,79 @@ export const SetupWizardScreen: React.FC = () => {
   // ---------------------------------------------------------------
   // STEP RENDERERS
   // ---------------------------------------------------------------
-  const renderStep1 = () => (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Company Profile & Statutory State</h2>
-      <p className="text-slate-600">
-        Enter your company details and select your statutory state.
-      </p>
-      <div className="p-4 bg-slate-50 rounded-xl">
-        <p className="text-sm text-slate-500">
-          (Form fields for company name, address, statutory state, etc.)
+  const renderStep1 = () => {
+    const mapping = wizardOrgSettings?.compliance?.statutoryMapping;
+    const shiftCount = wizardOrgSettings?.shifts?.length ?? 0;
+
+    return (
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Shift Rules &amp; Primary Statutory State</h2>
+        <p className="text-slate-600">
+          Upload your factory&apos;s shift timings using{' '}
+          <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">Shift_Rules_Template.xlsx</span>{' '}
+          and select your Primary State from the verified dropdown to lock PT slabs, LWF dates, and Central PF/ESI rules from day one.
         </p>
+
+        <div className={`p-4 rounded-xl border ${mapping?.locked ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              {mapping?.locked ? (
+                <Lock size={16} className="text-emerald-700" />
+              ) : (
+                <Clock size={16} className="text-slate-500" />
+              )}
+              <span className="text-sm font-semibold text-slate-900">
+                {mapping?.locked
+                  ? `Statutory Rules Locked: ${mapping.primaryState}`
+                  : 'Statutory State Not Locked Yet'}
+              </span>
+            </div>
+            <span className="text-xs font-medium text-slate-600">
+              {shiftCount} {shiftCount === 1 ? 'shift' : 'shifts'} configured
+            </span>
+          </div>
+          {mapping?.locked ? (
+            <p className="text-xs text-emerald-900 mt-2 leading-relaxed">
+              PT: {mapping.ptSummary} · LWF: {mapping.lwfScheduleLabel} · Central PF/ESI Active
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500 mt-1.5">
+              Excel upload of statutory slabs is intentionally disabled — choose your state via the strict dropdown selector.
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => {
+              const fileName = downloadShiftRulesTemplate();
+              toast.success(`Downloaded ${fileName}.`, 'Step 1');
+            }}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-medium flex items-center gap-2 cursor-pointer"
+          >
+            <Download size={16} /> Download Shift_Rules_Template.xlsx
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowShiftStatutoryModal(true)}
+            disabled={!wizardOrgSettings}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 cursor-pointer disabled:opacity-60"
+          >
+            <ShieldCheck size={16} /> Open Shift &amp; Statutory Wizard
+          </button>
+        </div>
+
+        <button
+          onClick={() => setStepStatus(1, 'COMPLETED', true)}
+          disabled={saving}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold disabled:opacity-60 cursor-pointer"
+        >
+          Save &amp; Continue
+        </button>
       </div>
-      <button
-        onClick={() => setStepStatus(1, 'COMPLETED', true)}
-        disabled={saving}
-        className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-60"
-      >
-        Save & Continue
-      </button>
-    </div>
-  );
+    );
+  };
 
   const renderStep2 = () => {
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -255,33 +332,35 @@ export const SetupWizardScreen: React.FC = () => {
   };
 
   const renderStep3 = () => {
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const ok = await setStepStatus(3, 'COMPLETED', true);
-      if (ok) toast.success('Leave balances imported.', 'Step 3');
-    };
-
     return (
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Import Opening Leave Balances</h2>
         <p className="text-slate-600">
-          Upload an Excel file with opening leave balances. You can skip this step
-          if you have no historical leave data.
+          Download Leave_Balance_Template.xlsx, fill in accrued leave balances from your old
+          software, and validate before committing. You can skip this step if you have no
+          historical leave data.
         </p>
-        <div className="flex items-center gap-4">
-          <button className="px-4 py-2 bg-slate-100 rounded-xl text-sm flex items-center gap-2">
-            <Download size={16} /> Download Template
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => {
+              const fileName = downloadLeaveBalanceTemplate({
+                existingWorkers: wizardWorkers,
+                prefillExistingWorkers: wizardWorkers.length > 0,
+              });
+              toast.success(`Downloaded ${fileName}.`, 'Step 3');
+            }}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-medium flex items-center gap-2 cursor-pointer"
+          >
+            <Download size={16} /> Download Leave_Balance_Template.xlsx
           </button>
-          <label className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm cursor-pointer flex items-center gap-2">
-            <Upload size={16} /> Upload File
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
-          </label>
+          <button
+            type="button"
+            onClick={() => setShowLeaveModal(true)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold cursor-pointer flex items-center gap-2"
+          >
+            <Upload size={16} /> Open Leave Balance Importer
+          </button>
         </div>
         <button
           onClick={() => setStepStatus(3, 'SKIPPED', true)}
@@ -295,33 +374,35 @@ export const SetupWizardScreen: React.FC = () => {
   };
 
   const renderStep4 = () => {
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const ok = await setStepStatus(4, 'COMPLETED', true);
-      if (ok) toast.success('Advances/Loans imported.', 'Step 4');
-    };
-
     return (
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Import Pending Advances / Loans</h2>
         <p className="text-slate-600">
-          Upload an Excel file with outstanding advances or loans. You can skip
-          this step if there are none.
+          Download Loan_Ledger_Template.xlsx and upload workers&apos; outstanding loans so
+          PayrollEngine automatically deducts monthly EMIs as &ldquo;Loan Recovery&rdquo; on
+          upcoming payslips. You can skip this step if there are none.
         </p>
-        <div className="flex items-center gap-4">
-          <button className="px-4 py-2 bg-slate-100 rounded-xl text-sm flex items-center gap-2">
-            <Download size={16} /> Download Template
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => {
+              const fileName = downloadLoanLedgerTemplate({
+                existingWorkers: wizardWorkers,
+                prefillExistingWorkers: wizardWorkers.length > 0,
+              });
+              toast.success(`Downloaded ${fileName}.`, 'Step 4');
+            }}
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-medium flex items-center gap-2 cursor-pointer"
+          >
+            <Download size={16} /> Download Loan_Ledger_Template.xlsx
           </button>
-          <label className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm cursor-pointer flex items-center gap-2">
-            <Upload size={16} /> Upload File
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
-          </label>
+          <button
+            type="button"
+            onClick={() => setShowLoanModal(true)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold cursor-pointer flex items-center gap-2"
+          >
+            <Upload size={16} /> Open Loan Ledger Importer
+          </button>
         </div>
         <button
           onClick={() => setStepStatus(4, 'SKIPPED', true)}
@@ -567,6 +648,52 @@ export const SetupWizardScreen: React.FC = () => {
           </div>
         </main>
       </div>
+
+      {tenantId && (
+        <>
+          <BulkLeaveBalanceImportModal
+            isOpen={showLeaveModal}
+            onClose={() => setShowLeaveModal(false)}
+            tenantId={tenantId}
+            orgSettings={wizardOrgSettings}
+            existingWorkers={wizardWorkers}
+            actorEmail={profile?.email || 'admin@workforcepro.in'}
+            onSuccess={async () => {
+              const updatedWorkers = await dbService.getWorkers(tenantId).catch(() => wizardWorkers);
+              setWizardWorkers(updatedWorkers);
+              await setStepStatus(3, 'COMPLETED', true);
+            }}
+            onOrgSettingsUpdated={(updated) => setWizardOrgSettings(updated)}
+          />
+
+          <BulkLoanLedgerImportModal
+            isOpen={showLoanModal}
+            onClose={() => setShowLoanModal(false)}
+            tenantId={tenantId}
+            orgSettings={wizardOrgSettings}
+            existingWorkers={wizardWorkers}
+            actorEmail={profile?.email || 'admin@workforcepro.in'}
+            onSuccess={async () => {
+              await setStepStatus(4, 'COMPLETED', true);
+            }}
+          />
+
+          {wizardOrgSettings && (
+            <ShiftStatutoryImportModal
+              isOpen={showShiftStatutoryModal}
+              onClose={() => setShowShiftStatutoryModal(false)}
+              tenantId={tenantId}
+              orgSettings={wizardOrgSettings}
+              actorEmail={profile?.email || 'admin@workforcepro.in'}
+              initialStep="SHIFTS"
+              onApplied={async (updated) => {
+                setWizardOrgSettings(updated);
+                await setStepStatus(1, 'COMPLETED', true);
+              }}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 };

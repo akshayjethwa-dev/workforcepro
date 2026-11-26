@@ -12,12 +12,14 @@ import {
   UserX,
   RotateCcw,
   Smartphone,
+  Landmark,
 } from 'lucide-react';
 import {
   Worker,
   OrgSettings,
   MagicLinkScope,
   FnfSettlementRecord,
+  ActiveLoan,
 } from '../types/index';
 import { validateWorkerWageStructure } from '../services/wageStructureValidationService';
 import { FnfDeadlineBadge } from './FnfDeadlineBadge';
@@ -27,6 +29,7 @@ export interface WorkerCardProps {
   worker: Worker;
   settings: OrgSettings | null;
   latestFnf?: FnfSettlementRecord;
+  activeLoans?: ActiveLoan[];
   wageAudit: ReturnType<typeof validateWorkerWageStructure> | null;
   activeTokensCount: number;
   isInactive: boolean;
@@ -48,6 +51,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   worker,
   settings,
   latestFnf,
+  activeLoans,
   wageAudit,
   activeTokensCount,
   isInactive,
@@ -259,6 +263,56 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
               )}
             </span>
           </div>
+
+          {worker.leaveBalances && (
+            <div className="flex items-center justify-between gap-2 flex-wrap pt-1.5 border-t border-slate-100 text-fluid-2xs min-w-0">
+              <span className="text-slate-400 flex items-center gap-1">
+                <Calendar size={11} className="text-indigo-500 shrink-0" />
+                <span>
+                  Leave Bal
+                  {worker.leaveBalances.migrationDate ? ` (${worker.leaveBalances.migrationDate})` : ''}
+                </span>
+              </span>
+              <span className="font-mono font-bold tabular-nums flex items-center gap-1.5 flex-wrap">
+                <span className={worker.leaveBalances.pl < 0 ? 'text-rose-600' : 'text-slate-700'}>
+                  EL {worker.leaveBalances.pl}
+                </span>
+                <span className="text-slate-300">·</span>
+                <span className={worker.leaveBalances.sl < 0 ? 'text-rose-600' : 'text-slate-700'}>
+                  SL {worker.leaveBalances.sl}
+                </span>
+                <span className="text-slate-300">·</span>
+                <span className={worker.leaveBalances.cl < 0 ? 'text-rose-600' : 'text-slate-700'}>
+                  CL {worker.leaveBalances.cl}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {activeLoans && activeLoans.length > 0 && (() => {
+            const totalEmi = activeLoans.reduce(
+              (sum, l) => sum + Math.min(l.monthlyEmi, l.outstandingPrincipal),
+              0
+            );
+            const totalBal = activeLoans.reduce((sum, l) => sum + l.outstandingPrincipal, 0);
+            return (
+              <div className="flex items-center justify-between gap-2 flex-wrap pt-1.5 border-t border-slate-100 text-fluid-2xs min-w-0">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <Landmark size={11} className="text-amber-600 shrink-0" />
+                  <span>
+                    Active Loan{activeLoans.length > 1 ? `s (${activeLoans.length})` : ''}
+                  </span>
+                </span>
+                <span className="font-mono font-bold tabular-nums text-amber-800 flex items-center gap-1.5 flex-wrap">
+                  <span>EMI ₹{Math.round(totalEmi).toLocaleString('en-IN')}/mo</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-slate-600">
+                    Bal ₹{Math.round(totalBal).toLocaleString('en-IN')}
+                  </span>
+                </span>
+              </div>
+            );
+          })()}
 
           {latestFnf && (
             <div className="pt-2 border-t border-slate-100 space-y-1.5">

@@ -1,13 +1,15 @@
 // src/services/db.ts
 import { 
-  collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc, deleteField 
+  collection, addDoc, query, where, getDocs, doc, setDoc, deleteDoc, getDoc, updateDoc, deleteField, runTransaction 
 } from "firebase/firestore";
 import { db, auth } from "../lib/firebase";
 import { 
   Worker, AttendanceRecord, Advance, ShiftConfig, OrgSettings, 
   AppNotification, MonthlyPayroll, SubscriptionTier, PlanLimits, 
   DEFAULT_PLAN_CONFIG, BrandingConfig, CustomDomainConfig,
-  WageComplianceAudit, CanonicalRole
+  WageComplianceAudit, CanonicalRole,
+  WorkerLeaveBalances, LeaveBalanceRecord, LeaveBalanceImportBatch,
+  ActiveLoan, LoanLedgerImportBatch
 } from "../types/index";
 import { setMidSessionRoleOverride } from "./rbacService";
 import { tenantSecurityService } from "./tenantSecurityService";
@@ -27,6 +29,34 @@ const FREE_TRIAL_DAYS = 7;
 const getWorkersRef = () => collection(db, "workers");
 const getAttendanceRef = () => collection(db, "attendance");
 const getNotificationsRef = () => collection(db, "notifications");
+
+const getActiveLoansStorageKey = (tenantId: string) => `active_loans_${tenantId}`;
+const getLoanImportBatchesStorageKey = (tenantId: string) => `loan_ledger_import_batches_${tenantId}`;
+
+const dispatchActiveLoansChanged = (tenantId: string) => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('activeLoansChanged', { detail: { tenantId } }));
+    }
+  } catch {}
+};
+
+/**
+ * Synchronous cache reader used by PayrollEngine during synchronous monthly payroll calculation.
+ * Kept continuously in sync by dbService.getActiveLoans / bulkCreateActiveLoansTransactional / updateActiveLoan / deleteActiveLoan.
+ */
+export const getCachedActiveLoansSync = (tenantId: string): ActiveLoan[] => {
+  if (!tenantId) return [];
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(getActiveLoansStorageKey(tenantId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ActiveLoan[]) : [];
+  } catch {
+    return [];
+  }
+};
 
 const DEMO_TENANTS = [
   {
@@ -1266,6 +1296,817 @@ export const dbService = {
 
     setStoredDemoWorkers([...created, ...current]);
     return created.map(w => w.id);
+  },
+
+  /**
+   * Atomically updates matched workers' leaveBalances and leave_balance records in a single
+   * all-or-nothing transaction. If any write fails or times out mid-batch, zero balances are updated.
+   */
+  bulkUpdateLeaveBalancesTransactional: async (params: {
+    tenantId: string;
+    fileName: string;
+    migrationDate: string;
+    actorEmail: string;
+    allowNegativeBalancePolicy: boolean;
+    totalRows: number;
+    unmatchedPhoneCount: number;
+    updates: Array<{
+      workerId: string;
+      workerName: string;
+      workerPhone: string;
+      earnedLeave: number;
+      sickLeave: number;
+      casualLeave: number;
+      negativeBalanceDays: number;
+      negativeBalanceDeductionMonth?: string;
+    }>;
+    timeoutMs?: number;
+    simulateFailureAtIndex?: number;
+  }): Promise<{
+    batch: LeaveBalanceImportBatch;
+    updatedRecords: LeaveBalanceRecord[];
+  }> => {
+    const {
+      tenantId,
+      fileName,
+      migrationDate,
+      actorEmail,
+      allowNegativeBalancePolicy,
+      totalRows,
+      unmatchedPhoneCount,
+      updates,
+      timeoutMs = 15000,
+      simulateFailureAtIndex,
+    } = params;
+
+    if (!tenantId) {
+      throw new Error('Transaction aborted: Missing tenant identifier.');
+    }
+    if (!updates || updates.length === 0) {
+      throw new Error('Transaction aborted: No matched worker leave balances to update.');
+    }
+
+    // Strict pre-commit integrity check (no duplicate worker IDs / phones, valid finite numbers)
+    const seenIds = new Set<string>();
+    const seenPhones = new Set<string>();
+    for (let i = 0; i < updates.length; i++) {
+      const u = updates[i];
+      if (seenIds.has(u.workerId)) {
+        throw new Error(`Transaction aborted: Duplicate worker ID detected (${u.workerId}). Zero balances updated.`);
+      }
+      seenIds.add(u.workerId);
+      const normPhone = String(u.workerPhone || '').replace(/\D/g, '').slice(-10);
+      if (normPhone && seenPhones.has(normPhone)) {
+        throw new Error(`Transaction aborted: Duplicate phone number (${normPhone}) in commit payload. Zero balances updated.`);
+      }
+      if (normPhone) seenPhones.add(normPhone);
+
+      for (const [label, val] of [
+        ['Earned Leave', u.earnedLeave],
+        ['Sick Leave', u.sickLeave],
+        ['Casual Leave', u.casualLeave],
+      ] as const) {
+        if (!Number.isFinite(val)) {
+          throw new Error(`Transaction aborted: Invalid ${label} balance for ${u.workerName}. Zero balances updated.`);
+        }
+        if (val < 0 && !allowNegativeBalancePolicy) {
+          throw new Error(
+            `Transaction aborted: Negative ${label} balance (${val}) for ${u.workerName} is disallowed by tenant Leave Policy. Zero balances updated.`
+          );
+        }
+      }
+    }
+
+    const batchId = `lb_batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const now = new Date().toISOString();
+    const negativeBalanceWorkersCount = updates.filter((u) => u.negativeBalanceDays > 0).length;
+
+    const leaveRecordsKey = `leave_balances_${tenantId}`;
+    const batchesKey = `leave_balance_batches_${tenantId}`;
+
+    const recordAuditBatchLocally = (batch: LeaveBalanceImportBatch) => {
+      try {
+        const raw = localStorage.getItem(batchesKey);
+        const list: LeaveBalanceImportBatch[] = raw ? JSON.parse(raw) : [];
+        localStorage.setItem(batchesKey, JSON.stringify([batch, ...list].slice(0, 50)));
+      } catch {
+        // Ignore storage quota errors
+      }
+    };
+
+    const buildWorkerPayloads = (u: (typeof updates)[number]): {
+      leaveBalances: WorkerLeaveBalances;
+      leaveRecord: LeaveBalanceRecord;
+    } => {
+      const leaveBalances: WorkerLeaveBalances = {
+        pl: u.earnedLeave,
+        sl: u.sickLeave,
+        cl: u.casualLeave,
+        openingBalance: {
+          pl: u.earnedLeave,
+          sl: u.sickLeave,
+          cl: u.casualLeave,
+        },
+        migrationDate,
+        accrualStartDate: migrationDate,
+        importBatchId: batchId,
+        lastImportedAt: now,
+        lastImportedBy: actorEmail,
+        negativeBalanceDeductionPending: u.negativeBalanceDays > 0 ? u.negativeBalanceDays : 0,
+        ...(u.negativeBalanceDays > 0 && u.negativeBalanceDeductionMonth
+          ? { negativeBalanceDeductionMonth: u.negativeBalanceDeductionMonth }
+          : {}),
+      };
+
+      const leaveRecord: LeaveBalanceRecord = {
+        id: `lb_${u.workerId}`,
+        tenantId,
+        workerId: u.workerId,
+        workerName: u.workerName,
+        workerPhone: u.workerPhone,
+        earnedLeave: u.earnedLeave,
+        sickLeave: u.sickLeave,
+        casualLeave: u.casualLeave,
+        isOpeningBalance: true,
+        migrationDate,
+        accrualStartDate: migrationDate,
+        negativeBalanceDays: u.negativeBalanceDays,
+        ...(u.negativeBalanceDays > 0 && u.negativeBalanceDeductionMonth
+          ? { negativeBalanceDeductionMonth: u.negativeBalanceDeductionMonth }
+          : {}),
+        importBatchId: batchId,
+        updatedAt: now,
+        updatedBy: actorEmail,
+      };
+
+      return { leaveBalances, leaveRecord };
+    };
+
+    const useLocalTransactionalStore =
+      tenantId === 'demo-tenant-id' ||
+      updates.every((u) => u.workerId.startsWith('worker-'));
+
+    // --- PATH A: ATOMIC LOCAL TRANSACTION WITH SNAPSHOT ROLLBACK (Demo / Local Store) ---
+    if (useLocalTransactionalStore) {
+      const originalWorkersSnapshot = getStoredDemoWorkers();
+      const originalWorkersJson = JSON.stringify(originalWorkersSnapshot);
+      let originalLeaveRecordsJson: string | null = null;
+      try {
+        originalLeaveRecordsJson = localStorage.getItem(leaveRecordsKey);
+      } catch {}
+
+      try {
+        const stagedWorkersMap = new Map<string, Worker>(
+          originalWorkersSnapshot.map((w) => [w.id, { ...w }])
+        );
+        const existingLeaveRecords: LeaveBalanceRecord[] = originalLeaveRecordsJson
+          ? JSON.parse(originalLeaveRecordsJson)
+          : [];
+        const stagedLeaveRecordsMap = new Map<string, LeaveBalanceRecord>(
+          existingLeaveRecords.map((r) => [r.workerId, { ...r }])
+        );
+        const updatedRecords: LeaveBalanceRecord[] = [];
+
+        for (let i = 0; i < updates.length; i++) {
+          if (simulateFailureAtIndex !== undefined && i === simulateFailureAtIndex) {
+            throw new Error(
+              `Simulated database timeout at row ${i + 1} of ${updates.length} (${updates[i].workerName}).`
+            );
+          }
+
+          const u = updates[i];
+          const existing = stagedWorkersMap.get(u.workerId);
+          if (!existing) {
+            throw new Error(`Worker record "${u.workerName}" (${u.workerId}) was not found during commit.`);
+          }
+
+          const { leaveBalances, leaveRecord } = buildWorkerPayloads(u);
+          stagedWorkersMap.set(u.workerId, {
+            ...existing,
+            leaveBalances,
+            leave_balance: leaveRecord,
+            updatedAt: now,
+          });
+          stagedLeaveRecordsMap.set(u.workerId, leaveRecord);
+          updatedRecords.push(leaveRecord);
+        }
+
+        // Atomic swap: only persisted after 100% of rows succeed
+        const finalWorkersList = originalWorkersSnapshot.map(
+          (w) => stagedWorkersMap.get(w.id) || w
+        );
+        setStoredDemoWorkers(finalWorkersList);
+        localStorage.setItem(
+          leaveRecordsKey,
+          JSON.stringify(Array.from(stagedLeaveRecordsMap.values()))
+        );
+
+        const committedBatch: LeaveBalanceImportBatch = {
+          id: batchId,
+          tenantId,
+          fileName,
+          migrationDate,
+          importedAt: now,
+          importedBy: actorEmail,
+          totalRows,
+          matchedWorkersUpdated: updatedRecords.length,
+          unmatchedPhoneCount,
+          negativeBalanceWorkersCount,
+          allowNegativeBalancePolicy,
+          status: 'COMMITTED',
+        };
+        recordAuditBatchLocally(committedBatch);
+
+        return { batch: committedBatch, updatedRecords };
+      } catch (err: any) {
+        // Explicit Rollback to pre-transaction snapshot
+        try {
+          localStorage.setItem('demo_workers_list', originalWorkersJson);
+          if (originalLeaveRecordsJson !== null) {
+            localStorage.setItem(leaveRecordsKey, originalLeaveRecordsJson);
+          } else {
+            localStorage.removeItem(leaveRecordsKey);
+          }
+        } catch {}
+
+        const rollbackBatch: LeaveBalanceImportBatch = {
+          id: batchId,
+          tenantId,
+          fileName,
+          migrationDate,
+          importedAt: now,
+          importedBy: actorEmail,
+          totalRows,
+          matchedWorkersUpdated: 0,
+          unmatchedPhoneCount,
+          negativeBalanceWorkersCount: 0,
+          allowNegativeBalancePolicy,
+          status: 'ROLLED_BACK',
+          errorMessage: err?.message || 'Unknown transaction failure',
+        };
+        recordAuditBatchLocally(rollbackBatch);
+
+        throw new Error(
+          `Transaction rolled back — 0 worker balances were updated. Cause: ${err?.message || 'Database write failure'}`
+        );
+      }
+    }
+
+    // --- PATH B: REAL FIRESTORE ATOMIC runTransaction WITH TIMEOUT GUARD ---
+    if (updates.length > 499) {
+      throw new Error(
+        'Transaction aborted: A single atomic Firestore transaction supports up to 499 worker updates. Please split your file into smaller batches.'
+      );
+    }
+
+    const updatedRecords: LeaveBalanceRecord[] = [];
+    const writeDualCollection = updates.length <= 245; // Stay safely under Firestore's 500 writes/tx cap
+
+    const txPromise = runTransaction(db, async (transaction) => {
+      // Phase 1: Read all worker documents inside the transaction to validate existence & tenant isolation
+      const docSnapshots = await Promise.all(
+        updates.map((u) => transaction.get(doc(db, 'workers', u.workerId)))
+      );
+
+      for (let i = 0; i < docSnapshots.length; i++) {
+        const snap = docSnapshots[i];
+        const u = updates[i];
+        if (!snap.exists()) {
+          throw new Error(`Worker "${u.workerName}" (${u.workerId}) no longer exists.`);
+        }
+        const data = snap.data();
+        if (data.tenantId && data.tenantId !== tenantId) {
+          throw new Error(`Tenant security violation for worker "${u.workerName}".`);
+        }
+      }
+
+      // Phase 2: Stage all writes atomically inside the transaction
+      updatedRecords.length = 0;
+      for (let i = 0; i < updates.length; i++) {
+        if (simulateFailureAtIndex !== undefined && i === simulateFailureAtIndex) {
+          throw new Error(
+            `Simulated database timeout at row ${i + 1} of ${updates.length} (${updates[i].workerName}).`
+          );
+        }
+
+        const u = updates[i];
+        const { leaveBalances, leaveRecord } = buildWorkerPayloads(u);
+
+        transaction.update(doc(db, 'workers', u.workerId), {
+          leaveBalances,
+          leave_balance: leaveRecord,
+          updatedAt: now,
+        });
+
+        if (writeDualCollection) {
+          transaction.set(doc(db, 'leave_balances', leaveRecord.id), leaveRecord, { merge: true });
+        }
+
+        updatedRecords.push(leaveRecord);
+      }
+
+      const batchDoc: LeaveBalanceImportBatch = {
+        id: batchId,
+        tenantId,
+        fileName,
+        migrationDate,
+        importedAt: now,
+        importedBy: actorEmail,
+        totalRows,
+        matchedWorkersUpdated: updatedRecords.length,
+        unmatchedPhoneCount,
+        negativeBalanceWorkersCount,
+        allowNegativeBalancePolicy,
+        status: 'COMMITTED',
+      };
+      transaction.set(doc(db, 'leave_balance_import_batches', batchId), batchDoc);
+      return batchDoc;
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Database transaction timed out after ${Math.round(timeoutMs / 1000)}s.`));
+      }, timeoutMs);
+    });
+
+    try {
+      const committedBatch = await Promise.race([txPromise, timeoutPromise]);
+      recordAuditBatchLocally(committedBatch);
+      try {
+        const existingLocalRaw = localStorage.getItem(leaveRecordsKey);
+        const existingLocal: LeaveBalanceRecord[] = existingLocalRaw ? JSON.parse(existingLocalRaw) : [];
+        const map = new Map(existingLocal.map((r) => [r.workerId, r]));
+        updatedRecords.forEach((r) => map.set(r.workerId, r));
+        localStorage.setItem(leaveRecordsKey, JSON.stringify(Array.from(map.values())));
+      } catch {}
+
+      return { batch: committedBatch, updatedRecords };
+    } catch (err: any) {
+      const rollbackBatch: LeaveBalanceImportBatch = {
+        id: batchId,
+        tenantId,
+        fileName,
+        migrationDate,
+        importedAt: now,
+        importedBy: actorEmail,
+        totalRows,
+        matchedWorkersUpdated: 0,
+        unmatchedPhoneCount,
+        negativeBalanceWorkersCount: 0,
+        allowNegativeBalancePolicy,
+        status: 'ROLLED_BACK',
+        errorMessage: err?.message || 'Firestore transaction failed',
+      };
+      recordAuditBatchLocally(rollbackBatch);
+
+      throw new Error(
+        `Transaction rolled back — 0 worker balances were updated. Cause: ${err?.message || 'Database error or timeout'}`
+      );
+    }
+  },
+
+  getLeaveBalanceRecords: async (tenantId: string): Promise<LeaveBalanceRecord[]> => {
+    if (!tenantId) return [];
+    const storageKey = `leave_balances_${tenantId}`;
+    const readLocal = (): LeaveBalanceRecord[] => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    };
+    if (tenantId === 'demo-tenant-id') return readLocal();
+    try {
+      const q = query(collection(db, 'leave_balances'), where('tenantId', '==', tenantId));
+      const snap = await getDocs(q);
+      const remote = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LeaveBalanceRecord));
+      return remote.length > 0 ? remote : readLocal();
+    } catch {
+      return readLocal();
+    }
+  },
+
+  getLeaveBalanceImportHistory: async (tenantId: string): Promise<LeaveBalanceImportBatch[]> => {
+    if (!tenantId) return [];
+    const storageKey = `leave_balance_batches_${tenantId}`;
+    const readLocal = (): LeaveBalanceImportBatch[] => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: LeaveBalanceImportBatch[] = raw ? JSON.parse(raw) : [];
+        return list.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+      } catch {
+        return [];
+      }
+    };
+    if (tenantId === 'demo-tenant-id') return readLocal();
+    try {
+      const q = query(
+        collection(db, 'leave_balance_import_batches'),
+        where('tenantId', '==', tenantId)
+      );
+      const snap = await getDocs(q);
+      const remote = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as LeaveBalanceImportBatch))
+        .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+      return remote.length > 0 ? remote : readLocal();
+    } catch {
+      return readLocal();
+    }
+  },
+
+  // --- ACTIVE LOANS & TRANSACTIONAL BULK LOAN LEDGER IMPORT ---
+  getActiveLoans: async (tenantId: string): Promise<ActiveLoan[]> => {
+    if (!tenantId) return [];
+    const storageKey = getActiveLoansStorageKey(tenantId);
+    const readLocal = (): ActiveLoan[] => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: ActiveLoan[] = raw ? JSON.parse(raw) : [];
+        return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      } catch {
+        return [];
+      }
+    };
+
+    if (tenantId === 'demo-tenant-id') {
+      return readLocal();
+    }
+
+    try {
+      const q = query(collection(db, 'active_loans'), where('tenantId', '==', tenantId));
+      const snap = await getDocs(q);
+      const remote = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as ActiveLoan))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(remote));
+      } catch {}
+      return remote.length > 0 ? remote : readLocal();
+    } catch (e) {
+      console.warn('getActiveLoans fallback to local cache:', e);
+      return readLocal();
+    }
+  },
+
+  bulkCreateActiveLoansTransactional: async (params: {
+    tenantId: string;
+    fileName: string;
+    actorEmail: string;
+    totalRows: number;
+    settledSkippedCount: number;
+    unmatchedPhoneCount: number;
+    emiWarningCount: number;
+    loans: Array<{
+      workerId: string;
+      workerName: string;
+      workerPhone: string;
+      totalLoanAmount: number;
+      outstandingPrincipal: number;
+      monthlyEmi: number;
+      remainingInstallments: number;
+      startMonth?: string;
+      emiExceedsSalaryWarning?: boolean;
+      estimatedNetSalaryAtImport?: number;
+      notes?: string;
+    }>;
+    timeoutMs?: number;
+    simulateFailureAtIndex?: number;
+  }): Promise<{
+    batch: LoanLedgerImportBatch;
+    createdLoans: ActiveLoan[];
+  }> => {
+    const {
+      tenantId,
+      fileName,
+      actorEmail,
+      totalRows,
+      settledSkippedCount,
+      unmatchedPhoneCount,
+      emiWarningCount,
+      loans,
+      timeoutMs = 15000,
+      simulateFailureAtIndex,
+    } = params;
+
+    if (!tenantId) {
+      throw new Error('Missing tenantId for bulk loan ledger import.');
+    }
+    if (!loans || loans.length === 0) {
+      throw new Error('No active loan records to create.');
+    }
+
+    const now = new Date().toISOString();
+    const defaultStartMonth = now.slice(0, 7);
+    const batchId = `lnimp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const loansStorageKey = getActiveLoansStorageKey(tenantId);
+    const batchesStorageKey = getLoanImportBatchesStorageKey(tenantId);
+
+    const recordLoanBatchLocally = (batch: LoanLedgerImportBatch) => {
+      try {
+        const raw = localStorage.getItem(batchesStorageKey);
+        const existing: LoanLedgerImportBatch[] = raw ? JSON.parse(raw) : [];
+        localStorage.setItem(batchesStorageKey, JSON.stringify([batch, ...existing].slice(0, 50)));
+      } catch {}
+    };
+
+    const buildActiveLoanRecord = (
+      item: (typeof loans)[number],
+      idx: number
+    ): ActiveLoan => {
+      const round2 = (v: number) => Math.round(v * 100) / 100;
+      return {
+        id: `loan_${tenantId.slice(0, 8)}_${item.workerId.slice(-8)}_${Date.now()}_${idx}`,
+        tenantId,
+        workerId: item.workerId,
+        workerName: item.workerName,
+        workerPhone: item.workerPhone,
+        totalLoanAmount: round2(item.totalLoanAmount),
+        outstandingPrincipal: round2(item.outstandingPrincipal),
+        monthlyEmi: round2(item.monthlyEmi),
+        remainingInstallments: Math.max(1, Math.round(item.remainingInstallments)),
+        status: 'ACTIVE',
+        startMonth: item.startMonth || defaultStartMonth,
+        deductedInstallments: 0,
+        emiExceedsSalaryWarning: Boolean(item.emiExceedsSalaryWarning),
+        estimatedNetSalaryAtImport: item.estimatedNetSalaryAtImport,
+        importBatchId: batchId,
+        notes: item.notes,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: actorEmail,
+      };
+    };
+
+    const totalOutstandingPrincipal = Math.round(
+      loans.reduce((sum, l) => sum + l.outstandingPrincipal, 0) * 100
+    ) / 100;
+    const totalMonthlyRecovery = Math.round(
+      loans.reduce((sum, l) => sum + Math.min(l.monthlyEmi, l.outstandingPrincipal), 0) * 100
+    ) / 100;
+
+    const isDemoOrLocal =
+      tenantId === 'demo-tenant-id' ||
+      loans.every((l) => l.workerId.startsWith('worker-'));
+
+    // --- PATH A: DEMO / LOCAL STORAGE ATOMIC TRANSACTION WITH SNAPSHOT ROLLBACK ---
+    if (isDemoOrLocal) {
+      const originalLoansJson = localStorage.getItem(loansStorageKey);
+      try {
+        const existingLoans: ActiveLoan[] = originalLoansJson ? JSON.parse(originalLoansJson) : [];
+        const stagedLoans: ActiveLoan[] = [];
+
+        for (let i = 0; i < loans.length; i++) {
+          if (simulateFailureAtIndex !== undefined && i === simulateFailureAtIndex) {
+            throw new Error(
+              `Simulated database timeout at row ${i + 1} of ${loans.length} (${loans[i].workerName}).`
+            );
+          }
+          const item = loans[i];
+          if (item.outstandingPrincipal <= 0) {
+            throw new Error(`Invalid zero/negative outstanding principal for ${item.workerName}.`);
+          }
+          stagedLoans.push(buildActiveLoanRecord(item, i));
+        }
+
+        // Atomic swap: only persisted after 100% of rows succeed
+        localStorage.setItem(loansStorageKey, JSON.stringify([...stagedLoans, ...existingLoans]));
+        dispatchActiveLoansChanged(tenantId);
+
+        const committedBatch: LoanLedgerImportBatch = {
+          id: batchId,
+          tenantId,
+          fileName,
+          importedAt: now,
+          importedBy: actorEmail,
+          totalRows,
+          loansCreatedCount: stagedLoans.length,
+          settledSkippedCount,
+          unmatchedPhoneCount,
+          emiWarningCount,
+          totalOutstandingPrincipal,
+          totalMonthlyRecovery,
+          status: 'COMMITTED',
+        };
+        recordLoanBatchLocally(committedBatch);
+
+        return { batch: committedBatch, createdLoans: stagedLoans };
+      } catch (err: any) {
+        // Explicit rollback to pre-transaction snapshot
+        try {
+          if (originalLoansJson !== null) {
+            localStorage.setItem(loansStorageKey, originalLoansJson);
+          } else {
+            localStorage.removeItem(loansStorageKey);
+          }
+        } catch {}
+
+        const rollbackBatch: LoanLedgerImportBatch = {
+          id: batchId,
+          tenantId,
+          fileName,
+          importedAt: now,
+          importedBy: actorEmail,
+          totalRows,
+          loansCreatedCount: 0,
+          settledSkippedCount,
+          unmatchedPhoneCount,
+          emiWarningCount,
+          totalOutstandingPrincipal: 0,
+          totalMonthlyRecovery: 0,
+          status: 'ROLLED_BACK',
+          errorMessage: err?.message || 'Unknown transaction failure',
+        };
+        recordLoanBatchLocally(rollbackBatch);
+
+        throw new Error(
+          `Transaction rolled back — 0 loan records were created. Cause: ${err?.message || 'Database write failure'}`
+        );
+      }
+    }
+
+    // --- PATH B: REAL FIRESTORE ATOMIC runTransaction WITH TIMEOUT GUARD ---
+    if (loans.length > 498) {
+      throw new Error(
+        'Transaction aborted: A single atomic Firestore transaction supports up to 498 loan records. Please split your file into smaller batches.'
+      );
+    }
+
+    const createdLoans: ActiveLoan[] = [];
+
+    const txPromise = runTransaction(db, async (transaction) => {
+      // Phase 1: Verify unique worker records exist & belong to tenant
+      const uniqueWorkerIds = Array.from(new Set(loans.map((l) => l.workerId)));
+      const workerSnaps = await Promise.all(
+        uniqueWorkerIds.map((wid) => transaction.get(doc(db, 'workers', wid)))
+      );
+
+      for (let i = 0; i < workerSnaps.length; i++) {
+        const snap = workerSnaps[i];
+        const wid = uniqueWorkerIds[i];
+        if (!snap.exists()) {
+          throw new Error(`Worker (${wid}) no longer exists in database.`);
+        }
+        const data = snap.data();
+        if (data.tenantId && data.tenantId !== tenantId) {
+          throw new Error(`Tenant security violation for worker (${wid}).`);
+        }
+      }
+
+      // Phase 2: Stage all ActiveLoan documents atomically inside transaction
+      createdLoans.length = 0;
+      for (let i = 0; i < loans.length; i++) {
+        if (simulateFailureAtIndex !== undefined && i === simulateFailureAtIndex) {
+          throw new Error(
+            `Simulated database timeout at row ${i + 1} of ${loans.length} (${loans[i].workerName}).`
+          );
+        }
+        const loanDoc = buildActiveLoanRecord(loans[i], i);
+        transaction.set(doc(db, 'active_loans', loanDoc.id), loanDoc);
+        createdLoans.push(loanDoc);
+      }
+
+      const batchDoc: LoanLedgerImportBatch = {
+        id: batchId,
+        tenantId,
+        fileName,
+        importedAt: now,
+        importedBy: actorEmail,
+        totalRows,
+        loansCreatedCount: createdLoans.length,
+        settledSkippedCount,
+        unmatchedPhoneCount,
+        emiWarningCount,
+        totalOutstandingPrincipal,
+        totalMonthlyRecovery,
+        status: 'COMMITTED',
+      };
+      transaction.set(doc(db, 'loan_ledger_import_batches', batchId), batchDoc);
+      return batchDoc;
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Database transaction timed out after ${Math.round(timeoutMs / 1000)}s.`));
+      }, timeoutMs);
+    });
+
+    try {
+      const committedBatch = await Promise.race([txPromise, timeoutPromise]);
+      recordLoanBatchLocally(committedBatch);
+      try {
+        const existingLocalRaw = localStorage.getItem(loansStorageKey);
+        const existingLocal: ActiveLoan[] = existingLocalRaw ? JSON.parse(existingLocalRaw) : [];
+        localStorage.setItem(loansStorageKey, JSON.stringify([...createdLoans, ...existingLocal]));
+      } catch {}
+      dispatchActiveLoansChanged(tenantId);
+
+      return { batch: committedBatch, createdLoans };
+    } catch (err: any) {
+      const rollbackBatch: LoanLedgerImportBatch = {
+        id: batchId,
+        tenantId,
+        fileName,
+        importedAt: now,
+        importedBy: actorEmail,
+        totalRows,
+        loansCreatedCount: 0,
+        settledSkippedCount,
+        unmatchedPhoneCount,
+        emiWarningCount,
+        totalOutstandingPrincipal: 0,
+        totalMonthlyRecovery: 0,
+        status: 'ROLLED_BACK',
+        errorMessage: err?.message || 'Firestore transaction failed',
+      };
+      recordLoanBatchLocally(rollbackBatch);
+
+      throw new Error(
+        `Transaction rolled back — 0 loan records were created. Cause: ${err?.message || 'Database error or timeout'}`
+      );
+    }
+  },
+
+  updateActiveLoan: async (
+    tenantId: string,
+    loanId: string,
+    updates: Partial<ActiveLoan>
+  ): Promise<ActiveLoan | null> => {
+    if (!tenantId || !loanId) return null;
+    const now = new Date().toISOString();
+    const storageKey = getActiveLoansStorageKey(tenantId);
+    let updatedLoan: ActiveLoan | null = null;
+
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const list: ActiveLoan[] = raw ? JSON.parse(raw) : [];
+      const next = list.map((l) => {
+        if (l.id !== loanId) return l;
+        updatedLoan = { ...l, ...updates, updatedAt: now };
+        return updatedLoan;
+      });
+      localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {}
+
+    if (tenantId !== 'demo-tenant-id') {
+      try {
+        await updateDoc(doc(db, 'active_loans', loanId), { ...updates, updatedAt: now });
+      } catch (e) {
+        console.warn('updateActiveLoan Firestore fallback:', e);
+      }
+    }
+
+    dispatchActiveLoansChanged(tenantId);
+    return updatedLoan;
+  },
+
+  deleteActiveLoan: async (tenantId: string, loanId: string): Promise<void> => {
+    if (!tenantId || !loanId) return;
+    const storageKey = getActiveLoansStorageKey(tenantId);
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const list: ActiveLoan[] = JSON.parse(raw);
+        localStorage.setItem(storageKey, JSON.stringify(list.filter((l) => l.id !== loanId)));
+      }
+    } catch {}
+
+    if (tenantId !== 'demo-tenant-id') {
+      try {
+        await deleteDoc(doc(db, 'active_loans', loanId));
+      } catch (e) {
+        console.warn('deleteActiveLoan Firestore fallback:', e);
+      }
+    }
+    dispatchActiveLoansChanged(tenantId);
+  },
+
+  getLoanLedgerImportHistory: async (tenantId: string): Promise<LoanLedgerImportBatch[]> => {
+    if (!tenantId) return [];
+    const storageKey = getLoanImportBatchesStorageKey(tenantId);
+    const readLocal = (): LoanLedgerImportBatch[] => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: LoanLedgerImportBatch[] = raw ? JSON.parse(raw) : [];
+        return list.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+      } catch {
+        return [];
+      }
+    };
+    if (tenantId === 'demo-tenant-id') return readLocal();
+    try {
+      const q = query(
+        collection(db, 'loan_ledger_import_batches'),
+        where('tenantId', '==', tenantId)
+      );
+      const snap = await getDocs(q);
+      const remote = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as LoanLedgerImportBatch))
+        .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+      return remote.length > 0 ? remote : readLocal();
+    } catch {
+      return readLocal();
+    }
   },
 
   updateWorker: async (workerId: string, data: Partial<Worker>) => {

@@ -78,6 +78,59 @@ export interface LeavePolicy {
   allowNegativeBalance: boolean;
 }
 
+export interface WorkerLeaveBalances {
+  cl: number; // Casual Leave Balance
+  sl: number; // Sick Leave Balance
+  pl: number; // Earned / Privilege Leave Balance
+  openingBalance?: {
+    cl: number;
+    sl: number;
+    pl: number;
+  };
+  migrationDate?: string; // ISO YYYY-MM-DD (Mid-year migration opening balance as-of date)
+  accrualStartDate?: string; // ISO YYYY-MM-DD (Future accruals apply strictly from this date forward)
+  importBatchId?: string;
+  lastImportedAt?: string;
+  lastImportedBy?: string;
+  negativeBalanceDeductionPending?: number; // Total negative days queued for next payroll deduction
+  negativeBalanceDeductionMonth?: string; // YYYY-MM payroll cycle for negative leave deduction
+}
+
+export interface LeaveBalanceRecord {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone: string;
+  earnedLeave: number; // Maps to pl (Earned / Privilege Leave)
+  sickLeave: number; // Maps to sl
+  casualLeave: number; // Maps to cl
+  isOpeningBalance: boolean;
+  migrationDate: string; // YYYY-MM-DD
+  accrualStartDate: string; // YYYY-MM-DD
+  negativeBalanceDays: number;
+  negativeBalanceDeductionMonth?: string;
+  importBatchId: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface LeaveBalanceImportBatch {
+  id: string;
+  tenantId: string;
+  fileName: string;
+  migrationDate: string;
+  importedAt: string;
+  importedBy: string;
+  totalRows: number;
+  matchedWorkersUpdated: number;
+  unmatchedPhoneCount: number;
+  negativeBalanceWorkersCount: number;
+  allowNegativeBalancePolicy: boolean;
+  status: 'COMMITTED' | 'ROLLED_BACK';
+  errorMessage?: string;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -230,6 +283,16 @@ export interface OrgSettings {
     };
     minimumWageRevisions?: MinimumWageRevisionRule[];
     ptLwfConfig?: PtLwfOrgConfig;
+    statutoryMapping?: {
+      primaryState: string;
+      locked: boolean;
+      lockedAt: string;
+      lockedBy: string;
+      ptSummary: string;
+      lwfScheduleLabel: string;
+      centralPfEsiApplied: boolean;
+      shiftImportBatchId?: string;
+    };
   };
   weeklyOffs?: WeeklyOffConfig;
   holidays?: Holiday[];
@@ -641,11 +704,8 @@ export interface Worker {
   dateOfJoining?: string; 
   dateOfExit?: string; 
   weeklyOffOverride?: number[];
-  leaveBalances?: {
-    cl: number;
-    sl: number;
-    pl: number;
-  };
+  leaveBalances?: WorkerLeaveBalances;
+  leave_balance?: LeaveBalanceRecord;
   wageType?: 'DAILY' | 'HOURLY' | 'MONTHLY';
   dailyWage?: number;
   hourlyWage?: number;
@@ -1029,6 +1089,7 @@ export interface MonthlyPayroll {
   };
   deductions: {
     advances: number;
+    loanRecovery?: number;
     processingFee: number;
     canteen: number;
     total: number;
@@ -1127,6 +1188,48 @@ export interface Advance {
   repaid?: boolean;
   isEwa?: boolean;
   ewaDetails?: EwaDetails;
+}
+
+export type ActiveLoanStatus = 'ACTIVE' | 'SETTLED' | 'PAUSED';
+
+export interface ActiveLoan {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone: string;
+  totalLoanAmount: number;
+  outstandingPrincipal: number;
+  monthlyEmi: number;
+  remainingInstallments: number;
+  status: ActiveLoanStatus;
+  startMonth?: string; // YYYY-MM when recovery begins
+  lastDeductedMonth?: string; // YYYY-MM of most recent deduction
+  deductedInstallments?: number;
+  emiExceedsSalaryWarning?: boolean;
+  estimatedNetSalaryAtImport?: number;
+  importBatchId?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+export interface LoanLedgerImportBatch {
+  id: string;
+  tenantId: string;
+  fileName: string;
+  importedAt: string;
+  importedBy: string;
+  totalRows: number;
+  loansCreatedCount: number;
+  settledSkippedCount: number;
+  unmatchedPhoneCount: number;
+  emiWarningCount: number;
+  totalOutstandingPrincipal: number;
+  totalMonthlyRecovery: number;
+  status: 'COMMITTED' | 'ROLLED_BACK';
+  errorMessage?: string;
 }
 
 export interface AppNotification {

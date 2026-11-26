@@ -46,6 +46,7 @@ interface BulkImportModalProps {
   actorEmail?: string;
   onSuccess: () => void;
   onPaywallTrigger: (err: EmployeeCapExceededError) => void;
+  onSwitchToLeaveBalances?: () => void;
 }
 
 interface CreatedWorkerLinkSummary {
@@ -69,6 +70,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
   actorEmail = 'admin@factory.in',
   onSuccess,
   onPaywallTrigger,
+  onSwitchToLeaveBalances,
 }) => {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -281,13 +283,24 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
               <FileSpreadsheet size={20} />
             </div>
             <div className="min-w-0">
-              <h3 className="text-base sm:text-lg font-bold tracking-tight truncate">
-                {stage === 'UPLOAD'
-                  ? 'Bulk Import Workers (Excel / CSV)'
-                  : stage === 'SUMMARY'
-                  ? 'Validation Summary & Preview'
-                  : 'Import Complete & Magic Links Ready'}
-              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base sm:text-lg font-bold tracking-tight truncate">
+                  {stage === 'UPLOAD'
+                    ? 'Bulk Import Workers (Excel / CSV)'
+                    : stage === 'SUMMARY'
+                    ? 'Validation Summary & Preview'
+                    : 'Import Complete & Magic Links Ready'}
+                </h3>
+                {onSwitchToLeaveBalances && stage === 'UPLOAD' && (
+                  <button
+                    type="button"
+                    onClick={onSwitchToLeaveBalances}
+                    className="text-[11px] font-semibold px-2.5 py-0.5 rounded-lg bg-indigo-500/30 hover:bg-indigo-500/50 border border-indigo-400/40 text-indigo-100 transition-colors cursor-pointer"
+                  >
+                    Switch to Leave Balances Import
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-slate-300 truncate">
                 {stage === 'UPLOAD'
                   ? 'Upload your filled template (.xlsx or .csv, up to 5MB, max 500 rows per batch)'

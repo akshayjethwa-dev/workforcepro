@@ -1,4 +1,4 @@
-import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig } from '../types/index';
+import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig, ActiveLoan } from '../types/index';
 import { attendanceLogic } from './attendanceLogic'; 
 import { statutoryEngine } from './statutoryEngine';
 import { validateWorkerWageStructure } from './wageStructureValidationService';
@@ -7,6 +7,7 @@ import {
   getSyncFnfSettlementForWorkerMonth,
   normalizeFlexibleDateString,
 } from './gratuityService';
+import { computeWorkerLoanRecoveries } from './PayrollEngine';
 
 export const ensureWageConfig = (worker: Worker): WageConfig => {
   const isMonthly = (worker as any).wageType === 'MONTHLY' || 
@@ -179,7 +180,8 @@ export const wageService = {
     month: string, 
     attendanceRecords: AttendanceRecord[],
     advances: Advance[],
-    orgSettings: OrgSettings
+    orgSettings: OrgSettings,
+    activeLoans?: ActiveLoan[]
   ): MonthlyPayroll => {
     const config = ensureWageConfig(worker);
     const [yearStr, monthStr] = month.split('-');
@@ -483,7 +485,44 @@ export const wageService = {
       });
     }
 
-    const totalDeductions = advanceTotal + statutoryResult.totalEmployeeDeductions;
+    // Imported Negative Leave Balance Deduction (when tenant Leave Policy allows negative balances)
+    let negativeLeaveDeduction = 0;
+    const pendingNegDays = worker.leaveBalances?.negativeBalanceDeductionPending || 0;
+    const pendingNegMonth = worker.leaveBalances?.negativeBalanceDeductionMonth;
+    if (
+      orgSettings.leavePolicy?.allowNegativeBalance &&
+      pendingNegDays > 0 &&
+      pendingNegMonth === month
+    ) {
+      const deductionDailyRate = isMonthly ? config.amount / totalWorkingDays : config.amount;
+      negativeLeaveDeduction = round2(pendingNegDays * deductionDailyRate);
+      if (negativeLeaveDeduction > 0) {
+        deductionDetails.push({
+          description: `Over-taken Leave Balance Deduction (${pendingNegDays}d negative opening balance)`,
+          amount: negativeLeaveDeduction,
+        });
+      }
+    }
+
+    // ActiveLoan EMI Recovery Deductions (PayrollEngine automatic "Loan Recovery" payslip line)
+    const loanRecoveryResult = computeWorkerLoanRecoveries(
+      worker.id,
+      worker.tenantId,
+      activeLoans,
+      month
+    );
+    loanRecoveryResult.lineItems.forEach((item) => {
+      deductionDetails.push({
+        description: item.description,
+        amount: item.amount,
+      });
+    });
+
+    const totalDeductions =
+      advanceTotal +
+      statutoryResult.totalEmployeeDeductions +
+      negativeLeaveDeduction +
+      loanRecoveryResult.totalLoanRecovery;
 
     // Carry Forward Logic (If Advances & Deductions taken exceed Gross Earned)
     const rawNetPayable = gross - totalDeductions;
@@ -576,6 +615,9 @@ export const wageService = {
       },
       deductions: {
         advances: advanceTotal,
+        ...(loanRecoveryResult.totalLoanRecovery > 0
+          ? { loanRecovery: parseFloat(loanRecoveryResult.totalLoanRecovery.toFixed(2)) }
+          : {}),
         processingFee: 0,
         canteen: 0,
         total: parseFloat(totalDeductions.toFixed(2)),
@@ -599,8 +641,16 @@ export const wageService = {
     month: string, 
     attendanceRecords: AttendanceRecord[],
     advances: Advance[],
-    orgSettings: OrgSettings
+    orgSettings: OrgSettings,
+    activeLoans?: ActiveLoan[]
   ): MonthlyPayroll => {
-    return wageService.generateMonthlyPayroll(worker, month, attendanceRecords, advances, orgSettings);
+    return wageService.generateMonthlyPayroll(
+      worker,
+      month,
+      attendanceRecords,
+      advances,
+      orgSettings,
+      activeLoans
+    );
   }
 };

@@ -2,16 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, AlertTriangle, X, IndianRupee, Save, Lock, 
   UserCheck, Camera, Phone, MapPin, Building, Sparkles, Filter, Upload, Download,
-  Calendar, Clock, Send, Key, UserX, Shield, CheckCircle2, RotateCcw, Smartphone
+  Calendar, Clock, Send, Key, UserX, Shield, CheckCircle2, RotateCcw, Smartphone, Landmark
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { dbService } from '../services/db';
 import { wageService } from '../services/wageService';
-import { Worker, OrgSettings, Advance, AttendanceRecord, MagicLinkScope } from '../types/index';
+import { Worker, OrgSettings, Advance, AttendanceRecord, MagicLinkScope, ActiveLoan } from '../types/index';
 import { EmployeeCapBanner } from '../components/EmployeeCapBanner';
 import { UpgradePaywallModal } from '../components/UpgradePaywallModal';
 import { BulkImportModal } from '../components/BulkImportModal';
+import { BulkLeaveBalanceImportModal } from '../components/BulkLeaveBalanceImportModal';
+import { BulkLoanLedgerImportModal } from '../components/BulkLoanLedgerImportModal';
 import { employeeCapGuard, EmployeeCapExceededError } from '../services/employeeCapGuard';
 import { WorkerEwaModal } from '../components/WorkerEwaModal';
 import { SendMagicLinkModal } from '../components/SendMagicLinkModal';
@@ -46,6 +48,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
   const [settings, setSettings] = useState<OrgSettings | null>(null);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [advances, setAdvances] = useState<Advance[]>([]);
+  const [activeLoans, setActiveLoans] = useState<ActiveLoan[]>([]);
   const [ewaModalWorker, setEwaModalWorker] = useState<Worker | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
@@ -56,6 +59,8 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
   const [showPaywall, setShowPaywall] = useState<boolean>(false);
   const [paywallError, setPaywallError] = useState<any>(null);
   const [showBulkImport, setShowBulkImport] = useState<boolean>(false);
+  const [showBulkLeaveImport, setShowBulkLeaveImport] = useState<boolean>(false);
+  const [showBulkLoanImport, setShowBulkLoanImport] = useState<boolean>(false);
   
   // State for deletion modal
   const [workerToDelete, setWorkerToDelete] = useState<Worker | null>(null);
@@ -99,18 +104,20 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
     const tenantId = profile?.tenantId;
     if (tenantId) {
       try {
-        const [workersData, settingsData, attendanceData, advancesData, fnfData] = await Promise.all([
+        const [workersData, settingsData, attendanceData, advancesData, fnfData, loansData] = await Promise.all([
             dbService.getWorkers(tenantId),
             dbService.getOrgSettings(tenantId),
             dbService.getAttendanceHistory(tenantId),
             dbService.getAdvances(tenantId),
-            getFnfSettlements(tenantId)
+            getFnfSettlements(tenantId),
+            dbService.getActiveLoans(tenantId)
         ]);
         setWorkers(workersData);
         setSettings(settingsData);
         setAttendanceRecords(attendanceData);
         setAdvances(advancesData);
         setFnfRecords(fnfData);
+        setActiveLoans(loansData);
       } catch (error) {
         console.error("Failed to load workers data", error);
         toast.error("Failed to load workers directory");
@@ -368,6 +375,24 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
             <Upload size={15} className="shrink-0" />
             <span className="break-words">Bulk Import</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setShowBulkLeaveImport(true)}
+            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-800 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0 cursor-pointer"
+            title="Bulk import workers' opening leave balances via Leave_Balance_Template.xlsx"
+          >
+            <Calendar size={15} className="shrink-0" />
+            <span className="break-words">Leave Balances</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowBulkLoanImport(true)}
+            className="inline-flex items-center justify-center gap-1.5 min-h-[2.5rem] px-3.5 py-2 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-900 rounded-xl font-semibold text-fluid-xs shadow-xs transition-all active:scale-95 min-w-0 cursor-pointer"
+            title="Bulk import outstanding worker loans via Loan_Ledger_Template.xlsx"
+          >
+            <Landmark size={15} className="shrink-0" />
+            <span className="break-words">Loan Ledger</span>
+          </button>
           <button 
             type="button"
             onClick={handleAddWorkerClick}
@@ -475,6 +500,9 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
             const latestFnf = fnfRecords
               .filter((r) => r.workerId === worker.id)
               .sort((a, b) => b.exitDate.localeCompare(a.exitDate))[0];
+            const workerActiveLoans = activeLoans.filter(
+              (l) => l.workerId === worker.id && l.status === 'ACTIVE' && l.outstandingPrincipal > 0
+            );
 
             return (
               <WorkerCard
@@ -482,6 +510,7 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
                 worker={worker}
                 settings={settings}
                 latestFnf={latestFnf}
+                activeLoans={workerActiveLoans}
                 wageAudit={wageAudit}
                 activeTokensCount={activeTokensCount}
                 isInactive={isInactive}
@@ -694,6 +723,41 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
         onPaywallTrigger={(err) => {
           setPaywallError(err);
           setShowPaywall(true);
+        }}
+        onSwitchToLeaveBalances={() => {
+          setShowBulkImport(false);
+          setShowBulkLeaveImport(true);
+        }}
+      />
+
+      {/* BULK LEAVE BALANCE IMPORT MODAL (TRANSACTIONAL MID-YEAR MIGRATION) */}
+      <BulkLeaveBalanceImportModal
+        isOpen={showBulkLeaveImport}
+        onClose={() => setShowBulkLeaveImport(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        orgSettings={settings}
+        existingWorkers={workers}
+        actorEmail={profile?.email || 'admin@factory.in'}
+        onSuccess={() => {
+          loadWorkersAndSettings();
+        }}
+        onOrgSettingsUpdated={(updated) => setSettings(updated)}
+        onSwitchToWorkerImport={() => {
+          setShowBulkLeaveImport(false);
+          setShowBulkImport(true);
+        }}
+      />
+
+      {/* BULK ADVANCE / LOAN LEDGER IMPORT MODAL */}
+      <BulkLoanLedgerImportModal
+        isOpen={showBulkLoanImport}
+        onClose={() => setShowBulkLoanImport(false)}
+        tenantId={profile?.tenantId || 'demo-tenant-id'}
+        orgSettings={settings}
+        existingWorkers={workers}
+        actorEmail={profile?.email || 'admin@factory.in'}
+        onSuccess={() => {
+          loadWorkersAndSettings();
         }}
       />
 

@@ -43,6 +43,7 @@ import {
   scrollToFirstInvalidField,
   useKeyboardAwareLayout,
 } from '../hooks/useKeyboardAwareLayout';
+import { getOverlappingShiftsForTarget } from '../utils/shiftStatutoryImportEngine';
 
 interface Props {
   onBack: () => void;
@@ -1385,6 +1386,22 @@ export const AddWorkerScreen: React.FC<Props> = ({ onBack, onSuccess, initialDat
                        <option value="default">General Shift (Loading...)</option>
                      )}
                    </select>
+                   {(() => {
+                     const overlapping = formData.shiftId
+                       ? getOverlappingShiftsForTarget(formData.shiftId, availableShifts)
+                       : [];
+                     if (overlapping.length === 0) return null;
+                     return (
+                       <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2">
+                         <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                         <p className="text-[11px] leading-relaxed text-amber-800 font-medium">
+                           <strong>Overlapping shift warning:</strong> This shift overlaps with{' '}
+                           {overlapping.map((s) => `${s.name} (${s.startTime}–${s.endTime})`).join(', ')}.
+                           Overlapping shifts are allowed, but do not assign this worker to both shifts on the same day.
+                         </p>
+                       </div>
+                     );
+                   })()}
                  </div>
 
                  <div className="col-span-1">
