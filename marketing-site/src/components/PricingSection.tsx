@@ -64,7 +64,7 @@ export default function PricingSection() {
     <section
       id="pricing"
       aria-labelledby="pricing-heading"
-      className="py-20 sm:py-24 bg-white border-t border-slate-200/80"
+      className="scroll-mt-20 py-20 sm:py-24 bg-white border-t border-slate-200/80"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mx-auto text-center mb-14">

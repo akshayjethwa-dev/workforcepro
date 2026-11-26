@@ -93,7 +93,7 @@ export default function HowItWorksSection() {
     <section
       id="how-it-works"
       aria-labelledby="how-it-works-heading"
-      className="py-20 sm:py-24 bg-slate-50 border-t border-slate-200/80"
+      className="scroll-mt-20 py-20 sm:py-24 bg-slate-50 border-t border-slate-200/80"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mx-auto text-center mb-16">

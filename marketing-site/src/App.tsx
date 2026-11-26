@@ -1,11 +1,11 @@
-import { useState } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import AnnouncementBar from './components/AnnouncementBar';
 import Navbar from './components/Navbar';
 import DemoModal from './components/DemoModal';
 import Hero from './components/Hero';
 import ProblemSection from './components/ProblemSection';
-import UseCasesSection from './components/UseCasesSection';   // 👈 NEW
+import UseCasesSection from './components/UseCasesSection';
 import SolutionSection from './components/SolutionSection';
 import FeaturesSection from './components/FeaturesSection';
 import HowItWorksSection from './components/HowItWorksSection';
@@ -30,6 +30,27 @@ function getInitialDismissedState(): boolean {
   }
 }
 
+function ScrollManager() {
+  const { pathname, hash } = useLocation();
+
+  useEffect(() => {
+    if (hash) {
+      const targetId = hash.replace('#', '');
+      const timer = window.setTimeout(() => {
+        const element = document.getElementById(targetId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 60);
+      return () => window.clearTimeout(timer);
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [pathname, hash]);
+
+  return null;
+}
+
 function App() {
   const [isDismissed, setIsDismissed] = useState(getInitialDismissedState);
   const [isDemoOpen, setIsDemoOpen] = useState(false);
@@ -47,6 +68,7 @@ function App() {
 
   return (
     <>
+      <ScrollManager />
       {showAnnouncement && (
         <AnnouncementBar onDismiss={handleDismissAnnouncement} />
       )}
@@ -62,7 +84,7 @@ function App() {
             <>
               <Hero />
               <ProblemSection />
-              <UseCasesSection />          {/* 👈 NEW */}
+              <UseCasesSection />
               <SolutionSection />
               <FeaturesSection />
               <HowItWorksSection />
