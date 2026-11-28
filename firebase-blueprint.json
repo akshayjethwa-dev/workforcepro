@@ -162,6 +162,38 @@
         "timestamp": { "type": "string" }
       },
       "required": ["id", "type", "severity", "message", "actorId", "targetTenantId", "status", "timestamp"]
+    },
+    "MagicLink": {
+      "title": "MagicLink",
+      "description": "Scoped worker magic link token persisted by SHA-256 tokenHash document ID for cross-device verification",
+      "type": "object",
+      "properties": {
+        "tokenHash": { "type": "string", "maxLength": 128 },
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "workerId": { "type": "string", "maxLength": 128 },
+        "workerName": { "type": "string", "maxLength": 128 },
+        "workerPhone": { "type": "string", "maxLength": 32 },
+        "scope": { "type": "string", "enum": ["PAYSLIP", "SCHEDULE", "ATTENDANCE_SUMMARY", "PUNCH", "punch", "SALARY_RESTRUCTURE", "POSH_COMPLAINT"] },
+        "channel": { "type": "string", "enum": ["WHATSAPP", "SMS", "COPY_LINK"] },
+        "issuedBy": { "type": "string", "maxLength": 256 },
+        "issuedAt": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "ttlHours": { "type": "number" },
+        "targetMonth": { "type": "string", "maxLength": 16 },
+        "shiftId": { "type": "string", "maxLength": 128 },
+        "revoked": { "type": "boolean" },
+        "revokedAt": { "type": "string" },
+        "revokedBy": { "type": "string", "maxLength": 256 },
+        "revocationReason": { "type": "string", "maxLength": 64 },
+        "lastUsedAt": { "type": "string" },
+        "accessLog": { "type": "array" },
+        "flaggedMultiDevice": { "type": "boolean" },
+        "flaggedReason": { "type": "string", "maxLength": 512 },
+        "deliveryStatus": { "type": "string", "enum": ["DELIVERED", "FAILED", "PENDING"] },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["tokenHash", "tenantId", "workerId", "scope", "expiresAt", "revoked", "accessLog"]
     }
   },
   "firestore": {
@@ -204,6 +236,10 @@
     "/security_alerts/{alertId}": {
       "schema": "SecurityAlert",
       "description": "Super admin security incident alerts"
+    },
+    "/magicLinks/{tokenHash}": {
+      "schema": "MagicLink",
+      "description": "Cross-device worker magic link tokens keyed by SHA-256 tokenHash (raw bearer token is never persisted)"
     }
   }
 }

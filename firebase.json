@@ -28,6 +28,35 @@
         "**/.*",
         "**/node_modules/**"
       ],
+      "headers": [
+        {
+          "source": "/index.html",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/sw.js",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/assets/**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=31536000, immutable"
+            }
+          ]
+        }
+      ],
       "rewrites": [
         {
           "source": "**",
@@ -42,6 +71,13 @@
         "firebase.json",
         "**/.*",
         "**/node_modules/**"
+      ],
+      "redirects": [
+        {
+          "source": "/w/:token*",
+          "destination": "https://workforcepro-saas.web.app/w/:token",
+          "type": 302
+        }
       ],
       "rewrites": [
         {

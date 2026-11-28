@@ -1,20 +1,27 @@
 // src/components/WorkerExpenseQuickPanel.tsx
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  AlertTriangle,
+  Bell,
   Camera,
   CheckCircle2,
   Clock,
+  Lock,
   Plus,
   Receipt,
   RefreshCw,
   ShieldAlert,
   WifiOff,
+  X,
   XCircle,
 } from 'lucide-react';
-import { ExpenseClaim, OrgSettings, Worker } from '../types/index';
+import { ExpenseClaim, ExpenseWorkerNotification, OrgSettings, Worker } from '../types/index';
 import {
   expenseService,
+  formatPayrollMonthLabel,
   getExpenseCategoryLabel,
+  hasPolicyWarning,
+  isClaimImmutable,
 } from '../services/expenseService';
 import { syncService } from '../services/syncService';
 import { OneTapExpenseModal } from './OneTapExpenseModal';
@@ -35,6 +42,7 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [claims, setClaims] = useState<ExpenseClaim[]>([]);
+  const [notifications, setNotifications] = useState<ExpenseWorkerNotification[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -42,6 +50,9 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
 
   const loadClaims = useCallback(() => {
     setClaims(expenseService.getClaimsForWorker(tenantId, worker.id));
+    setNotifications(
+      expenseService.getWorkerExpenseNotifications(tenantId, worker.id).filter((n) => !n.read)
+    );
   }, [tenantId, worker.id]);
 
   useEffect(() => {
@@ -55,12 +66,14 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
     const onOffline = () => setIsOnline(false);
 
     window.addEventListener('expenseClaimsChanged', onClaimsChanged);
+    window.addEventListener('expenseWorkerNotificationsChanged', onClaimsChanged);
     window.addEventListener('offlineQueueChanged', onQueueChanged);
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
 
     return () => {
       window.removeEventListener('expenseClaimsChanged', onClaimsChanged);
+      window.removeEventListener('expenseWorkerNotificationsChanged', onClaimsChanged);
       window.removeEventListener('offlineQueueChanged', onQueueChanged);
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
@@ -121,6 +134,45 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
         </div>
       </div>
 
+      {/* Unread Worker Expense Payout Notifications (e.g. Mid-Payroll Deferral to Next Month) */}
+      {notifications.length > 0 && (
+        <div className="space-y-2">
+          {notifications.slice(0, 3).map((notif) => (
+            <div
+              key={notif.id}
+              className={`rounded-2xl border p-3.5 flex items-start justify-between gap-3 ${
+                notif.type === 'DEFERRED_NEXT_MONTH_PAYROLL'
+                  ? 'bg-amber-50 border-amber-300 text-amber-950'
+                  : notif.type === 'ROUTED_TO_FNF'
+                  ? 'bg-purple-50 border-purple-200 text-purple-950'
+                  : notif.type === 'FINANCE_REJECTED'
+                  ? 'bg-rose-50 border-rose-200 text-rose-950'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-950'
+              }`}
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                <Bell size={15} className="shrink-0 mt-0.5" />
+                <div className="text-xs min-w-0">
+                  <div className="font-extrabold">{notif.title}</div>
+                  <p className="mt-0.5 leading-snug opacity-90">{notif.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  expenseService.markWorkerExpenseNotificationRead(tenantId, notif.id);
+                  loadClaims();
+                }}
+                aria-label="Dismiss notification"
+                className="p-1 rounded-lg hover:bg-black/5 shrink-0 cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Live Expense Claim Status Feed */}
       {claims.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
@@ -171,6 +223,30 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
                     <p className="text-xs text-slate-600 mt-0.5 truncate" title={claim.statusMessage}>
                       {claim.statusMessage}
                     </p>
+                    {hasPolicyWarning(claim) && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 mt-0.5 mr-2">
+                        <AlertTriangle size={11} />
+                        POLICY_WARNING: {claim.policyWarning?.bannerMessage || 'Exceeds daily limit'}
+                      </span>
+                    )}
+                    {claim.taxClassification === 'TAXABLE' && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 mt-0.5 mr-2">
+                        <AlertTriangle size={11} />
+                        Flagged Taxable (Added to Gross Salary)
+                      </span>
+                    )}
+                    {claim.payoutDestination === 'NEXT_MONTH_PAYROLL' && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 mt-0.5 mr-2">
+                        <Bell size={11} />
+                        Scheduled for {formatPayrollMonthLabel(claim.payrollMonth || '')} Payroll
+                      </span>
+                    )}
+                    {claim.payoutDestination === 'FNF_SETTLEMENT' && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-800 mt-0.5 mr-2">
+                        <Lock size={11} />
+                        Routed to Full &amp; Final (FnF) Settlement
+                      </span>
+                    )}
                     {claim.riskFlag === 'HIGH_RISK_DUPLICATE' && (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 mt-0.5">
                         <ShieldAlert size={11} />
@@ -184,6 +260,10 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
                   className={`shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${
                     claim.status === 'PENDING_LOCAL'
                       ? 'bg-amber-50 text-amber-800 border-amber-300'
+                      : claim.status === 'PENDING_FINANCE'
+                      ? 'bg-teal-50 text-teal-800 border-teal-300'
+                      : claim.status === 'PAID'
+                      ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
                       : claim.status === 'APPROVED'
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       : claim.status === 'REJECTED'
@@ -196,10 +276,20 @@ export const WorkerExpenseQuickPanel: React.FC<WorkerExpenseQuickPanelProps> = (
                       <Clock size={10} />
                       <span>PENDING_LOCAL</span>
                     </>
-                  ) : claim.status === 'APPROVED' ? (
+                  ) : claim.status === 'PENDING_FINANCE' ? (
                     <>
                       <CheckCircle2 size={10} />
-                      <span>Approved</span>
+                      <span>PENDING_FINANCE</span>
+                    </>
+                  ) : claim.status === 'PAID' ? (
+                    <>
+                      <CheckCircle2 size={10} />
+                      <span>Paid</span>
+                    </>
+                  ) : claim.status === 'APPROVED' ? (
+                    <>
+                      {isClaimImmutable(claim) ? <Lock size={10} /> : <CheckCircle2 size={10} />}
+                      <span>{isClaimImmutable(claim) ? 'Approved · Locked' : 'Approved'}</span>
                     </>
                   ) : claim.status === 'REJECTED' ? (
                     <>

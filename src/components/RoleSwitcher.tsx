@@ -4,6 +4,7 @@ import {
   Shield,
   Handshake,
   Building2,
+  Landmark,
   UserCheck,
   HardHat,
   ChevronDown,
@@ -21,6 +22,7 @@ const ROLE_ICONS: Record<CanonicalRole, React.ComponentType<{ size?: number; cla
   SUPER_ADMIN: Shield,
   RESELLER: Handshake,
   TENANT_ADMIN: Building2,
+  FINANCE: Landmark,
   MANAGER: UserCheck,
   WORKER: HardHat,
 };

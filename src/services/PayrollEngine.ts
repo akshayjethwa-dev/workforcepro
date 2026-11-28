@@ -8,7 +8,8 @@ import {
 } from '../types/index';
 import { getCachedActiveLoansSync } from './db';
 import { statutoryEngine } from './statutoryEngine';
-import { wageService, ensureWageConfig } from './wageService';
+import { wageService, ensureWageConfig, PayrollExpenseIntegrationOptions } from './wageService';
+import { expenseService } from './expenseService';
 
 export interface WorkerLoanRecoveryLineItem {
   loanId: string;
@@ -221,9 +222,41 @@ export function estimateWorkerMonthlyNetSalary(
 }
 
 /**
+ * Queries all Finance-APPROVED expense claims for a worker & pay period (YYYY-MM)
+ * and prepares them for PayrollEngine:
+ * - Tax-Free claims: excluded from Gross Taxable Salary; added AFTER Net Pay under "Reimbursements (Tax-Free)".
+ * - Finance-flagged TAXABLE claims (e.g., Gift/Bonus): added to Gross Taxable Salary before tax computation.
+ */
+export function buildWorkerPayrollExpenseOptions(
+  worker: Worker,
+  month: string
+): PayrollExpenseIntegrationOptions {
+  if (!worker?.tenantId || !worker?.id) {
+    return {};
+  }
+  const queried = expenseService.queryApprovedExpenseClaimsForPayroll(
+    worker.tenantId,
+    worker.id,
+    month,
+    worker
+  );
+  if (queried.allClaims.length === 0) {
+    return {};
+  }
+  return {
+    taxableExpenseAdditions: queried.taxableTotal,
+    taxableExpenseItems: queried.taxableLineItems,
+    taxFreeReimbursements: queried.taxFreeTotal,
+    reimbursementItems: queried.taxFreeLineItems,
+    expenseClaimIds: queried.allClaims.map((c) => c.id),
+  };
+}
+
+/**
  * PayrollEngine — Authoritative monthly payroll orchestrator integrating
- * earnings, statutory compliance, advances, negative leave deductions, and
- * automatic ActiveLoan "Loan Recovery" deductions on worker payslips.
+ * earnings, statutory compliance, advances, negative leave deductions,
+ * automatic ActiveLoan "Loan Recovery" deductions, and APPROVED expense claims
+ * (Tax-Free Reimbursements added after Net Pay; Finance-flagged Taxable expenses added to Gross Salary).
  */
 export const PayrollEngine = {
   generateMonthlyPayroll: (
@@ -234,13 +267,15 @@ export const PayrollEngine = {
     orgSettings: OrgSettings,
     activeLoans?: ActiveLoan[]
   ): MonthlyPayroll => {
+    const expenseOptions = buildWorkerPayrollExpenseOptions(worker, month);
     return wageService.generateMonthlyPayroll(
       worker,
       month,
       attendanceRecords,
       advances,
       orgSettings,
-      activeLoans
+      activeLoans,
+      expenseOptions
     );
   },
 
@@ -252,16 +287,35 @@ export const PayrollEngine = {
     orgSettings: OrgSettings,
     activeLoans?: ActiveLoan[]
   ): MonthlyPayroll => {
+    const expenseOptions = buildWorkerPayrollExpenseOptions(worker, month);
     return wageService.calculateMonthlyPayroll(
       worker,
       month,
       attendanceRecords,
       advances,
       orgSettings,
-      activeLoans
+      activeLoans,
+      expenseOptions
     );
   },
 
+  /**
+   * Transitions all APPROVED expense claims included in a finalized payroll run to PAID automatically.
+   */
+  finalizePayrollExpenseClaims: (
+    tenantId: string,
+    payrollMonth: string,
+    paidBy: string,
+    options?: {
+      workerIds?: string[];
+      payrollIdByWorker?: Record<string, string>;
+      workers?: Worker[];
+    }
+  ) => {
+    return expenseService.markApprovedClaimsAsPaid(tenantId, payrollMonth, paidBy, options);
+  },
+
+  buildWorkerPayrollExpenseOptions,
   computeWorkerLoanRecoveries,
   calculateMonthlyLoanRecoverySummary,
   formatLoanRecoverySummary,

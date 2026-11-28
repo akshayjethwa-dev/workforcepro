@@ -5,7 +5,7 @@ import {
   GitBranch, Layers, X, ScanFace, Loader2, CalendarDays, Umbrella, Shield, BookOpen, Sparkles, ChevronRight,
   CheckCircle2, Wand2, ArrowRight, ChevronDown, ChevronUp, Sun, Eye, ShieldCheck, ExternalLink, RefreshCw,
   IndianRupee, MessageSquare, Navigation, ShieldAlert, PhoneCall,
-  CreditCard, Users, Sliders, ArrowLeft, Upload, Download, AlertTriangle
+  CreditCard, Users, Sliders, ArrowLeft, Upload, Download, AlertTriangle, Receipt, Globe
 } from 'lucide-react';
 import { BillingScreen } from './BillingScreen';
 import { TeamScreen } from './TeamScreen';
@@ -27,6 +27,9 @@ import { MinimumWageSchedulePanel } from '../components/MinimumWageSchedulePanel
 import { PtLwfConfigPanel } from '../components/PtLwfConfigPanel';
 import { BulkLeaveBalanceImportModal } from '../components/BulkLeaveBalanceImportModal';
 import { ShiftStatutoryImportModal } from '../components/ShiftStatutoryImportModal';
+import { ExpensePolicySettingsPanel } from '../components/ExpensePolicySettingsPanel';
+import { CustomDomainRoutingPanel } from '../components/CustomDomainRoutingPanel';
+import { getEffectiveExpensePolicy } from '../services/expenseService';
 import {
   downloadLeaveBalanceTemplate,
   LEAVE_BALANCE_TEMPLATE_FILENAME,
@@ -52,8 +55,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
   const { toast } = useToast();
   const { isFieldMode, toggleFieldMode, setFieldMode } = useTheme();
   
-  const [primaryTab, setPrimaryTab] = useState<'COMPANY_PROFILE' | 'BILLING' | 'MANAGERS'>('COMPANY_PROFILE');
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA' | 'WHATSAPP'>('SHIFTS');
+  const [primaryTab, setPrimaryTab] = useState<'COMPANY_PROFILE' | 'EXPENSE_LIMITS' | 'DOMAIN_ROUTING' | 'BILLING' | 'MANAGERS'>('COMPANY_PROFILE');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'SHIFTS' | 'BRANCHES' | 'DEPARTMENTS' | 'TERMINALS' | 'CALENDAR' | 'LEAVES' | 'COMPLIANCE' | 'ACCESSIBILITY' | 'EWA' | 'EXPENSE_LIMITS' | 'WHATSAPP'>('SHIFTS');
   const [isA11yModalOpen, setA11yModalOpen] = useState(false);
   const [isWhatsAppSimulatorOpen, setWhatsAppSimulatorOpen] = useState(false);
   const [waConfig, setWaConfig] = useState<WhatsAppBridgeConfig>(() => 
@@ -601,10 +604,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
           </div>
         )}
 
-        {/* Primary 3-Tab Segmented Control: ONLY Company Profile, Billing, Manager Management */}
+        {/* Primary Segmented Control: Company Profile, Expense Limits, Billing, Manager Management */}
         <div className="inline-flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
           {[
             { id: 'COMPANY_PROFILE', label: 'Company Profile', icon: Building },
+            { id: 'EXPENSE_LIMITS', label: 'Expense Limits', icon: Receipt },
+            { id: 'DOMAIN_ROUTING', label: 'Domain & Links', icon: Globe },
             { id: 'BILLING', label: 'Billing', icon: CreditCard },
             { id: 'MANAGERS', label: 'Manager Management', icon: Users },
           ].map(tab => (
@@ -731,7 +736,38 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
           </div>
         )}
 
-        {/* TAB 2: BILLING */}
+        {/* TAB 2: EXPENSE DAILY LIMITS (AUTOMATED POLICY GUARDRAILS) */}
+        {primaryTab === 'EXPENSE_LIMITS' && settings && (
+          <ExpensePolicySettingsPanel
+            policy={getEffectiveExpensePolicy(settings)}
+            onChange={(nextPolicy) =>
+              setSettings((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      expensePolicy: {
+                        ...nextPolicy,
+                        updatedAt: new Date().toISOString(),
+                        updatedBy: profile?.name || profile?.email || 'Admin',
+                      },
+                    }
+                  : null
+              )
+            }
+            onSave={handleSave}
+            onDiscard={discardChanges}
+            hasChanges={hasChanges}
+            saving={saving}
+            showInlineSaveFooter
+          />
+        )}
+
+        {/* TAB 3: CUSTOM DOMAIN & MAGIC LINK ROUTING */}
+        {primaryTab === 'DOMAIN_ROUTING' && (
+          <CustomDomainRoutingPanel tenantId={profile?.tenantId} />
+        )}
+
+        {/* TAB 4: BILLING */}
         {primaryTab === 'BILLING' && (
           <div className="animate-in fade-in duration-200">
             <BillingScreen />
@@ -866,6 +902,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
           { id: 'DEPARTMENTS', label: 'Departments', icon: Layers },
           { id: 'TERMINALS', label: 'Kiosk Terminals', icon: ScanFace },
           { id: 'EWA', label: 'Earned Wage Access', icon: IndianRupee },
+          { id: 'EXPENSE_LIMITS', label: 'Expense Policy Limits', icon: Receipt },
           { id: 'WHATSAPP', label: 'WhatsApp Bridge', icon: MessageSquare },
           { id: 'ACCESSIBILITY', label: 'Field Mode & Accessibility', icon: Sun },
           { id: 'GENERAL', label: 'Break & Liveness Rules', icon: Coffee },
@@ -3694,6 +3731,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ mode = 'PRIMARY'
             </div>
           </div>
         </div>
+      )}
+
+      {/* ======================= EXPENSE POLICY LIMITS TAB ======================= */}
+      {activeTab === 'EXPENSE_LIMITS' && settings && (
+        <ExpensePolicySettingsPanel
+          policy={getEffectiveExpensePolicy(settings)}
+          onChange={(nextPolicy) =>
+            setSettings((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    expensePolicy: {
+                      ...nextPolicy,
+                      updatedAt: new Date().toISOString(),
+                      updatedBy: profile?.name || profile?.email || 'Admin',
+                    },
+                  }
+                : null
+            )
+          }
+        />
       )}
 
       {/* ======================= WHATSAPP BRIDGE TAB (E11) ======================= */}

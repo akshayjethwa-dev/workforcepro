@@ -1,4 +1,5 @@
-import { InboxItem, InboxAuditEntry, InboxUrgency, InboxActionType, UserProfile, Role, Worker, Punch, AttendanceRecord, Advance, EwaTimelineStage, EwaDetails } from '../types/index';
+import { InboxItem, InboxAuditEntry, InboxUrgency, InboxActionType, UserProfile, Role, Worker, Punch, AttendanceRecord, Advance, EwaTimelineStage, EwaDetails, ExpenseRejectionReason, OrgSettings } from '../types/index';
+import type { TeamManagerEntry } from './expenseService';
 import { dbService } from './db';
 import { conflictService } from './conflictService';
 import { syncService } from './syncService';
@@ -76,6 +77,24 @@ export class InboxService {
   public removeDelegation(tenantId: string, managerId: string): void {
     const list = this.getDelegations(tenantId).filter(d => d.managerId !== managerId);
     localStorage.setItem(`${INBOX_DELEGATION_KEY}_${tenantId}`, JSON.stringify(list));
+  }
+
+  public getActiveDelegationForManager(
+    tenantId: string,
+    managerId: string,
+    referenceDate?: string
+  ): ManagerDelegation | null {
+    const today = referenceDate || new Date().toISOString().split('T')[0];
+    const normalizedMgr = managerId === 'demo-sup-1' ? 'demo-manager-uid' : managerId;
+    const found = this.getDelegations(tenantId).find((d) => {
+      if (!d.isActive) return false;
+      const dMgr = d.managerId === 'demo-sup-1' ? 'demo-manager-uid' : d.managerId;
+      if (dMgr !== normalizedMgr) return false;
+      if (d.startDate && today < d.startDate) return false;
+      if (d.endDate && today > d.endDate) return false;
+      return true;
+    });
+    return found || null;
   }
 
   /**
@@ -460,32 +479,65 @@ export class InboxService {
       console.warn('Could not sync overtime attendance into inbox', e);
     }
 
-    // 2.7 Sync submitted expense claims from expenseService into Manager Inbox
+    // 2.7 Sync submitted expense claims from expenseService into Manager Inbox with E300-R routing
     try {
-      const { expenseService, getExpenseCategoryLabel } = await import('./expenseService');
+      const { expenseService, getExpenseCategoryLabel, hasPolicyWarning } = await import('./expenseService');
+      await expenseService.ensureSeededClaims(tenantId, workers);
+
+      const [team, orgSettings] = await Promise.all([
+        dbService.getTeam(tenantId).catch((): TeamManagerEntry[] => []),
+        dbService.getOrgSettings(tenantId).catch((): OrgSettings | null => null),
+      ]);
+      const activeDelegations = this.getDelegations(tenantId);
+
       const submittedClaims = expenseService
         .getClaimsForTenant(tenantId)
         .filter((c) => c.status === 'SUBMITTED');
-      for (const claim of submittedClaims) {
+
+      for (const rawClaim of submittedClaims) {
+        const claim = await expenseService.reevaluateClaimRouting(rawClaim, {
+          team,
+          orgSettings,
+          delegations: activeDelegations,
+        });
         const inboxId = `inbox-expense-${claim.id}`;
-        if (!items.some((i) => i.id === inboxId)) {
+        const existingIdx = items.findIndex((i) => i.id === inboxId);
+        const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
+        const hasPolicyWarn = hasPolicyWarning(claim);
+        const catLabel = getExpenseCategoryLabel(claim.category);
+        const expectedUrgency: InboxUrgency = isDup
+          ? 'URGENT'
+          : hasPolicyWarn || claim.amount > 1000
+          ? 'HIGH'
+          : 'NORMAL';
+
+        if (existingIdx === -1) {
           didMutate = true;
-          const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
-          const catLabel = getExpenseCategoryLabel(claim.category);
           items.unshift({
             id: inboxId,
             tenantId,
             branchId: claim.branchId,
+            approverId: claim.approverId,
+            approverName: claim.approverName,
+            assignedToRole: claim.approverRole || 'MANAGER',
+            assignedToUserId: claim.approverId,
+            delegateUserId: claim.routingRuleApplied === 'DELEGATED_ON_LEAVE' ? claim.approverId : undefined,
+            delegatedFromManagerId: claim.delegatedFromManagerId,
+            delegatedFromManagerName: claim.delegatedFromManagerName,
+            routingRuleApplied: claim.routingRuleApplied,
+            routingReason: claim.routingReason,
             actionType: 'EXPENSE_APPROVAL',
-            urgency: isDup ? 'URGENT' : claim.amount > 1000 ? 'HIGH' : 'NORMAL',
+            urgency: expectedUrgency,
             status: 'PENDING',
             workerId: claim.workerId,
             workerName: claim.workerName,
             workerPhone: claim.workerPhone,
             workerDesignation: claim.workerDesignation,
-            title: `${claim.workerName.split(' ')[0]} claimed ₹${claim.amount.toLocaleString('en-IN')} for ${catLabel}`,
+            title: `${claim.workerName} claimed ₹${claim.amount.toLocaleString('en-IN')} for ${catLabel}`,
             description: isDup
               ? `HIGH_RISK_DUPLICATE: Exact same receipt image was already submitted by ${claim.duplicateOfWorkerName || 'another worker'} on ${claim.duplicateOfExpenseDate || 'an earlier date'}.`
+              : claim.policyWarning
+              ? claim.policyWarning.bannerMessage
               : `${catLabel} receipt for ${claim.expenseDate} captured via live camera.`,
             timestamp: claim.syncedAt || claim.createdAt,
             amount: claim.amount,
@@ -495,6 +547,43 @@ export class InboxService {
               reason: `${catLabel} expense on ${claim.expenseDate}`,
             },
           });
+        } else if (items[existingIdx].status === 'PENDING') {
+          // Keep pending item's E300-R routing and POLICY_WARNING snapshot synchronized
+          const prev = items[existingIdx];
+          const prevWarnJson = JSON.stringify(prev.details?.expenseClaim?.policyWarning || null);
+          const nextWarnJson = JSON.stringify(claim.policyWarning || null);
+          if (
+            prev.approverId !== claim.approverId ||
+            prev.approverName !== claim.approverName ||
+            prev.routingRuleApplied !== claim.routingRuleApplied ||
+            prev.delegatedFromManagerId !== claim.delegatedFromManagerId ||
+            prev.urgency !== expectedUrgency ||
+            prevWarnJson !== nextWarnJson
+          ) {
+            didMutate = true;
+            items[existingIdx] = {
+              ...prev,
+              approverId: claim.approverId,
+              approverName: claim.approverName,
+              assignedToRole: claim.approverRole || 'MANAGER',
+              assignedToUserId: claim.approverId,
+              delegateUserId: claim.routingRuleApplied === 'DELEGATED_ON_LEAVE' ? claim.approverId : undefined,
+              delegatedFromManagerId: claim.delegatedFromManagerId,
+              delegatedFromManagerName: claim.delegatedFromManagerName,
+              routingRuleApplied: claim.routingRuleApplied,
+              routingReason: claim.routingReason,
+              urgency: expectedUrgency,
+              description: isDup
+                ? prev.description
+                : claim.policyWarning
+                ? claim.policyWarning.bannerMessage
+                : `${catLabel} receipt for ${claim.expenseDate} captured via live camera.`,
+              details: {
+                ...prev.details,
+                expenseClaim: claim,
+              },
+            };
+          }
         }
       }
     } catch (e) {
@@ -522,20 +611,45 @@ export class InboxService {
       return item;
     });
 
-    // 4. Filter by role and branch
+    // 4. Filter by role, E300-R approverId (for expense claims), delegation, and branch
+    const normalizeUid = (uid?: string) => (uid === 'demo-sup-1' ? 'demo-manager-uid' : uid || '');
     let filtered = items;
     if (profile && (profile.role === 'MANAGER' || profile.role === 'SUPERVISOR')) {
       const delegations = this.getDelegations(tenantId);
-      const isDelegatedToMe = delegations.some(d => d.delegateId === profile.uid && d.isActive);
+      const actorUid = normalizeUid(profile.uid);
+      const isDelegatedToMe = delegations.some(
+        (d) => normalizeUid(d.delegateId) === actorUid && d.isActive
+      );
       const assignedBranchId = profile.branchId || profile.assignedBranchIds?.[0];
-      
-      // If manager has a specific branch and is not covering delegation, scope to assigned branch
-      if (assignedBranchId && !isDelegatedToMe) {
-        filtered = items.filter(item => {
+
+      filtered = items.filter((item) => {
+        // Strict E300-R approverId filtering for Expense Claims:
+        // - Must match approverId (includes delegated claims routed to this manager while another manager is on leave)
+        // - Blocks self-expenses (workerId == approverId automatically routes to Tenant Admin)
+        if (item.actionType === 'EXPENSE_APPROVAL') {
+          if (item.status !== 'PENDING' && item.status !== 'WAITING_SYNC') {
+            return true;
+          }
+          const claim = item.details?.expenseClaim;
+          const itemApproverId = normalizeUid(item.approverId || claim?.approverId);
+          const itemWorkerId = normalizeUid(item.workerId);
+          const submitterId = normalizeUid(claim?.submittedByUserId);
+
+          if (actorUid && (itemWorkerId === actorUid || (submitterId && submitterId === actorUid))) {
+            return false;
+          }
+          if (itemApproverId) {
+            return itemApproverId === actorUid;
+          }
+        }
+
+        // Standard branch-scoping for other operational alerts
+        if (assignedBranchId && !isDelegatedToMe) {
           const itemBranchId = item.details?.attendanceRecord?.branchId;
           return !itemBranchId || itemBranchId === assignedBranchId;
-        });
-      }
+        }
+        return true;
+      });
     }
 
     // Separate into pending vs done
@@ -569,7 +683,12 @@ export class InboxService {
     tenantId: string,
     action: 'APPROVE' | 'REJECT' | 'RESOLVE',
     resolvedBy: string,
-    notes?: string
+    notes?: string,
+    options?: {
+      actorProfile?: UserProfile | null;
+      rejectionReasonCategory?: ExpenseRejectionReason;
+      overrideNote?: string;
+    }
   ): Promise<InboxItem | null> {
     const items = this.getStoredItems(tenantId);
     const itemIndex = items.findIndex(i => i.id === itemId);
@@ -581,15 +700,97 @@ export class InboxService {
       throw new Error('This item cannot be resolved while waiting for offline local sync.');
     }
 
-    const resolvedStatus = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'RESOLVED';
     const nowIso = new Date().toISOString();
+    let resultingStatus: string | undefined;
+    const cleanOverrideNote = options?.overrideNote?.trim() || undefined;
+
+    // Pre-validate Expense Claim rules (self-approval block -> Tenant Admin, POLICY_WARNING mandatory override note, mandatory rejection reason, PENDING_FINANCE transition)
+    if (targetItem.actionType === 'EXPENSE_APPROVAL' && targetItem.details?.expenseClaim) {
+      const {
+        expenseService,
+        isSelfExpenseClaim,
+        getTenantAdminInfo,
+        hasPolicyWarning,
+      } = await import('./expenseService');
+      const claim = targetItem.details.expenseClaim;
+      const actor = options?.actorProfile;
+
+      if (action === 'APPROVE' && actor) {
+        const isAdminOrSuper =
+          actor.role === 'TENANT_ADMIN' ||
+          actor.role === 'FACTORY_OWNER' ||
+          actor.role === 'SUPER_ADMIN';
+
+        if (!isAdminOrSuper && isSelfExpenseClaim(claim, actor)) {
+          const escalated = expenseService.escalateSelfExpenseToTenantAdmin(tenantId, claim.id);
+          const tenantAdmin = getTenantAdminInfo(tenantId);
+          items[itemIndex] = {
+            ...targetItem,
+            approverId: tenantAdmin.uid,
+            approverName: tenantAdmin.name,
+            assignedToRole: 'TENANT_ADMIN',
+            assignedToUserId: tenantAdmin.uid,
+            routingRuleApplied: 'SELF_APPROVAL_ESCALATED_TO_ADMIN',
+            routingReason: `Self-approval blocked (workerId == approverId): auto-routed to ${tenantAdmin.name}.`,
+            details: {
+              ...targetItem.details,
+              expenseClaim: escalated || claim,
+            },
+          };
+          this.saveStoredItems(tenantId, items);
+          throw new Error(
+            'Self-approval blocked: You cannot approve your own expense claim. It has been automatically routed to the Tenant Admin.'
+          );
+        }
+      }
+
+      if (action === 'APPROVE' && hasPolicyWarning(claim) && !cleanOverrideNote) {
+        throw new Error(
+          'Mandatory override note required: This claim exceeds the daily category limit (POLICY_WARNING). Please enter an override note to approve.'
+        );
+      }
+
+      if (action === 'REJECT') {
+        const reasonText = (notes || options?.rejectionReasonCategory || '').trim();
+        if (!reasonText) {
+          throw new Error('Please select a rejection reason from the dropdown before rejecting this expense claim.');
+        }
+      }
+
+      const nextExpenseStatus = action === 'APPROVE' ? 'PENDING_FINANCE' : 'REJECTED';
+      const updatedClaim = expenseService.updateExpenseClaimResolution(
+        tenantId,
+        claim.id,
+        nextExpenseStatus,
+        resolvedBy,
+        notes,
+        {
+          actorProfile: actor,
+          rejectionReasonCategory: options?.rejectionReasonCategory,
+          overrideNote: cleanOverrideNote,
+        }
+      );
+      if (updatedClaim) {
+        targetItem.details = {
+          ...targetItem.details,
+          expenseClaim: updatedClaim,
+        };
+      }
+      resultingStatus = nextExpenseStatus;
+    }
+
+    const resolvedStatus = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'RESOLVED';
+    const effectiveNotes =
+      cleanOverrideNote && action === 'APPROVE'
+        ? `Policy Override: ${cleanOverrideNote}${notes ? ` (${notes})` : ''}`
+        : notes;
 
     targetItem.status = resolvedStatus;
     targetItem.resolution = {
       action,
       resolvedBy,
       resolvedAt: nowIso,
-      notes
+      notes: effectiveNotes,
     };
 
     items[itemIndex] = targetItem;
@@ -604,7 +805,14 @@ export class InboxService {
       action,
       resolvedBy,
       resolvedAt: nowIso,
-      notes: notes || `One-tap ${action.toLowerCase()} by ${resolvedBy}`
+      notes:
+        effectiveNotes ||
+        (resultingStatus === 'PENDING_FINANCE'
+          ? `Approved by ${resolvedBy} — status changed to PENDING_FINANCE`
+          : `One-tap ${action.toLowerCase()} by ${resolvedBy}`),
+      resultingStatus,
+      rejectionReason: action === 'REJECT' ? options?.rejectionReasonCategory || notes : undefined,
+      policyOverrideNote: action === 'APPROVE' ? cleanOverrideNote : undefined,
     });
 
     // If it's linked to an advance or conflict, reflect in the underlying service
@@ -650,19 +858,6 @@ export class InboxService {
         }
       } catch (e) {
         console.warn('DB advance status update error:', e);
-      }
-    } else if (targetItem.actionType === 'EXPENSE_APPROVAL' && targetItem.details?.expenseClaim) {
-      try {
-        const { expenseService } = await import('./expenseService');
-        expenseService.updateExpenseClaimResolution(
-          tenantId,
-          targetItem.details.expenseClaim.id,
-          action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
-          resolvedBy,
-          notes
-        );
-      } catch (e) {
-        console.warn('Expense claim status update error:', e);
       }
     } else if (targetItem.actionType === 'CONFLICT_RESOLUTION' && targetItem.details?.conflict) {
       try {

@@ -1,4 +1,4 @@
-import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig, ActiveLoan } from '../types/index';
+import { Worker, AttendanceRecord, DailyWageRecord, MonthlyPayroll, Advance, OrgSettings, WageConfig, ActiveLoan, PayslipReimbursementLineItem } from '../types/index';
 import { attendanceLogic } from './attendanceLogic'; 
 import { statutoryEngine } from './statutoryEngine';
 import { validateWorkerWageStructure } from './wageStructureValidationService';
@@ -8,6 +8,14 @@ import {
   normalizeFlexibleDateString,
 } from './gratuityService';
 import { computeWorkerLoanRecoveries } from './PayrollEngine';
+
+export interface PayrollExpenseIntegrationOptions {
+  taxableExpenseAdditions?: number;
+  taxableExpenseItems?: PayslipReimbursementLineItem[];
+  taxFreeReimbursements?: number;
+  reimbursementItems?: PayslipReimbursementLineItem[];
+  expenseClaimIds?: string[];
+}
 
 export const ensureWageConfig = (worker: Worker): WageConfig => {
   const isMonthly = (worker as any).wageType === 'MONTHLY' || 
@@ -181,7 +189,8 @@ export const wageService = {
     attendanceRecords: AttendanceRecord[],
     advances: Advance[],
     orgSettings: OrgSettings,
-    activeLoans?: ActiveLoan[]
+    activeLoans?: ActiveLoan[],
+    expenseOptions?: PayrollExpenseIntegrationOptions
   ): MonthlyPayroll => {
     const config = ensureWageConfig(worker);
     const [yearStr, monthStr] = month.split('-');
@@ -419,18 +428,30 @@ export const wageService = {
       earnedPackageExcluded = round2(totalBasic - earnedWageBase);
     }
 
-    const totalEarnedAllowances = round2(earnedPackageExcluded + totalAllowances);
+    // Finance-flagged TAXABLE expenses (e.g., Gift/Bonus) are added into Gross Taxable Salary BEFORE statutory/tax computation.
+    // Tax-free reimbursements are strictly EXCLUDED from Gross Taxable Salary and added AFTER Net Salary is calculated.
+    const taxableExpenseAdditions = round2(Math.max(0, expenseOptions?.taxableExpenseAdditions || 0));
+    const taxableExpenseItems = expenseOptions?.taxableExpenseItems || [];
+    const taxFreeReimbursements = round2(Math.max(0, expenseOptions?.taxFreeReimbursements || 0));
+    const reimbursementItems = expenseOptions?.reimbursementItems || [];
+    const expenseClaimIds = expenseOptions?.expenseClaimIds || [];
+
+    const totalEarnedAllowances = round2(
+      earnedPackageExcluded + totalAllowances + taxableExpenseAdditions
+    );
+    const taxableGross = round2(gross + taxableExpenseAdditions);
 
     const joinedInThisMonth = Boolean(joiningDate && joiningDate.startsWith(month) && parseInt(joiningDate.slice(8, 10), 10) > 1);
     const contractualRateForMonth = usePreviousStructure && worker.previousWageAmount && worker.previousWageAmount > 0
       ? worker.previousWageAmount
       : (isMonthly ? config.amount : config.amount * (config.workingDaysPerMonth || 26));
 
-    // Compute Indian Statutory Deductions (PF, ESI, State PT, LWF, TDS) with 50% Rule Add-Back
+    // Compute Indian Statutory Deductions (PF, ESI, State PT, LWF, TDS) strictly on Gross Taxable Salary
+    // (excludes Tax-Free Reimbursements; includes Finance-flagged Taxable Expense Perks)
     const statutoryResult = statutoryEngine.computeStatutoryDeductions(
       worker,
       earnedWageBase,
-      gross,
+      taxableGross,
       totalOTPay,
       totalEarnedAllowances,
       month,
@@ -524,10 +545,14 @@ export const wageService = {
       negativeLeaveDeduction +
       loanRecoveryResult.totalLoanRecovery;
 
-    // Carry Forward Logic (If Advances & Deductions taken exceed Gross Earned)
-    const rawNetPayable = gross - totalDeductions;
-    const carriedForwardAdvance = rawNetPayable < 0 ? Math.abs(rawNetPayable) : 0;
-    const regularNetPayable = rawNetPayable < 0 ? 0 : rawNetPayable;
+    // Net Salary (after deductions & statutory taxes, BEFORE tax-free reimbursements)
+    const rawSalaryNetPay = round2(taxableGross - totalDeductions);
+    const hasExpenseReimbursements = taxFreeReimbursements > 0 || taxableExpenseAdditions > 0;
+    const salaryNetPay = hasExpenseReimbursements
+      ? rawSalaryNetPay
+      : rawSalaryNetPay < 0
+      ? 0
+      : rawSalaryNetPay;
 
     // Task 4 & Automated FnF Trigger: Full & Final (FnF) Settlement Integration
     const savedFnf = getSyncFnfSettlementForWorkerMonth(worker.tenantId, worker.id, month);
@@ -578,7 +603,20 @@ export const wageService = {
       };
     }
 
-    const finalNetPayable = regularNetPayable + gratuitySettlement;
+    // Total Salary (Net) + Total Reimbursements (Tax-Free) + Gratuity = Net Payout
+    // Edge Case: Allow negative net payout when deductions exceed salary + reimbursements, and flag when expenses exceed salary.
+    const finalNetPayable = round2(salaryNetPay + gratuitySettlement + taxFreeReimbursements);
+    const carriedForwardAdvance =
+      hasExpenseReimbursements
+        ? finalNetPayable < 0
+          ? round2(Math.abs(finalNetPayable))
+          : 0
+        : rawSalaryNetPay < 0
+        ? round2(Math.abs(rawSalaryNetPay))
+        : 0;
+    const isNegativeNetPayout = finalNetPayable < 0;
+    const expenseExceedsSalary =
+      taxFreeReimbursements > 0 && taxFreeReimbursements > Math.max(0, salaryNetPay);
 
     return {
       id: `payroll_${worker.id}_${month}`,
@@ -611,7 +649,7 @@ export const wageService = {
             food: 0,
             other: parseFloat(totalEarnedAllowances.toFixed(2))
         },
-        gross: parseFloat(gross.toFixed(2))
+        gross: parseFloat(taxableGross.toFixed(2))
       },
       deductions: {
         advances: advanceTotal,
@@ -629,6 +667,22 @@ export const wageService = {
       wageStructureAudit: structAudit,
       wageComplianceAudit: statutoryResult.wageComplianceAudit,
       ...(gratuitySettlement > 0 ? { gratuitySettlement: parseFloat(gratuitySettlement.toFixed(2)) } : {}),
+      salaryNetPay: parseFloat(salaryNetPay.toFixed(2)),
+      ...(taxableExpenseAdditions > 0
+        ? {
+            taxableExpenseAdditions: parseFloat(taxableExpenseAdditions.toFixed(2)),
+            taxableExpenseItems,
+          }
+        : {}),
+      ...(taxFreeReimbursements > 0
+        ? {
+            expenseReimbursements: parseFloat(taxFreeReimbursements.toFixed(2)),
+            reimbursementItems,
+          }
+        : {}),
+      ...(expenseClaimIds.length > 0 ? { expenseClaimIds } : {}),
+      ...(expenseExceedsSalary ? { expenseExceedsSalary: true } : {}),
+      ...(isNegativeNetPayout ? { isNegativeNetPayout: true } : {}),
       ...(fnfSummary ? { fnfSummary } : {}),
       netPayable: parseFloat(finalNetPayable.toFixed(2)),
       carriedForwardAdvance: parseFloat(carriedForwardAdvance.toFixed(2)),
@@ -642,7 +696,8 @@ export const wageService = {
     attendanceRecords: AttendanceRecord[],
     advances: Advance[],
     orgSettings: OrgSettings,
-    activeLoans?: ActiveLoan[]
+    activeLoans?: ActiveLoan[],
+    expenseOptions?: PayrollExpenseIntegrationOptions
   ): MonthlyPayroll => {
     return wageService.generateMonthlyPayroll(
       worker,
@@ -650,7 +705,8 @@ export const wageService = {
       attendanceRecords,
       advances,
       orgSettings,
-      activeLoans
+      activeLoans,
+      expenseOptions
     );
   }
 };

@@ -110,7 +110,8 @@ export const WorkersScreen: React.FC<Props> = ({ onAddWorker, onEditWorker, onNa
             dbService.getAttendanceHistory(tenantId),
             dbService.getAdvances(tenantId),
             getFnfSettlements(tenantId),
-            dbService.getActiveLoans(tenantId)
+            dbService.getActiveLoans(tenantId),
+            magicLinkService.fetchTokensForTenantFromFirestore(tenantId).catch(() => []),
         ]);
         setWorkers(workersData);
         setSettings(settingsData);

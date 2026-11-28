@@ -41,6 +41,7 @@ import { FnfDeadlineBadge } from '../components/FnfDeadlineBadge';
 import { FnfLegalHoldModal } from '../components/FnfLegalHoldModal';
 import { TruncatedText } from '../components/TruncatedText';
 import { ResponsiveDataTable, ResponsiveColumn } from '../components/ResponsiveDataTable';
+import { expenseService } from '../services/expenseService';
 
 interface PayrollScreenProps {
   onNavigate?: (screen: ScreenName) => void;
@@ -59,6 +60,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
   const [savedPayrolls, setSavedPayrolls] = useState<MonthlyPayroll[]>([]); 
   const [siteAddress, setSiteAddress] = useState<string>(''); 
   const [settings, setSettings] = useState<OrgSettings | null>(null);
+  const [expenseRevision, setExpenseRevision] = useState(0);
   
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -199,11 +201,16 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         dbService.getActiveLoans(profile.tenantId).then(setActiveLoans).catch(() => {});
       }
     };
+    const handleExpenseClaimsChanged = () => {
+      setExpenseRevision((r) => r + 1);
+    };
     window.addEventListener('punchConflictsChanged', handleConflictsChanged);
     window.addEventListener('activeLoansChanged', handleActiveLoansChanged);
+    window.addEventListener('expenseClaimsChanged', handleExpenseClaimsChanged);
     return () => {
       window.removeEventListener('punchConflictsChanged', handleConflictsChanged);
       window.removeEventListener('activeLoansChanged', handleActiveLoansChanged);
+      window.removeEventListener('expenseClaimsChanged', handleExpenseClaimsChanged);
     };
   }, [profile?.tenantId, currentMonthStr]);
 
@@ -212,16 +219,79 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
     [activeLoans, currentMonthStr]
   );
 
+  // Finance-APPROVED expense reimbursements strictly eligible for this regular payroll month
+  const approvedExpenseSummary = useMemo(() => {
+    if (!profile?.tenantId) {
+      return {
+        byWorker: new Map<
+          string,
+          {
+            totalAmount: number;
+            taxFreeTotal: number;
+            taxableTotal: number;
+            claims: any[];
+            taxFreeClaims: any[];
+            taxableClaims: any[];
+          }
+        >(),
+        totalAmount: 0,
+        taxFreeTotal: 0,
+        taxableTotal: 0,
+        claimCount: 0,
+        taxableCount: 0,
+        pendingFinanceCount: 0,
+      };
+    }
+    const byWorker = expenseService.getApprovedPayrollReimbursementsByWorker(
+      profile.tenantId,
+      currentMonthStr,
+      workers
+    );
+    let totalAmount = 0;
+    let taxFreeTotal = 0;
+    let taxableTotal = 0;
+    let claimCount = 0;
+    let taxableCount = 0;
+    byWorker.forEach((entry) => {
+      totalAmount += entry.totalAmount;
+      taxFreeTotal += entry.taxFreeTotal;
+      taxableTotal += entry.taxableTotal;
+      claimCount += entry.claims.length;
+      taxableCount += entry.taxableClaims.length;
+    });
+    const pendingFinanceCount = expenseService.getPendingFinanceCount(profile.tenantId);
+    return {
+      byWorker,
+      totalAmount,
+      taxFreeTotal,
+      taxableTotal,
+      claimCount,
+      taxableCount,
+      pendingFinanceCount,
+    };
+  }, [profile?.tenantId, currentMonthStr, workers, expenseRevision]);
+
   const payrolls = useMemo(() => {
     if (!profile?.tenantId || workers.length === 0) return [];
-    
+    // Reference expenseRevision so recalculation triggers whenever Finance approves or reclassifies claims
+    void expenseRevision;
+
     return workers.map(worker => {
       const alreadySaved = savedPayrolls.find(p => p.workerId === worker.id);
-      // Only preserve historical snapshots if officially marked PAID or LOCKED with valid wages
-      if (alreadySaved && (alreadySaved.status === 'PAID' || alreadySaved.status === 'LOCKED') && alreadySaved.earnings?.gross > 0) {
+      // Only preserve historical snapshots if officially marked PAID or LOCKED with valid wages or reimbursements
+      if (
+        alreadySaved &&
+        (alreadySaved.status === 'PAID' || alreadySaved.status === 'LOCKED') &&
+        (alreadySaved.earnings?.gross > 0 ||
+          (alreadySaved.expenseReimbursements || 0) > 0 ||
+          alreadySaved.isNegativeNetPayout)
+      ) {
         return alreadySaved;
       }
 
+      // PayrollEngine authoritatively queries APPROVED expense claims for the pay period:
+      // - Tax-Free claims added after Net Salary under "Reimbursements (Tax-Free)"
+      // - Finance-flagged TAXABLE claims added into Gross Taxable Salary
       return PayrollEngine.calculateMonthlyPayroll(
         worker,
         currentMonthStr,
@@ -231,7 +301,7 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         activeLoans
       );
     });
-  }, [workers, currentMonthStr, attendanceHistory, advances, activeLoans, settings, savedPayrolls, profile]);
+  }, [workers, currentMonthStr, attendanceHistory, advances, activeLoans, settings, savedPayrolls, profile, expenseRevision]);
 
   const handleMarkAsPaid = async (payroll: MonthlyPayroll, e: React.MouseEvent) => {
     e.stopPropagation(); 
@@ -263,9 +333,30 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
 
     try {
       await dbService.saveMonthlyPayroll(updated);
+      // Automatically transition this worker's APPROVED expense claims for the pay period to PAID
+      const paidExpenseResult = PayrollEngine.finalizePayrollExpenseClaims(
+        profile.tenantId,
+        currentMonthStr,
+        profile.name || profile.email || 'Admin',
+        {
+          workerIds: [payroll.workerId],
+          payrollIdByWorker: { [payroll.workerId]: updated.id },
+          workers,
+        }
+      );
       const refreshedAudits = await dbService.getWageComplianceAudits(profile.tenantId, currentMonthStr);
       setSavedAudits(refreshedAudits);
-      toast.success(`Marked ₹${payroll.netPayable.toLocaleString()} as paid for ${payroll.workerName}`);
+      const formattedPayout =
+        payroll.netPayable < 0
+          ? `-₹${Math.abs(payroll.netPayable).toLocaleString('en-IN')}`
+          : `₹${payroll.netPayable.toLocaleString('en-IN')}`;
+      const paidClaimNote =
+        paidExpenseResult.paidClaims.length > 0
+          ? ` (${paidExpenseResult.paidClaims.length} expense claim${
+              paidExpenseResult.paidClaims.length === 1 ? '' : 's'
+            } marked PAID)`
+          : '';
+      toast.success(`Marked ${formattedPayout} as paid for ${payroll.workerName}${paidClaimNote}`);
     } catch (err) {
       console.error(err);
       toast.error("Failed to save payout status. Check Firestore permissions.");
@@ -487,20 +578,42 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
         updatedList.push(enriched);
       }
       setSavedPayrolls(updatedList);
+      // Automatically mark all included APPROVED expense claims as PAID when payroll is finalized
+      const payrollIdByWorker: Record<string, string> = {};
+      updatedList.forEach((p) => {
+        payrollIdByWorker[p.workerId] = p.id;
+      });
+      const paidExpenses = PayrollEngine.finalizePayrollExpenseClaims(
+        profile.tenantId,
+        currentMonthStr,
+        profile.name || profile.email || 'Admin',
+        {
+          workerIds: updatedList.map((p) => p.workerId),
+          payrollIdByWorker,
+          workers,
+        }
+      );
       const refreshedAudits = await dbService.getWageComplianceAudits(profile.tenantId, currentMonthStr);
       setSavedAudits(refreshedAudits);
       setIsFinalizationModalOpen(false);
 
+      const paidClaimsSuffix =
+        paidExpenses.paidClaims.length > 0
+          ? ` ${paidExpenses.paidClaims.length} approved expense claim${
+              paidExpenses.paidClaims.length === 1 ? '' : 's'
+            } updated to PAID.`
+          : '';
+
       if (isRetrospectivePeriod) {
         toast.info(
-          `Retrospective payroll finalized for ${currentMonthStr} using prior-period statutory rules.`
+          `Retrospective payroll finalized for ${currentMonthStr} using prior-period statutory rules.${paidClaimsSuffix}`
         );
       } else if (validation.hasFlaggedWorkers) {
         toast.warning(
-          `Payroll finalized with ${validation.nonCompliantCount} wage structure adjustment(s).`
+          `Payroll finalized with ${validation.nonCompliantCount} wage structure adjustment(s).${paidClaimsSuffix}`
         );
       } else {
-        toast.success(`Payroll finalized for ${currentMonthStr} — all workers compliant!`);
+        toast.success(`Payroll finalized for ${currentMonthStr} — all workers compliant!${paidClaimsSuffix}`);
       }
     } catch (err: any) {
       toast.error(`Failed to finalize payroll: ${err.message}`);
@@ -578,17 +691,39 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
       }
 
       setSavedPayrolls(Array.from(updatedByWorker.values()));
+      // Automatically mark all included APPROVED expense claims as PAID when payroll run is finalized
+      const payrollIdByWorker: Record<string, string> = {};
+      eligiblePayrolls.forEach((p) => {
+        payrollIdByWorker[p.workerId] = p.id;
+      });
+      const paidExpenses = PayrollEngine.finalizePayrollExpenseClaims(
+        profile.tenantId,
+        currentMonthStr,
+        profile.name || profile.email || 'Admin',
+        {
+          workerIds: eligiblePayrolls.map((p) => p.workerId),
+          payrollIdByWorker,
+          workers: activeWorkers,
+        }
+      );
       setPausedBankWorkerIds(options?.skipMissingBank ? Array.from(missingBankIds) : []);
       setIsMissingBankModalOpen(false);
       setPayslipsJustGenerated(true);
 
+      const paidClaimsSuffix =
+        paidExpenses.paidClaims.length > 0
+          ? ` ${paidExpenses.paidClaims.length} approved expense claim${
+              paidExpenses.paidClaims.length === 1 ? '' : 's'
+            } marked PAID.`
+          : '';
+
       if (options?.skipMissingBank && missingBankList.length > 0) {
         toast.success(
-          `Generated payslips for ${eligiblePayrolls.length} ready worker${eligiblePayrolls.length === 1 ? '' : 's'}. ${missingBankList.length} worker${missingBankList.length === 1 ? ' remains' : 's remain'} paused until bank details are added.`
+          `Generated payslips for ${eligiblePayrolls.length} ready worker${eligiblePayrolls.length === 1 ? '' : 's'}.${paidClaimsSuffix} ${missingBankList.length} worker${missingBankList.length === 1 ? ' remains' : 's remain'} paused until bank details are added.`
         );
       } else {
         toast.success(
-          `Payroll completed and ${eligiblePayrolls.length} payslip${eligiblePayrolls.length === 1 ? '' : 's'} generated for ${new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}!`
+          `Payroll completed and ${eligiblePayrolls.length} payslip${eligiblePayrolls.length === 1 ? '' : 's'} generated for ${new Date(currentMonthStr + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })}!${paidClaimsSuffix}`
         );
       }
     } catch (err: any) {
@@ -782,6 +917,69 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
           </button>
         </div>
       )}
+
+      {/* FINANCE-APPROVED EXPENSE REIMBURSEMENTS (TAX-FREE VS TAXABLE) BANNER */}
+      {!fetchError && (approvedExpenseSummary.claimCount > 0 || approvedExpenseSummary.pendingFinanceCount > 0) && (
+        <div className="bg-teal-50/80 border border-teal-200 rounded-2xl px-4 py-3.5 flex items-center justify-between gap-3 flex-wrap shadow-2xs">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <Landmark size={18} className="text-teal-700 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="text-xs sm:text-sm text-teal-950 space-y-0.5">
+              <div className="font-bold">
+                {approvedExpenseSummary.claimCount > 0
+                  ? `${approvedExpenseSummary.claimCount} Finance-APPROVED claim${
+                      approvedExpenseSummary.claimCount === 1 ? '' : 's'
+                    } ready for ${monthLabel}: ₹${approvedExpenseSummary.taxFreeTotal.toLocaleString('en-IN')} Tax-Free Reimbursements (post-tax)`
+                  : `No Finance-APPROVED expense claims ready for ${monthLabel} yet.`}
+                {approvedExpenseSummary.taxableTotal > 0 && (
+                  <span className="text-amber-800 ml-1.5">
+                    + ₹{approvedExpenseSummary.taxableTotal.toLocaleString('en-IN')} Flagged Taxable ({approvedExpenseSummary.taxableCount} added to Gross Taxable Salary)
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-teal-800">
+                Claims automatically update to <strong>PAID</strong> once payroll is finalized.
+                {approvedExpenseSummary.pendingFinanceCount > 0 && (
+                  <span>
+                    {' '}({approvedExpenseSummary.pendingFinanceCount} PENDING_FINANCE claim
+                    {approvedExpenseSummary.pendingFinanceCount === 1 ? '' : 's'} excluded until approved in Finance Dashboard.)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('FINANCE_DASHBOARD')}
+              className="px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+            >
+              <Lock size={13} />
+              <span>Finance Dashboard</span>
+              <ChevronRight size={14} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* NEGATIVE NET PAYOUT / EXPENSE EXCEEDS SALARY NOTICE */}
+      {!fetchError &&
+        payrolls.some((p) => p.isNegativeNetPayout || p.expenseExceedsSalary) && (
+          <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex items-start gap-2.5 text-xs text-amber-950">
+            <AlertTriangle size={16} className="text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <strong>High-Reimbursement / Negative Net Payout Notice:</strong>{' '}
+              {payrolls
+                .filter((p) => p.isNegativeNetPayout || p.expenseExceedsSalary)
+                .map((p) =>
+                  p.isNegativeNetPayout
+                    ? `${p.workerName} (Net Payout -₹${Math.abs(p.netPayable).toLocaleString('en-IN')})`
+                    : `${p.workerName} (Tax-free reimbursements ₹${(p.expenseReimbursements || 0).toLocaleString('en-IN')} exceed net salary)`
+                )
+                .join(' · ')}{' '}
+              — Permitted and itemized clearly on the payslip.
+            </div>
+          </div>
+        )}
 
       {fetchError && (
         <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-2xl flex items-start gap-3">
@@ -1866,23 +2064,53 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                 mobilePriority: true,
                 isHeaderMetric: true,
                 minWidth: 'min-w-[125px]',
-                render: (payroll) => (
-                  <div>
-                    <div className="font-extrabold text-sm text-slate-900">
-                      ₹{payroll.netPayable.toLocaleString('en-IN')}
-                    </div>
-                    {payroll.fnfSummary?.isFnF && (
-                      <div className="text-[10px] text-emerald-700 font-semibold">
-                        +FnF ₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
+                render: (payroll) => {
+                  const isNeg = payroll.netPayable < 0;
+                  const formattedNet = isNeg
+                    ? `-₹${Math.abs(payroll.netPayable).toLocaleString('en-IN')}`
+                    : `₹${payroll.netPayable.toLocaleString('en-IN')}`;
+                  return (
+                    <div>
+                      <div className={`font-extrabold text-sm ${isNeg ? 'text-rose-700' : 'text-slate-900'}`}>
+                        {formattedNet}
                       </div>
-                    )}
-                  </div>
-                ),
-                renderPriority: (payroll) => (
-                  <div className="font-extrabold text-xs text-slate-900">
-                    ₹{payroll.netPayable.toLocaleString('en-IN')}
-                  </div>
-                ),
+                      {(payroll.expenseReimbursements || 0) > 0 && (
+                        <div className="text-[10px] text-teal-700 font-semibold">
+                          +₹{(payroll.expenseReimbursements || 0).toLocaleString('en-IN')} Tax-Free
+                        </div>
+                      )}
+                      {(payroll.taxableExpenseAdditions || 0) > 0 && (
+                        <div className="text-[10px] text-amber-700 font-semibold">
+                          Incl. ₹{(payroll.taxableExpenseAdditions || 0).toLocaleString('en-IN')} Taxable Exp
+                        </div>
+                      )}
+                      {payroll.isNegativeNetPayout ? (
+                        <div className="text-[10px] text-rose-700 font-bold">
+                          Negative Net Payout
+                        </div>
+                      ) : payroll.expenseExceedsSalary ? (
+                        <div className="text-[10px] text-amber-700 font-bold">
+                          Expenses &gt; Salary
+                        </div>
+                      ) : null}
+                      {payroll.fnfSummary?.isFnF && (
+                        <div className="text-[10px] text-emerald-700 font-semibold">
+                          +FnF ₹{(payroll.gratuitySettlement ?? payroll.fnfSummary.gratuityPayable).toLocaleString('en-IN')}
+                        </div>
+                      )}
+                    </div>
+                  );
+                },
+                renderPriority: (payroll) => {
+                  const isNeg = payroll.netPayable < 0;
+                  return (
+                    <div className={`font-extrabold text-xs ${isNeg ? 'text-rose-700' : 'text-slate-900'}`}>
+                      {isNeg
+                        ? `-₹${Math.abs(payroll.netPayable).toLocaleString('en-IN')}`
+                        : `₹${payroll.netPayable.toLocaleString('en-IN')}`}
+                    </div>
+                  );
+                },
               },
               {
                 key: 'ctc',
@@ -1999,8 +2227,18 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                                 modalTitle="Payroll Worker Summary"
                                 subtitle={`${payroll.workerDesignation || 'Operator'} · ${currentMonthStr}`}
                                 details={[
-                                  { label: 'Net Payable', value: `₹${payroll.netPayable.toLocaleString('en-IN')}`, mono: true },
-                                  { label: 'Gross Wages', value: `₹${payroll.earnings.gross.toLocaleString('en-IN')}`, mono: true },
+                                  {
+                                    label: 'Net Payout',
+                                    value:
+                                      payroll.netPayable < 0
+                                        ? `-₹${Math.abs(payroll.netPayable).toLocaleString('en-IN')}`
+                                        : `₹${payroll.netPayable.toLocaleString('en-IN')}`,
+                                    mono: true,
+                                  },
+                                  { label: 'Gross Taxable Salary', value: `₹${payroll.earnings.gross.toLocaleString('en-IN')}`, mono: true },
+                                  ...((payroll.expenseReimbursements || 0) > 0
+                                    ? [{ label: 'Reimbursements (Tax-Free)', value: `+₹${(payroll.expenseReimbursements || 0).toLocaleString('en-IN')}`, mono: true }]
+                                    : []),
                                   { label: 'Payable Days', value: `${payroll.attendanceSummary.payableDays} days (${payroll.attendanceSummary.totalOvertimeHours}h OT)`, mono: true },
                                   { label: 'Status', value: payroll.status },
                                 ]}
@@ -2016,9 +2254,16 @@ export const PayrollScreen: React.FC<PayrollScreenProps> = ({ onNavigate }) => {
                         </div>
 
                         <div className="text-right shrink-0 ml-auto">
-                          <div className="text-fluid-lg font-extrabold font-mono tabular-nums text-slate-900">
-                            ₹{payroll.netPayable.toLocaleString('en-IN')}
+                          <div className={`text-fluid-lg font-extrabold font-mono tabular-nums ${payroll.netPayable < 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                            {payroll.netPayable < 0
+                              ? `-₹${Math.abs(payroll.netPayable).toLocaleString('en-IN')}`
+                              : `₹${payroll.netPayable.toLocaleString('en-IN')}`}
                           </div>
+                          {(payroll.expenseReimbursements || 0) > 0 && (
+                            <div className="text-[10px] font-semibold text-teal-700">
+                              +₹{(payroll.expenseReimbursements || 0).toLocaleString('en-IN')} Tax-Free
+                            </div>
+                          )}
                           <div className="text-fluid-2xs mt-0.5">
                             {payroll.status === 'PAID' ? (
                               <span className="text-emerald-700 font-semibold">· Disbursed</span>

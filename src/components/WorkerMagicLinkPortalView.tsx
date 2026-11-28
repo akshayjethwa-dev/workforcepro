@@ -7,7 +7,7 @@ import {
   Info, AlertCircle, RefreshCw, Lock, Send
 } from 'lucide-react';
 import { WorkerAccessToken, Worker, MonthlyPayroll, AttendanceRecord, ShiftConfig, OrgSettings, FnfSettlementRecord } from '../types/index';
-import { magicLinkService } from '../services/magicLinkService';
+import { magicLinkService, MagicLinkVerificationErrorCode } from '../services/magicLinkService';
 import { dbService } from '../services/db';
 import { scheduleValidationService } from '../services/scheduleValidationService';
 import { ctcSimulatorService } from '../services/ctcSimulatorService';
@@ -24,6 +24,12 @@ interface Props {
 export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogin }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<MagicLinkVerificationErrorCode | null>(null);
+  const [errorRevocationReason, setErrorRevocationReason] = useState<string | null>(null);
+  const [errorExpiresAt, setErrorExpiresAt] = useState<string | null>(null);
+  const [errorTokenMeta, setErrorTokenMeta] = useState<WorkerAccessToken | null>(null);
+  const [canRetryVerify, setCanRetryVerify] = useState<boolean>(false);
+  const [retryCount, setRetryCount] = useState<number>(0);
   const [tokenRecord, setTokenRecord] = useState<WorkerAccessToken | null>(null);
   const [worker, setWorker] = useState<Worker | null>(null);
   const [tenantWorkers, setTenantWorkers] = useState<Worker[]>([]);
@@ -46,17 +52,24 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   const [showPwaPrompt, setShowPwaPrompt] = useState<boolean>(true);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [isRevokedGracefully, setIsRevokedGracefully] = useState<boolean>(false);
+  const [revokedOverlayMessage, setRevokedOverlayMessage] = useState<string>('This link has expired. Contact your manager.');
   const [sendingRenewal, setSendingRenewal] = useState<boolean>(false);
   const [renewalSent, setRenewalSent] = useState<boolean>(false);
 
   const payslipRef = useRef<HTMLDivElement>(null);
+  const activeAttemptIdRef = useRef<number>(0);
 
   // Real-time lifecycle polling (within 60s of manager revocation - Edge Case 1)
   useEffect(() => {
     if (!token || error) return;
     const interval = setInterval(async () => {
       const st = await magicLinkService.checkTokenStatus(token);
-      if (!st.active) {
+      if (
+        !st.active &&
+        st.errorCode !== 'FIRESTORE_READ_ERROR' &&
+        st.errorCode !== 'NETWORK_TIMEOUT'
+      ) {
+        setRevokedOverlayMessage(st.error || 'This link has expired. Contact your manager.');
         setIsRevokedGracefully(true);
       }
     }, 10000); // 10s polling interval
@@ -65,20 +78,48 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
   }, [token, error]);
 
   useEffect(() => {
+    const attemptId = ++activeAttemptIdRef.current;
+
+    // 10-second loading timeout safeguard: never leave user on an infinite spinner or blank screen
+    const timeoutId = setTimeout(() => {
+      if (activeAttemptIdRef.current !== attemptId) return;
+      // Invalidate the stalled in-flight attempt so late responses cannot overwrite the timeout UI
+      activeAttemptIdRef.current += 1;
+      setError('Network error. Please check your connection.');
+      setErrorCode('NETWORK_TIMEOUT');
+      setCanRetryVerify(true);
+      setTokenRecord(null);
+      setLoading(false);
+    }, 10000);
+
     async function loadPortalData() {
       setLoading(true);
       setError(null);
+      setErrorCode(null);
+      setErrorRevocationReason(null);
+      setErrorExpiresAt(null);
+      setErrorTokenMeta(null);
+      setCanRetryVerify(false);
 
       try {
-        // 1. Verify token & track device access
+        // 1. Verify token (localStorage first, Firestore magicLinks/{tokenHash} fallback) & track device access
         const verification = await magicLinkService.verifyAndTrackAccess(token);
+        if (activeAttemptIdRef.current !== attemptId) return;
+
         if (!verification.isValid || !verification.tokenRecord) {
           setError(verification.error || 'Invalid or expired magic link.');
+          setErrorCode(verification.errorCode || null);
+          setErrorRevocationReason(verification.revocationReason || null);
+          setErrorExpiresAt(verification.expiresAt || null);
+          setErrorTokenMeta(verification.tokenRecord || null);
+          setCanRetryVerify(Boolean(verification.canRetry));
+          setTokenRecord(null);
           setLoading(false);
           return;
         }
 
         const tRecord = verification.tokenRecord;
+        if (activeAttemptIdRef.current !== attemptId) return;
         setTokenRecord(tRecord);
         setIsFlaggedMultiDevice(verification.isFlagged || false);
         const upperScope = (tRecord.scope as string).toUpperCase();
@@ -99,8 +140,9 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
           }
         }
 
-        // 2. Load worker details
-        const allWorkers = await dbService.getWorkers(tRecord.tenantId);
+        // 2. Load worker details (safe fallback to hydrated tokenRecord if workers collection unreachable)
+        const allWorkers = await dbService.getWorkers(tRecord.tenantId).catch(() => [] as Worker[]);
+        if (activeAttemptIdRef.current !== attemptId) return;
         setTenantWorkers(allWorkers);
         const matchedWorker = allWorkers.find(w => w.id === tRecord.workerId);
         
@@ -148,6 +190,7 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
 
         // 4. Load Org Settings & Shifts
         const settings = await dbService.getOrgSettings(tRecord.tenantId).catch(() => null);
+        if (activeAttemptIdRef.current !== attemptId) return;
         setOrgSettings(settings);
 
         // 5. Load Scope Specific Data
@@ -155,6 +198,7 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
         
         // Load attendance history for this worker
         const attHistory = await dbService.getAttendanceHistory(tRecord.tenantId).catch(() => []);
+        if (activeAttemptIdRef.current !== attemptId) return;
         const workerAtt = attHistory.filter(a => a.workerId === tRecord.workerId && a.date.startsWith(month));
         setAttendance(workerAtt);
 
@@ -168,6 +212,7 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
 
         // Load payroll record
         const payrolls = await dbService.getPayrollsByMonth(tRecord.tenantId, month).catch(() => []);
+        if (activeAttemptIdRef.current !== attemptId) return;
         const workerPayroll = payrolls.find(p => p.workerId === tRecord.workerId);
         
         if (workerOffCyclePayrolls.length > 0 && !workerPayroll) {
@@ -228,20 +273,43 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
         }
 
       } catch (err: any) {
+        if (activeAttemptIdRef.current !== attemptId) return;
         console.error('Portal load failed:', err);
-        setError(err.message || 'Failed to open magic link.');
+        const msg = String(err?.message || '').toLowerCase();
+        const isNetTimeout =
+          msg.includes('timed out') || msg.includes('timeout') || msg.includes('network') || msg.includes('offline');
+        setError(
+          isNetTimeout
+            ? 'Network error. Please check your connection.'
+            : err?.message || 'Unable to verify link. Please try again.'
+        );
+        setErrorCode(isNetTimeout ? 'NETWORK_TIMEOUT' : 'FIRESTORE_READ_ERROR');
+        setCanRetryVerify(true);
       } finally {
-        setLoading(false);
+        clearTimeout(timeoutId);
+        if (activeAttemptIdRef.current === attemptId) {
+          setLoading(false);
+        }
       }
     }
 
     loadPortalData();
-  }, [token]);
+
+    return () => {
+      clearTimeout(timeoutId);
+      activeAttemptIdRef.current += 1;
+    };
+  }, [token, retryCount]);
 
   // Download / Print handler (Edge Case 1: verifies token active before proceeding)
   const handlePrint = async () => {
     const st = await magicLinkService.checkTokenStatus(token);
-    if (!st.active) {
+    if (
+      !st.active &&
+      st.errorCode !== 'FIRESTORE_READ_ERROR' &&
+      st.errorCode !== 'NETWORK_TIMEOUT'
+    ) {
+      setRevokedOverlayMessage(st.error || 'This link has expired. Contact your manager.');
       setIsRevokedGracefully(true);
       return;
     }
@@ -288,13 +356,14 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
     );
   }
 
-  // One-tap notification to manager when link expired (Key AC 7)
+  // One-tap notification to manager when link expired or revoked (Key AC 7)
   const handleAskManagerForNewLink = async () => {
     setSendingRenewal(true);
     try {
-      const tenantId = tokenRecord?.tenantId || 'demo-tenant-id';
-      const workerId = tokenRecord?.workerId || worker?.id || 'unknown-worker';
-      const workerName = tokenRecord?.workerName || worker?.name || 'Field Worker';
+      const meta = tokenRecord || errorTokenMeta;
+      const tenantId = meta?.tenantId || 'demo-tenant-id';
+      const workerId = meta?.workerId || worker?.id || 'unknown-worker';
+      const workerName = meta?.workerName || worker?.name || 'Field Worker';
       await magicLinkService.requestNewLinkNotification(workerId, tenantId, workerName);
       setRenewalSent(true);
     } catch (e) {
@@ -304,48 +373,113 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
     }
   };
 
-  // Render Error / Expired View
+  // Render Error / Inactive / Expired / Revoked / Network Timeout View (never a blank screen)
   if (error || !tokenRecord) {
+    const isNetworkTimeout = errorCode === 'NETWORK_TIMEOUT';
+    const isReadFailure = isNetworkTimeout || errorCode === 'FIRESTORE_READ_ERROR' || canRetryVerify;
+    const isRevokedError = errorCode === 'REVOKED';
+    const isExpiredError = errorCode === 'EXPIRED';
+
+    const errorHeading = isNetworkTimeout
+      ? 'Connection Timed Out'
+      : isReadFailure
+      ? 'Unable to Verify Link'
+      : 'Link Inactive or Expired';
+
+    const formattedExactErrorExpiry = errorExpiresAt
+      ? new Date(errorExpiresAt).toLocaleString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        })
+      : null;
+
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-xl border border-slate-100 text-center">
-          <div className="w-16 h-16 rounded-3xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4 border border-rose-100 shadow-sm">
-            <Lock size={28} />
+          <div
+            className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 border shadow-sm ${
+              isReadFailure
+                ? 'bg-amber-50 text-amber-600 border-amber-200'
+                : 'bg-rose-50 text-rose-600 border-rose-100'
+            }`}
+          >
+            {isReadFailure ? <AlertTriangle size={28} /> : <Lock size={28} />}
           </div>
-          <h2 className="text-lg sm:text-xl font-bold text-slate-900">Link Inactive or Expired</h2>
+          <h2 className="text-lg sm:text-xl font-bold text-slate-900">{errorHeading}</h2>
           <p className="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
-            {error || 'This magic link has expired or reached its maximum validity window.'}
+            {error ||
+              (isNetworkTimeout
+                ? 'Network error. Please check your connection.'
+                : 'This magic link has expired or reached its maximum validity window.')}
           </p>
 
+          {isExpiredError && formattedExactErrorExpiry && (
+            <div className="mt-4 p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-center justify-between gap-2 text-left">
+              <span className="font-semibold text-amber-800">Expired On:</span>
+              <span className="font-mono font-bold text-amber-950">{formattedExactErrorExpiry}</span>
+            </div>
+          )}
+
+          {isRevokedError && errorRevocationReason && (
+            <div className="mt-4 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-950 flex items-center justify-between gap-2 text-left">
+              <span className="font-semibold text-rose-800">Revocation Reason:</span>
+              <span className="font-bold capitalize text-rose-950">{errorRevocationReason}</span>
+            </div>
+          )}
+
           <div className="mt-5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs text-slate-500 text-left space-y-1">
-            <p className="font-semibold text-slate-700">🔒 Security Notice:</p>
-            <p>Magic links are time-limited to protect worker earnings and punch data.</p>
+            <p className="font-semibold text-slate-700">Security Notice:</p>
+            <p>
+              {isReadFailure
+                ? 'Verification took longer than expected or could not reach the server. Check your internet connection and tap Retry.'
+                : 'Magic links are time-limited and revocable to protect worker earnings and punch data.'}
+            </p>
           </div>
 
-          {/* ONE-TAP MANAGER RENEWAL NOTIFICATION (KEY AC 7) */}
-          <div className="mt-4">
-            {renewalSent ? (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center justify-center gap-2">
-                <CheckCircle2 size={16} className="text-emerald-600" />
-                <span>Request sent to manager's E3 Inbox!</span>
-              </div>
-            ) : (
+          {/* Retry button on timeout or Firestore read failure */}
+          {isReadFailure && (
+            <div className="mt-4">
               <button
                 type="button"
-                disabled={sendingRenewal}
-                onClick={handleAskManagerForNewLink}
+                onClick={() => setRetryCount((c) => c + 1)}
                 className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
-                {sendingRenewal ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
-                <span>Ask your manager for a new one</span>
+                <RefreshCw size={14} />
+                <span>Retry</span>
               </button>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* ONE-TAP MANAGER RENEWAL NOTIFICATION (KEY AC 7) */}
+          {!isReadFailure && (
+            <div className="mt-4">
+              {renewalSent ? (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center justify-center gap-2">
+                  <CheckCircle2 size={16} className="text-emerald-600" />
+                  <span>Request sent to manager&apos;s E3 Inbox!</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={sendingRenewal}
+                  onClick={handleAskManagerForNewLink}
+                  className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  {sendingRenewal ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
+                  <span>Ask your manager for a new one</span>
+                </button>
+              )}
+            </div>
+          )}
 
           {onExitToLogin && (
             <button
               onClick={onExitToLogin}
-              className="mt-3 w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-colors"
+              className="mt-3 w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-colors cursor-pointer"
             >
               Go to Manager Login
             </button>
@@ -365,9 +499,9 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
               <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4 border border-rose-100 shadow-sm">
                 <Lock size={28} />
               </div>
-              <h3 className="text-base sm:text-lg font-bold text-slate-900">This link has expired.</h3>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900">Link No Longer Active</h3>
               <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                This link has expired. Contact your manager.
+                {revokedOverlayMessage}
               </p>
               <div className="mt-5 p-3 rounded-xl bg-slate-50 text-[11px] text-slate-500 font-mono">
                 Status: ACCESS_REVOKED
@@ -403,9 +537,9 @@ export const WorkerMagicLinkPortalView: React.FC<Props> = ({ token, onExitToLogi
             <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-4 border border-rose-100 shadow-sm">
               <Lock size={28} />
             </div>
-            <h3 className="text-fluid-lg font-bold text-slate-900">This link has expired.</h3>
+            <h3 className="text-fluid-lg font-bold text-slate-900">Link No Longer Active</h3>
             <p className="text-fluid-xs text-slate-600 mt-2 leading-relaxed">
-              This link has expired. Contact your manager.
+              {revokedOverlayMessage}
             </p>
             <div className="mt-5 p-3 rounded-xl bg-slate-50 text-fluid-2xs text-slate-500 font-mono">
               Status: ACCESS_REVOKED

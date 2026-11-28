@@ -25,6 +25,7 @@ import { ReportsScreen } from './screens/ReportsScreen';
 import { BillingScreen } from './screens/BillingScreen';
 import { IdCardsScreen } from './screens/IdCardsScreen';
 import { InboxScreen } from './screens/inboxScreen';
+import { FinanceDashboardScreen } from './screens/FinanceDashboardScreen';
 import { RosterScreen } from './screens/RosterScreen';
 import { CtcSimulatorScreen } from './screens/CtcSimulatorScreen';
 import { GratuityScreen } from './screens/GratuityScreen';
@@ -41,8 +42,9 @@ import { useEntitlements } from './contexts/EntitlementContext';
 import { GracePeriodBanner } from './components/GracePeriodBanner';
 import { UpgradeRequiredView } from './components/UpgradeRequiredView';
 
-// SCOPED MAGIC LINK PORTAL
+// SCOPED MAGIC LINK PORTAL & GLOBAL ERROR BOUNDARY
 import { WorkerMagicLinkPortalView } from './components/WorkerMagicLinkPortalView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // MIGRATION WIZARD
 import { SetupWizardScreen } from './screens/SetupWizardScreen';
@@ -56,7 +58,50 @@ import {
   screenToPath,
 } from './services/rbacService';
 
-export const RootNavigator: React.FC = () => {
+/**
+ * Extracts a worker magic link token from any supported URL shape:
+ * - Custom domain / SPA path: /w/:token (including bare /w or /w/ for graceful error UI)
+ * - Query param fallback:     ?w=:token or ?token=:token
+ * - Hash fallback:            #/w/:token
+ */
+function extractMagicLinkRoute(
+  pathname: string,
+  search: string,
+  hash: string
+): { isMagicRoute: boolean; token: string | null } {
+  const params = new URLSearchParams(search);
+  const qToken = params.get('w') || params.get('token');
+  if (qToken && qToken.trim()) {
+    return { isMagicRoute: true, token: qToken.trim() };
+  }
+
+  const pathMatch = pathname.match(/^\/w\/([^/?#]+)\/?$/i);
+  if (pathMatch && pathMatch[1]) {
+    try {
+      return { isMagicRoute: true, token: decodeURIComponent(pathMatch[1]) };
+    } catch {
+      return { isMagicRoute: true, token: pathMatch[1] };
+    }
+  }
+
+  // Handle truncated/empty /w or /w/ paths gracefully instead of falling through to Login
+  if (/^\/w\/?$/i.test(pathname)) {
+    return { isMagicRoute: true, token: '' };
+  }
+
+  const hashMatch = hash.match(/#\/?w\/([^/?#]+)/i);
+  if (hashMatch && hashMatch[1]) {
+    try {
+      return { isMagicRoute: true, token: decodeURIComponent(hashMatch[1]) };
+    } catch {
+      return { isMagicRoute: true, token: hashMatch[1] };
+    }
+  }
+
+  return { isMagicRoute: false, token: null };
+}
+
+const RootNavigatorInner: React.FC = () => {
   const { user, activeRole, loading, logout, roleChangeEvent, clearRoleChangeEvent, profile } = useAuth();
   const { isEntitled } = useEntitlements();
   const { toast } = useToast();
@@ -71,21 +116,13 @@ export const RootNavigator: React.FC = () => {
   // so we only force the wizard on the first visit per tenant.
   const [migrationCheckedForTenant, setMigrationCheckedForTenant] = useState<string | null>(null);
 
-  // Magic Link Token State: parses /w/:token, ?w=:token, or #/w/:token
-  const [magicToken, setMagicToken] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-    const qToken = params.get('w') || params.get('token');
-    if (qToken) return qToken;
-
-    const pathMatch = window.location.pathname.match(/\/w\/([a-zA-Z0-9_-]+)/);
-    if (pathMatch) return pathMatch[1];
-
-    const hashMatch = window.location.hash.match(/#\/?w\/([a-zA-Z0-9_-]+)/);
-    if (hashMatch) return hashMatch[1];
-
-    return null;
-  });
+  // Reactive Magic Link Route Detection: works on initial custom-domain load AND client-side navigation
+  const magicRoute = React.useMemo(
+    () => extractMagicLinkRoute(location.pathname, location.search, location.hash),
+    [location.pathname, location.search, location.hash]
+  );
+  const magicToken = magicRoute.isMagicRoute ? magicRoute.token : null;
+  const isMagicLinkRoute = magicRoute.isMagicRoute;
 
   const [kioskConfig, setKioskConfig] = useState<KioskTerminal | null>(() => {
     const saved = localStorage.getItem('kiosk_config');
@@ -223,23 +260,27 @@ export const RootNavigator: React.FC = () => {
     return false;
   });
 
-  // Dedicated Scoped Worker Magic Link Portal (Universal Link / PWA)
-  if (magicToken) {
+  // Dedicated Scoped Worker Magic Link Portal (Custom Domain /w/:token, Universal Link, PWA)
+  if (isMagicLinkRoute) {
+    const handleExitMagicLink = () => {
+      if (typeof window !== 'undefined' && window.location.hash) {
+        window.history.replaceState({}, '', '/login');
+      }
+      navigate(user ? getDefaultPathForRole(activeRole) : '/login', { replace: true });
+    };
+
     return (
-      <WorkerMagicLinkPortalView
-        token={magicToken}
-        onExitToLogin={() => {
-          if (typeof window !== 'undefined') {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('w');
-            url.searchParams.delete('token');
-            const cleanPath = url.pathname.replace(/\/w\/[a-zA-Z0-9_-]+/, '');
-            window.history.replaceState({}, '', (cleanPath || '/') + (url.search ? url.search : ''));
-          }
-          setMagicToken(null);
-          navigate('/login', { replace: true });
-        }}
-      />
+      <ErrorBoundary
+        resetKey={magicToken ?? 'empty-magic-token'}
+        title="Link Inactive or Expired"
+        description="Something went wrong while opening this magic link. Please tap Retry or contact your manager for a new link."
+        onExitToLogin={handleExitMagicLink}
+      >
+        <WorkerMagicLinkPortalView
+          token={magicToken || ''}
+          onExitToLogin={handleExitMagicLink}
+        />
+      </ErrorBoundary>
     );
   }
 
@@ -426,8 +467,20 @@ export const RootNavigator: React.FC = () => {
       <Route
         path="/reports"
         element={
-          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'MANAGER']}>
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'FINANCE', 'MANAGER']}>
             {withShell(<ReportsScreen />)}
+          </RoleProtectedRoute>
+        }
+      />
+
+      {/* ================================================================
+          FINANCE VERIFICATION & LOCK ROUTE (TENANT_ADMIN + FINANCE)
+         ================================================================ */}
+      <Route
+        path="/finance"
+        element={
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'FINANCE']}>
+            {withShell(<FinanceDashboardScreen onNavigate={handleNavigate} />)}
           </RoleProtectedRoute>
         }
       />
@@ -507,7 +560,7 @@ export const RootNavigator: React.FC = () => {
       <Route
         path="/payroll"
         element={
-          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'FINANCE']}>
             {withShell(
               isEntitled('ADVANCED_PAYROLL') ? (
                 <PayrollScreen onNavigate={handleNavigate} />
@@ -557,7 +610,7 @@ export const RootNavigator: React.FC = () => {
       <Route
         path="/gratuity"
         element={
-          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN']}>
+          <RoleProtectedRoute allowedRoles={['TENANT_ADMIN', 'FINANCE']}>
             {withShell(<GratuityScreen onNavigate={handleNavigate} />)}
           </RoleProtectedRoute>
         }
@@ -645,7 +698,7 @@ export const RootNavigator: React.FC = () => {
       <Route
         path="/terms"
         element={
-          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'MANAGER', 'WORKER']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'FINANCE', 'MANAGER', 'WORKER']}>
             {withShell(<TermsScreen />)}
           </RoleProtectedRoute>
         }
@@ -653,7 +706,7 @@ export const RootNavigator: React.FC = () => {
       <Route
         path="/privacy"
         element={
-          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'MANAGER', 'WORKER']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'RESELLER', 'TENANT_ADMIN', 'FINANCE', 'MANAGER', 'WORKER']}>
             {withShell(<PrivacyScreen />)}
           </RoleProtectedRoute>
         }
@@ -662,5 +715,21 @@ export const RootNavigator: React.FC = () => {
       {/* Fallback for any unknown URL */}
       <Route path="*" element={<Navigate to={defaultHomePath} replace />} />
     </Routes>
+  );
+};
+
+export const RootNavigator: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  return (
+    <ErrorBoundary
+      resetKey={`${location.pathname}${location.search}`}
+      title="Something Went Wrong"
+      description="An unexpected error interrupted this screen. Tap Retry to reload the view."
+      onExitToLogin={() => navigate('/login', { replace: true })}
+    >
+      <RootNavigatorInner />
+    </ErrorBoundary>
   );
 };

@@ -286,7 +286,14 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
               <span>Explore as Tenant Admin (Owner)</span>
             </button>
 
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => loginDemo('FINANCE')}
+                className="py-2 px-2 bg-teal-50/80 hover:bg-teal-100/80 text-teal-900 border border-teal-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                Finance Admin
+              </button>
               <button
                 type="button"
                 onClick={() =>
@@ -295,14 +302,14 @@ export const LoginScreen: React.FC<Props> = ({ onNavigateToRegister, onKioskLogi
                     branchName: 'Main Branch (Head Office)',
                   })
                 }
-                className="py-2 px-2.5 bg-emerald-50/80 hover:bg-emerald-100/80 text-emerald-900 border border-emerald-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+                className="py-2 px-2 bg-emerald-50/80 hover:bg-emerald-100/80 text-emerald-900 border border-emerald-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
               >
                 Branch Manager
               </button>
               <button
                 type="button"
                 onClick={() => loginDemo('WORKER')}
-                className="py-2 px-2.5 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 border border-amber-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
+                className="py-2 px-2 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 border border-amber-200/80 rounded-xl text-[11px] font-semibold transition-colors cursor-pointer"
               >
                 Worker Portal
               </button>

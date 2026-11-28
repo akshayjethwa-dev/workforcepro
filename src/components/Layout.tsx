@@ -55,6 +55,7 @@ interface LayoutProps {
 const SCREEN_METADATA: Record<ScreenName, { title: string; category: string }> = {
   DASHBOARD: { title: 'Business Overview', category: 'Overview' },
   INBOX: { title: 'Action Inbox', category: 'Operations' },
+  FINANCE_DASHBOARD: { title: 'Finance Verification & Lock', category: 'Payroll & Wages' },
   WORKERS: { title: 'Workers Directory', category: 'Operations' },
   ADD_WORKER: { title: 'Worker Profile Editor', category: 'Operations' },
   ATTENDANCE: { title: 'Daily Attendance & Punch Logs', category: 'Operations' },

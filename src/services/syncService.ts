@@ -103,7 +103,7 @@ export const syncService = {
 
   // 4. Save a new punch or record to the offline queue immediately (Optimistic Local Write)
   async enqueueRecord(
-    entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE',
+    entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE' | 'MAGIC_LINK',
     recordId: string,
     tenantId: string,
     workerId: string,
@@ -113,6 +113,32 @@ export const syncService = {
     try {
       const db = await this.initDB();
       const now = new Date().toISOString();
+
+      // Deduplicate MAGIC_LINK queue entries by tokenHash (recordId) so retries never queue duplicates
+      if (entityType === 'MAGIC_LINK' && recordId) {
+        const existingItems = await this.getQueueItems();
+        const existing = existingItems.find(
+          (i) =>
+            i.entityType === 'MAGIC_LINK' &&
+            i.recordId === recordId &&
+            (i.syncStatus === 'PENDING_LOCAL' || i.syncStatus === 'SYNCING' || i.syncStatus === 'FAILED')
+        );
+        if (existing) {
+          const mergedItem: OfflineQueueItem = {
+            ...existing,
+            payload: {
+              ...(existing.payload || {}),
+              ...(payload || {}),
+              revoked: Boolean(existing.payload?.revoked || payload?.revoked),
+            },
+            syncStatus: 'PENDING_LOCAL',
+            lastError: undefined,
+            offlineTimestamp: now,
+          };
+          await this.updateItem(mergedItem);
+          return mergedItem;
+        }
+      }
 
       const newItem: Omit<OfflineQueueItem, 'id'> = {
         entityType,
@@ -372,6 +398,13 @@ export const syncService = {
             await this.updateItem(item);
             setTimeout(() => this.removeItem(item.id!), 2000);
             syncedCount++;
+          } else if (item.entityType === 'MAGIC_LINK') {
+            const { magicLinkService } = await import('./magicLinkService');
+            await magicLinkService.syncQueuedMagicLinkToFirestore(item.payload);
+            item.syncStatus = 'SYNCED';
+            await this.updateItem(item);
+            setTimeout(() => this.removeItem(item.id!), 2000);
+            syncedCount++;
           }
         } catch (error: any) {
           console.warn(`[SyncManager] Sync failed for item ${item.id}:`, error);
@@ -462,6 +495,9 @@ export const syncService = {
           syncStatus: 'SYNCED',
         };
         await dbService.markAttendance(payloadRecord);
+      } else if (item.entityType === 'MAGIC_LINK') {
+        const { magicLinkService } = await import('./magicLinkService');
+        await magicLinkService.syncQueuedMagicLinkToFirestore(item.payload);
       }
       await this.removeItem(id);
       return true;

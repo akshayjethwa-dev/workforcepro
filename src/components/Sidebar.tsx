@@ -43,6 +43,7 @@ import { useEntitlements } from '../contexts/EntitlementContext';
 import { ScreenName } from '../types/index';
 import { dbService } from '../services/db';
 import { inboxService } from '../services/inboxService';
+import { expenseService } from '../services/expenseService';
 import { auth } from '../lib/firebase';
 import { TruncatedText } from './TruncatedText';
 import { ROLE_METADATA } from '../services/rbacService';
@@ -74,6 +75,7 @@ export const Sidebar: React.FC<Props> = ({
   const isSuperAdmin = activeRole === 'SUPER_ADMIN';
   const isReseller = activeRole === 'RESELLER';
   const isTenantAdmin = activeRole === 'TENANT_ADMIN';
+  const isFinance = activeRole === 'FINANCE';
   const isManager = activeRole === 'MANAGER';
   const isWorker = activeRole === 'WORKER';
 
@@ -82,6 +84,7 @@ export const Sidebar: React.FC<Props> = ({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
+  const [pendingFinanceCount, setPendingFinanceCount] = useState(0);
 
   const ADVANCED_HR_SCREENS: ScreenName[] = [
     'ADVANCED_HR_SETTINGS',
@@ -113,6 +116,19 @@ export const Sidebar: React.FC<Props> = ({
       setInboxCount(0);
     }
   }, [profile?.tenantId, currentScreen, isTenantAdmin, profile]);
+
+  useEffect(() => {
+    const refreshFinanceCount = () => {
+      if (profile?.tenantId && (isTenantAdmin || isFinance)) {
+        setPendingFinanceCount(expenseService.getPendingFinanceCount(profile.tenantId));
+      } else {
+        setPendingFinanceCount(0);
+      }
+    };
+    refreshFinanceCount();
+    window.addEventListener('expenseClaimsChanged', refreshFinanceCount);
+    return () => window.removeEventListener('expenseClaimsChanged', refreshFinanceCount);
+  }, [profile?.tenantId, currentScreen, isTenantAdmin, isFinance]);
 
   const handleSupportClick = () => {
     const adminPhone = '918460852903';
@@ -333,6 +349,12 @@ export const Sidebar: React.FC<Props> = ({
               <NavItem icon={Users} label="Workers" screen="WORKERS" matchScreens={['WORKERS', 'ADD_WORKER']} />
               <NavItem icon={Clock} label="Attendance" screen="ATTENDANCE" />
               <NavItem
+                icon={Landmark}
+                label="Finance Dashboard"
+                screen="FINANCE_DASHBOARD"
+                badge={pendingFinanceCount > 0 ? `${pendingFinanceCount}` : undefined}
+              />
+              <NavItem
                 icon={IndianRupee}
                 label="Payroll"
                 screen="PAYROLL"
@@ -414,6 +436,32 @@ export const Sidebar: React.FC<Props> = ({
               )}
             </div>
           </>
+        )}
+
+        {/* ============================================================
+            FINANCE (Finance Admin): Expense Verification & Lock, Payroll, FnF, Reports
+           ============================================================ */}
+        {isFinance && (
+          <div className="space-y-1">
+            <div className="px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+              Finance &amp; Payroll Lock
+            </div>
+            <NavItem
+              icon={Landmark}
+              label="Finance Dashboard"
+              screen="FINANCE_DASHBOARD"
+              badge={pendingFinanceCount > 0 ? `${pendingFinanceCount}` : undefined}
+            />
+            <NavItem
+              icon={IndianRupee}
+              label="Payroll"
+              screen="PAYROLL"
+              locked={!isEntitled('ADVANCED_PAYROLL')}
+              availableOn="Pro"
+            />
+            <NavItem icon={Award} label="Gratuity & FnF" screen="GRATUITY" />
+            <NavItem icon={PieChart} label="Reports" screen="REPORTS" />
+          </div>
         )}
 
         {/* ============================================================

@@ -100,9 +100,12 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ initia
     setAuditLogs(logsData);
     setSoftDeletedTenants(softDeletedData);
     
-    // DPDP Subject-Access: Load all magic access tokens across tenants
-    const allTokens = magicLinkService.getAllTokens();
-    setDpdpTokens(allTokens);
+    // DPDP Subject-Access: Load cached tokens immediately, then hydrate from Firestore (source of truth)
+    setDpdpTokens(magicLinkService.getAllTokens());
+    magicLinkService
+      .fetchAllTokensFromFirestore()
+      .then((freshTokens) => setDpdpTokens(freshTokens))
+      .catch(() => {});
     
     const activeTenantsCount = tenantsData.filter(t => t.isActive).length;
     const grossMRR = activeTenantsCount * 500;
@@ -123,13 +126,14 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ initia
     setIsRevokingToken(true);
     try {
       await magicLinkService.revokeToken(
-        tokenToRevoke.token,
+        tokenToRevoke.tokenHash || tokenToRevoke.token,
         profile?.email || 'superadmin@workforcepro.app',
         revocationReason
       );
       toast.success(`Token revoked. Worker web view will reject access within 60s.`);
       setTokenToRevoke(null);
-      setDpdpTokens(magicLinkService.getAllTokens());
+      const freshTokens = await magicLinkService.fetchAllTokensFromFirestore();
+      setDpdpTokens(freshTokens);
     } catch (err: any) {
       toast.error(err.message || 'Failed to revoke token');
     } finally {
@@ -1183,7 +1187,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ initia
                                                           const isFlagged = distinctDevices > 2;
 
                                                           return (
-                                                              <tr key={tokenItem.token} className="hover:bg-gray-50/70 transition-colors">
+                                                              <tr key={tokenItem.tokenHash || tokenItem.token} className="hover:bg-gray-50/70 transition-colors">
                                                                   <td className="py-2.5 px-3">
                                                                       <div className="font-bold text-gray-900 font-sans">{tokenItem.workerName}</div>
                                                                       <div className="text-[10px] text-gray-500">ID: {tokenItem.workerId}</div>

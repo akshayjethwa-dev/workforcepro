@@ -300,20 +300,61 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
 
             {/* Earnings Table */}
             <div className="mb-6">
+                 {(() => {
+                   const taxableExpenseAdd = data.taxableExpenseAdditions || 0;
+                   const taxableExpenseItems = data.taxableExpenseItems || [];
+                   const baseAllowances = Math.max(
+                     0,
+                     Math.round(((data.earnings.allowances.other || 0) - taxableExpenseAdd) * 100) / 100
+                   );
+                   const hasReimbOrTaxable =
+                     (data.expenseReimbursements || 0) > 0 || taxableExpenseAdd > 0;
+                   return (
                  <table className="w-full text-sm">
                      <thead>
                          <tr className="border-b border-gray-300">
-                             <th className="text-left py-2 text-gray-500 font-bold uppercase text-xs">Earnings</th>
+                             <th className="text-left py-2 text-gray-500 font-bold uppercase text-xs">
+                               {hasReimbOrTaxable ? 'Earnings (Gross Taxable Salary)' : 'Earnings'}
+                             </th>
                              <th className="text-right py-2 text-gray-500 font-bold uppercase text-xs">Amount (₹)</th>
                          </tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100">
-                         <tr><td className="py-2">Basic Wages</td><td className="text-right py-2">{data.earnings.basic.toFixed(2)}</td></tr>
-                         <tr><td className="py-2">Overtime</td><td className="text-right py-2">{data.earnings.overtime.toFixed(2)}</td></tr>
-                         <tr><td className="py-2">Allowances</td><td className="text-right py-2">{data.earnings.allowances.other.toFixed(2)}</td></tr>
+                         <tr><td className="py-2">Basic Wages</td><td className="text-right py-2 font-mono tabular-nums">{data.earnings.basic.toFixed(2)}</td></tr>
+                         <tr><td className="py-2">Overtime</td><td className="text-right py-2 font-mono tabular-nums">{data.earnings.overtime.toFixed(2)}</td></tr>
+                         <tr><td className="py-2">Allowances</td><td className="text-right py-2 font-mono tabular-nums">{baseAllowances.toFixed(2)}</td></tr>
+                         {taxableExpenseItems.length > 0 ? (
+                           taxableExpenseItems.map((item) => (
+                             <tr key={item.claimId} className="bg-amber-50/60">
+                               <td className="py-2 pl-2">
+                                 <span className="font-semibold text-amber-950">{item.description}</span>
+                                 <span className="block text-[10px] font-bold text-amber-700 uppercase">
+                                   Flagged Taxable by Finance · Included in Gross Taxable Salary
+                                 </span>
+                               </td>
+                               <td className="text-right py-2 pr-2 font-mono tabular-nums font-semibold text-amber-950">
+                                 {item.amount.toFixed(2)}
+                               </td>
+                             </tr>
+                           ))
+                         ) : taxableExpenseAdd > 0 ? (
+                           <tr className="bg-amber-50/60">
+                             <td className="py-2 pl-2">
+                               <span className="font-semibold text-amber-950">Taxable Expense Perquisite (Flagged by Finance)</span>
+                               <span className="block text-[10px] font-bold text-amber-700 uppercase">
+                                 Included in Gross Taxable Salary
+                               </span>
+                             </td>
+                             <td className="text-right py-2 pr-2 font-mono tabular-nums font-semibold text-amber-950">
+                               {taxableExpenseAdd.toFixed(2)}
+                             </td>
+                           </tr>
+                         ) : null}
                          <tr className="bg-green-50 font-bold">
-                             <td className="py-2 pl-2">GROSS EARNINGS</td>
-                             <td className="text-right py-2 pr-2">{data.earnings.gross.toFixed(2)}</td>
+                             <td className="py-2 pl-2">
+                               {hasReimbOrTaxable ? 'GROSS TAXABLE SALARY' : 'GROSS EARNINGS'}
+                             </td>
+                             <td className="text-right py-2 pr-2 font-mono tabular-nums">{data.earnings.gross.toFixed(2)}</td>
                          </tr>
                          {(() => {
                            const notionalAdd =
@@ -352,6 +393,8 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
                          )}
                      </tbody>
                  </table>
+                   );
+                 })()}
 
                  {(() => {
                    const notionalAdd =
@@ -484,11 +527,144 @@ export const Payslip: React.FC<Props> = ({ data, companyName, siteAddress, onClo
               </div>
             )}
 
-            {/* Net Pay */}
-            <div className="bg-gray-900 text-white p-4 rounded-lg flex justify-between items-center mb-8 mt-4">
-                <span className="font-bold uppercase tracking-widest text-sm">Net Payable</span>
-                <span className="text-2xl font-bold">₹{data.netPayable.toLocaleString('en-IN', {minimumFractionDigits: 2})}</span>
-            </div>
+            {/* Reimbursements (Tax-Free) — Added AFTER Net Salary, strictly excluded from Gross Taxable Salary */}
+            {((data.expenseReimbursements || 0) > 0 || (data.reimbursementItems && data.reimbursementItems.length > 0)) && (
+              <div className="mb-6 border border-emerald-200 rounded-xl overflow-hidden bg-emerald-50/30">
+                <div className="px-3.5 py-2.5 bg-emerald-50 border-b border-emerald-200 flex items-center justify-between gap-2 flex-wrap">
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-emerald-900">
+                    Reimbursements (Tax-Free)
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white text-emerald-800 border border-emerald-200">
+                    0% Tax · Excluded from Gross Taxable Salary
+                  </span>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-emerald-100/80">
+                    {data.reimbursementItems && data.reimbursementItems.length > 0 ? (
+                      data.reimbursementItems.map((item) => (
+                        <tr key={item.claimId}>
+                          <td className="py-2 px-3.5 text-slate-800">
+                            <span className="font-medium">{item.description}</span>
+                            <span className="ml-2 text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-emerald-100/80 text-emerald-800 font-bold">
+                              {data.status === 'PAID' || data.status === 'LOCKED' ? 'PAID' : item.status}
+                            </span>
+                          </td>
+                          <td className="text-right py-2 px-3.5 font-mono tabular-nums font-semibold text-emerald-900">
+                            +{item.amount.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td className="py-2 px-3.5 text-slate-800 font-medium">
+                          Approved Expense Reimbursements
+                        </td>
+                        <td className="text-right py-2 px-3.5 font-mono tabular-nums font-semibold text-emerald-900">
+                          +{(data.expenseReimbursements || 0).toFixed(2)}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="bg-emerald-100/70 font-bold">
+                      <td className="py-2 px-3.5 text-emerald-950">TOTAL REIMBURSEMENTS (TAX-FREE)</td>
+                      <td className="text-right py-2 px-3.5 font-mono tabular-nums text-emerald-950">
+                        +{(data.expenseReimbursements || 0).toFixed(2)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Net Payout Breakdown: Total Salary + Total Reimbursements = Net Payout */}
+            {(() => {
+              const totalReimbursements = data.expenseReimbursements || 0;
+              const gratuityAmt = data.gratuitySettlement || 0;
+              const totalSalaryNet =
+                typeof data.salaryNetPay === 'number'
+                  ? data.salaryNetPay
+                  : Math.round((data.netPayable - totalReimbursements - gratuityAmt) * 100) / 100;
+              const isNegative = Boolean(data.isNegativeNetPayout || data.netPayable < 0);
+              const expenseExceedsSalary = Boolean(
+                data.expenseExceedsSalary ||
+                  (totalReimbursements > 0 && totalReimbursements > Math.max(0, totalSalaryNet))
+              );
+              const formatSignedInr = (val: number) =>
+                val < 0
+                  ? `-₹${Math.abs(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : `₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+              return (
+                <div className="mb-8 mt-4 space-y-2.5">
+                  {(totalReimbursements > 0 || gratuityAmt > 0 || isNegative) && (
+                    <div className="border border-slate-200 rounded-xl p-3.5 bg-slate-50 text-xs space-y-1.5">
+                      <div className="font-bold uppercase tracking-wider text-[10px] text-slate-500">
+                        Payout Breakdown (Added After Net Salary Calculation)
+                      </div>
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span>Total Salary (Net of Deductions &amp; Taxes)</span>
+                        <span className={`font-mono tabular-nums font-bold ${totalSalaryNet < 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                          {formatSignedInr(totalSalaryNet)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-emerald-800">
+                        <span>+ Total Reimbursements (Tax-Free)</span>
+                        <span className="font-mono tabular-nums font-bold">
+                          +{formatSignedInr(totalReimbursements)}
+                        </span>
+                      </div>
+                      {gratuityAmt > 0 && (
+                        <div className="flex justify-between items-center text-emerald-800">
+                          <span>+ Gratuity Settlement (Exempt)</span>
+                          <span className="font-mono tabular-nums font-bold">
+                            +{formatSignedInr(gratuityAmt)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="pt-1.5 border-t border-slate-200 flex justify-between items-center font-extrabold text-slate-900">
+                        <span>= Net Payout</span>
+                        <span className={`font-mono tabular-nums ${isNegative ? 'text-rose-700' : 'text-slate-900'}`}>
+                          {formatSignedInr(data.netPayable)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {expenseExceedsSalary && (
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950">
+                      <strong>Expenses Exceed Monthly Salary:</strong> Approved tax-free reimbursements (
+                      {formatSignedInr(totalReimbursements)}) exceed net monthly salary (
+                      {formatSignedInr(totalSalaryNet)}). Reimbursements are allowed in full without tax impact.
+                    </div>
+                  )}
+
+                  {isNegative && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-950">
+                      <strong>Negative Net Payout ({formatSignedInr(data.netPayable)}):</strong> Total deductions exceed net salary and reimbursements for this pay period. Allowed and recorded cleanly for payroll reconciliation.
+                    </div>
+                  )}
+
+                  <div
+                    className={`${
+                      isNegative ? 'bg-rose-900' : 'bg-gray-900'
+                    } text-white p-4 rounded-lg flex justify-between items-center`}
+                  >
+                    <div>
+                      <span className="font-bold uppercase tracking-widest text-sm block">
+                        Net Payout
+                      </span>
+                      {totalReimbursements > 0 && (
+                        <span className="text-[11px] text-gray-300 font-mono">
+                          Total Salary {formatSignedInr(totalSalaryNet)} + Reimbursements {formatSignedInr(totalReimbursements)}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-2xl font-bold font-mono tabular-nums">
+                      {formatSignedInr(data.netPayable)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Footer */}
             <div className="text-xs text-gray-400 text-center pt-8 border-t border-gray-200">

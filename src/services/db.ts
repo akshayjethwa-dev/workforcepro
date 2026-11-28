@@ -2522,10 +2522,22 @@ export const dbService = {
       },
     };
 
+    const defaultExpensePolicy: NonNullable<OrgSettings['expensePolicy']> = {
+      enabled: true,
+      dailyLimitsPaise: {
+        FOOD: 30000,   // ₹300/day
+        PETROL: 50000, // ₹500/day (Fuel)
+        TRAVEL: 100000, // ₹1,000/day
+        OTHER: 50000,  // ₹500/day
+      },
+      requireOverrideNote: true,
+    };
+
     const fallbackSettings: OrgSettings = { 
       shifts: defaultShifts, enableBreakTracking: false, strictLiveness: false, branches: [defaultBranch, anandBranch], departments: defaultDepartments,
       weeklyOffs: defaultWeeklyOffs, holidays: [], enableSandwichRule: false, holidayPayMultiplier: 2.0,
-      compliance: defaultCompliance
+      compliance: defaultCompliance,
+      expensePolicy: defaultExpensePolicy
     };
 
     if (tenantId === 'demo-tenant-id') {
@@ -2533,7 +2545,18 @@ export const dbService = {
         const local = localStorage.getItem(`demo_settings_${tenantId}`);
         if (local) {
           const parsed = JSON.parse(local);
-          return { ...fallbackSettings, ...parsed };
+          return {
+            ...fallbackSettings,
+            ...parsed,
+            expensePolicy: {
+              ...defaultExpensePolicy,
+              ...(parsed.expensePolicy || {}),
+              dailyLimitsPaise: {
+                ...defaultExpensePolicy.dailyLimitsPaise,
+                ...(parsed.expensePolicy?.dailyLimitsPaise || {}),
+              },
+            },
+          };
         }
       } catch {}
       return fallbackSettings;
@@ -2555,7 +2578,15 @@ export const dbService = {
           holidays: data.holidays || [],
           enableSandwichRule: data.enableSandwichRule ?? false,
           holidayPayMultiplier: data.holidayPayMultiplier ?? 2.0,
-          compliance: { ...defaultCompliance, ...(data.compliance || {}) }
+          compliance: { ...defaultCompliance, ...(data.compliance || {}) },
+          expensePolicy: {
+            ...defaultExpensePolicy,
+            ...(data.expensePolicy || {}),
+            dailyLimitsPaise: {
+              ...defaultExpensePolicy.dailyLimitsPaise,
+              ...(data.expensePolicy?.dailyLimitsPaise || {}),
+            },
+          },
         };
       }
     } catch (e) {
@@ -2564,7 +2595,18 @@ export const dbService = {
         const local = localStorage.getItem(`settings_${tenantId}`);
         if (local) {
           const parsed = JSON.parse(local);
-          return { ...fallbackSettings, ...parsed };
+          return {
+            ...fallbackSettings,
+            ...parsed,
+            expensePolicy: {
+              ...defaultExpensePolicy,
+              ...(parsed.expensePolicy || {}),
+              dailyLimitsPaise: {
+                ...defaultExpensePolicy.dailyLimitsPaise,
+                ...(parsed.expensePolicy?.dailyLimitsPaise || {}),
+              },
+            },
+          };
         }
       } catch {}
     }
@@ -2656,11 +2698,11 @@ export const dbService = {
       try {
         const stored = localStorage.getItem('demo_supervisors');
         return stored ? JSON.parse(stored) : [
-          { uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId },
+          { uid: 'demo-manager-uid', name: 'Vikram Joshi', email: 'manager.main@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId },
           { uid: 'demo-sup-2', name: 'Neha Desai', email: 'neha.anand@factory.demo', role: 'MANAGER', branchId: 'branch-anand', branchName: 'Anand Manufacturing Unit', tenantId }
         ];
       } catch {
-        return [{ uid: 'demo-sup-1', name: 'Vikram Joshi', email: 'vikram.supervisor@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId }];
+        return [{ uid: 'demo-manager-uid', name: 'Vikram Joshi', email: 'manager.main@factory.demo', role: 'MANAGER', branchId: 'default', branchName: 'Main Branch (Head Office)', tenantId }];
       }
     }
     try {

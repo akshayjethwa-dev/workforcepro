@@ -65,21 +65,26 @@ export const WorkerAccessModal: React.FC<Props> = ({
   const [dpdpReport, setDpdpReport] = useState<DpdpSubjectAccessReport | null>(null);
   const [isExportingDpdp, setIsExportingDpdp] = useState<boolean>(false);
 
-  const loadData = () => {
+  const loadData = async () => {
     setLoading(true);
     try {
-      const { active, revoked } = magicLinkService.getTokensForWorker(worker.id);
+      const cached = magicLinkService.getTokensForWorker(worker.id);
       const devices = magicLinkService.getBoundDevicesForWorker(worker.id);
       const consent = consentService.getWorkerConsent(worker.id, tenantId);
       const history = consentService.getConsentHistory(worker.id);
       const tickets = consentService.getDeletionTicketsForWorker(worker.id);
       
-      setActiveTokens(active);
-      setRevokedTokens(revoked);
+      setActiveTokens(cached.active);
+      setRevokedTokens(cached.revoked);
       setBoundDevices(devices);
       setWorkerConsent(consent);
       setConsentHistory(history);
       setDeletionTickets(tickets);
+
+      // Refresh from Firestore (source of truth) for cross-device accuracy
+      const fresh = await magicLinkService.fetchTokensForWorkerFromFirestore(tenantId, worker.id);
+      setActiveTokens(fresh.active);
+      setRevokedTokens(fresh.revoked);
     } catch (err) {
       console.error('Failed to load worker access records:', err);
     } finally {
@@ -88,17 +93,21 @@ export const WorkerAccessModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    loadData();
-  }, [worker.id]);
+    void loadData();
+  }, [worker.id, tenantId]);
 
   const handleConfirmRevoke = async () => {
     if (!tokenToRevoke) return;
     setIsRevoking(true);
     try {
-      await magicLinkService.revokeToken(tokenToRevoke.token, managerEmail, revocationReason);
+      await magicLinkService.revokeToken(
+        tokenToRevoke.tokenHash || tokenToRevoke.token,
+        managerEmail,
+        revocationReason
+      );
       toast.success(`Magic link revoked (${revocationReason}). Takes effect within 60s.`);
       setTokenToRevoke(null);
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || 'Failed to revoke token');
     } finally {
@@ -333,7 +342,7 @@ export const WorkerAccessModal: React.FC<Props> = ({
 
                     return (
                       <div 
-                        key={tok.token}
+                        key={tok.tokenHash || tok.token}
                         className={`p-3.5 rounded-2xl border transition-all ${
                           tok.flaggedMultiDevice 
                             ? 'bg-amber-50/70 border-amber-300 ring-1 ring-amber-400/30' 

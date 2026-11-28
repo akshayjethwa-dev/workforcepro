@@ -40,6 +40,8 @@ export const SendMagicLinkModal: React.FC<Props> = ({
     whatsappUrl: string;
     smsUrl: string;
     messageText: string;
+    persistedToFirestore?: boolean;
+    queuedOffline?: boolean;
   } | null>(null);
 
   const [copied, setCopied] = useState<boolean>(false);
@@ -364,6 +366,16 @@ export const SendMagicLinkModal: React.FC<Props> = ({
                   <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
               </div>
+
+              {/* Offline Queue Notice (shown only if manager is offline) */}
+              {generatedLink.queuedOffline && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] text-amber-900 flex items-start gap-2">
+                  <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    Created offline — queued in the offline sync queue and will automatically save to Firestore once you reconnect so it can be verified from any device.
+                  </span>
+                </div>
+              )}
 
               {/* Message Preview Box */}
               <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-2.5 text-[11px] text-emerald-950 font-sans leading-relaxed whitespace-pre-wrap">

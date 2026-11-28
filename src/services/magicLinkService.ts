@@ -15,6 +15,17 @@ import {
   DeviceIntegrityVerdict,
   MagicLinkRestructureSummary
 } from '../types/index';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocFromServer,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
 import { tenantSecurityService } from './tenantSecurityService';
 import { dbService } from './db';
 import { entitlementService } from './entitlementService';
@@ -23,10 +34,411 @@ import { geoUtils } from '../utils/geo';
 import { syncService } from './syncService';
 import { deviceAttestationService } from './deviceAttestationService';
 
+export const MAGIC_LINKS_COLLECTION = 'magicLinks';
+export const DEFAULT_MAGIC_LINK_BASE_URL = 'https://wfpro.in';
+export const MAGIC_LINK_DOMAIN_PRESETS = [
+  {
+    id: 'apex',
+    url: 'https://wfpro.in',
+    label: 'wfpro.in (Main App on Apex)',
+    marketingNote: 'Map marketing site to www.wfpro.in',
+  },
+  {
+    id: 'subdomain',
+    url: 'https://app.wfpro.in',
+    label: 'app.wfpro.in (Main App on Subdomain)',
+    marketingNote: 'Use when wfpro.in serves the marketing site',
+  },
+  {
+    id: 'firebase-default',
+    url: 'https://workforcepro-saas.web.app',
+    label: 'workforcepro-saas.web.app (Firebase Default)',
+    marketingNote: 'Always-live Firebase Hosting fallback domain',
+  },
+] as const;
+
 const STORAGE_KEY = 'workforce_magic_tokens';
 const BOUND_DEVICES_KEY = 'workforce_bound_devices';
+const MAGIC_LINK_BASE_URL_KEY = 'workforce_magic_link_base_url';
+const MAX_ACCESS_LOG_ENTRIES = 100;
+const FIRESTORE_OP_TIMEOUT_MS = 6000;
 
-// In-memory cache + storage
+export function normalizeMagicLinkBaseUrl(rawUrl?: string | null): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return DEFAULT_MAGIC_LINK_BASE_URL;
+
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : /^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(trimmed)
+    ? `http://${trimmed}`
+    : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(withProtocol);
+    return parsed.origin;
+  } catch {
+    return DEFAULT_MAGIC_LINK_BASE_URL;
+  }
+}
+
+export function getMagicLinkBaseUrl(tenantId?: string): string {
+  if (typeof window !== 'undefined') {
+    try {
+      if (tenantId) {
+        const tenantOverride = localStorage.getItem(`${MAGIC_LINK_BASE_URL_KEY}_${tenantId}`);
+        if (tenantOverride && tenantOverride.trim()) {
+          return normalizeMagicLinkBaseUrl(tenantOverride);
+        }
+      }
+      const globalOverride = localStorage.getItem(MAGIC_LINK_BASE_URL_KEY);
+      if (globalOverride && globalOverride.trim()) {
+        return normalizeMagicLinkBaseUrl(globalOverride);
+      }
+    } catch {
+      // Ignore storage access failures in restricted browsing contexts
+    }
+  }
+
+  const envBase = (import.meta as any)?.env?.VITE_MAGIC_LINK_BASE_URL;
+  if (typeof envBase === 'string' && envBase.trim()) {
+    return normalizeMagicLinkBaseUrl(envBase);
+  }
+
+  return DEFAULT_MAGIC_LINK_BASE_URL;
+}
+
+export function setMagicLinkBaseUrl(rawUrl: string, tenantId?: string): string {
+  const normalized = normalizeMagicLinkBaseUrl(rawUrl);
+  if (typeof window !== 'undefined') {
+    try {
+      if (tenantId) {
+        localStorage.setItem(`${MAGIC_LINK_BASE_URL_KEY}_${tenantId}`, normalized);
+      }
+      localStorage.setItem(MAGIC_LINK_BASE_URL_KEY, normalized);
+    } catch {
+      // Ignore storage write errors
+    }
+  }
+  return normalized;
+}
+
+export function buildMagicLinkUrl(token: string, tenantId?: string, overrideBaseUrl?: string): string {
+  const baseUrl = overrideBaseUrl
+    ? normalizeMagicLinkBaseUrl(overrideBaseUrl)
+    : getMagicLinkBaseUrl(tenantId);
+  return `${baseUrl}/w/${encodeURIComponent(token)}`;
+}
+
+export interface CustomDomainRouteCheckResult {
+  testedUrl: string;
+  status: 'OK_SPA' | 'REACHABLE_CORS' | 'MARKETING_CONFLICT' | 'NOT_FOUND_404' | 'UNREACHABLE';
+  httpStatus?: number;
+  summary: string;
+  recommendation?: string;
+  checkedAt: string;
+}
+
+export async function checkCustomDomainRouting(
+  baseUrl: string,
+  testToken: string = 'test-token'
+): Promise<CustomDomainRouteCheckResult> {
+  const normalizedBase = normalizeMagicLinkBaseUrl(baseUrl);
+  const testedUrl = `${normalizedBase}/w/${encodeURIComponent(testToken)}`;
+  const checkedAt = new Date().toISOString();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const response = await fetch(testedUrl, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    const html = await response.text().catch(() => '');
+    const lowerHtml = html.toLowerCase();
+
+    if (response.status === 404) {
+      return {
+        testedUrl,
+        status: 'NOT_FOUND_404',
+        httpStatus: 404,
+        summary: 'Returned HTTP 404. Firebase Hosting SPA rewrite ("**" → "/index.html") is not active on this host.',
+        recommendation: 'Deploy firebase.json with "firebase deploy --only hosting:app" and connect this domain to the "workforcepro-saas" hosting site.',
+        checkedAt,
+      };
+    }
+
+    // Detect if the marketing site was served instead of the main React app
+    const looksLikeMarketing =
+      lowerHtml.includes('workforcepro-marketing') ||
+      (lowerHtml.includes('book a demo') && !lowerHtml.includes('manifest.webmanifest'));
+
+    if (looksLikeMarketing) {
+      return {
+        testedUrl,
+        status: 'MARKETING_CONFLICT',
+        httpStatus: response.status,
+        summary: 'Marketing site responded instead of the main WorkForce app.',
+        recommendation: 'Move the marketing site to www.wfpro.in and attach wfpro.in to the "workforcepro-saas" site, or switch magic links to https://app.wfpro.in.',
+        checkedAt,
+      };
+    }
+
+    if (response.ok && (lowerHtml.includes('id="root"') || lowerHtml.includes("id='root'"))) {
+      return {
+        testedUrl,
+        status: 'OK_SPA',
+        httpStatus: response.status,
+        summary: 'React SPA loaded cleanly for /w/test-token with HTTP 200.',
+        checkedAt,
+      };
+    }
+
+    return {
+      testedUrl,
+      status: 'OK_SPA',
+      httpStatus: response.status,
+      summary: `Host responded with HTTP ${response.status} for /w/test-token.`,
+      checkedAt,
+    };
+  } catch (corsOrNetErr: any) {
+    clearTimeout(timer);
+
+    if (corsOrNetErr?.name === 'AbortError') {
+      return {
+        testedUrl,
+        status: 'UNREACHABLE',
+        summary: 'Request timed out after 6 seconds. DNS or SSL provisioning may still be in progress.',
+        recommendation: 'Verify DNS A/TXT records in Firebase Console → Hosting → Custom domains for site "workforcepro-saas".',
+        checkedAt,
+      };
+    }
+
+    // Cross-origin browsers block reading HTML on external domains without CORS headers.
+    // Run a lightweight no-cors probe to distinguish "live host (CORS-protected)" from "DNS unreachable".
+    const probeController = new AbortController();
+    const probeTimer = setTimeout(() => probeController.abort(), 5000);
+    try {
+      await fetch(testedUrl, {
+        method: 'GET',
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: probeController.signal,
+      });
+      clearTimeout(probeTimer);
+      return {
+        testedUrl,
+        status: 'REACHABLE_CORS',
+        summary: 'Domain is live and reachable over HTTPS (browser CORS restricts inspecting remote HTML directly).',
+        recommendation: `Open ${testedUrl} in a new tab to confirm the React app displays the "Link Inactive or Expired" screen instead of a 404 or marketing page.`,
+        checkedAt,
+      };
+    } catch {
+      clearTimeout(probeTimer);
+      return {
+        testedUrl,
+        status: 'UNREACHABLE',
+        summary: 'Could not reach host. DNS may not be pointed to Firebase Hosting yet, or this environment blocks external requests.',
+        recommendation: 'In Firebase Console → Hosting → workforcepro-saas, connect wfpro.in (or app.wfpro.in) and deploy via "firebase deploy --only hosting:app".',
+        checkedAt,
+      };
+    }
+  }
+}
+
+enum FirestoreOperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: FirestoreOperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export interface FirestoreMagicLinkDocument {
+  tokenHash: string;
+  id?: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  workerPhone?: string;
+  scope: MagicLinkScope;
+  channel: MagicLinkChannel;
+  issuedBy: string;
+  issuedAt: string;
+  sentAt?: string;
+  expiresAt: string;
+  ttlHours: number;
+  targetMonth?: string;
+  shiftId?: string;
+  revoked: boolean;
+  revokedAt?: string;
+  revokedBy?: string;
+  revocationReason?: RevocationReason;
+  lastUsedAt?: string;
+  accessLog: DeviceAccessEntry[];
+  flaggedMultiDevice?: boolean;
+  flaggedReason?: string;
+  deliveryStatus?: 'DELIVERED' | 'FAILED' | 'PENDING';
+  restructureSummary?: MagicLinkRestructureSummary;
+  updatedAt: string;
+}
+
+const isDeviceOnline = (): boolean => {
+  if (typeof navigator === 'undefined') return true;
+  return navigator.onLine !== false;
+};
+
+class FirestoreTimeoutError extends Error {
+  readonly isTimeout = true;
+  constructor(timeoutMs: number) {
+    super(`Firestore operation timed out after ${timeoutMs}ms`);
+    this.name = 'FirestoreTimeoutError';
+  }
+}
+
+const isNetworkOrTimeoutError = (error: unknown): boolean => {
+  if (error instanceof FirestoreTimeoutError) return true;
+  if (!error || typeof error !== 'object') return false;
+  const code = String((error as any).code || '').toLowerCase();
+  const msg = String((error as any).message || '').toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code === 'deadline-exceeded' ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
+    msg.includes('network') ||
+    msg.includes('offline') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('could not reach cloud firestore')
+  );
+};
+
+const withFirestoreTimeout = <T,>(promise: Promise<T>, timeoutMs = FIRESTORE_OP_TIMEOUT_MS): Promise<T> => {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new FirestoreTimeoutError(timeoutMs));
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+};
+
+const logMagicLinkFirestoreError = (
+  error: unknown,
+  operationType: FirestoreOperationType,
+  path: string | null
+): FirestoreErrorInfo => {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    operationType,
+    path,
+    authInfo: {
+      userId: auth.currentUser?.uid ?? null,
+      email: auth.currentUser?.email ?? null,
+      emailVerified: auth.currentUser?.emailVerified ?? null,
+      isAnonymous: auth.currentUser?.isAnonymous ?? null,
+      tenantId: auth.currentUser?.tenantId ?? null,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+  };
+  console.warn('[MagicLinkService] Firestore operation failed:', JSON.stringify(errInfo));
+  return errInfo;
+};
+
+const sanitizeAccessLog = (entries?: DeviceAccessEntry[]): DeviceAccessEntry[] => {
+  if (!Array.isArray(entries)) return [];
+  const deduped = new Map<string, DeviceAccessEntry>();
+  for (const entry of entries) {
+    if (!entry || typeof entry.timestamp !== 'string' || typeof entry.deviceFingerprint !== 'string') {
+      continue;
+    }
+    const key = `${entry.timestamp}__${entry.deviceFingerprint}`;
+    deduped.set(key, {
+      deviceFingerprint: entry.deviceFingerprint.slice(0, 128),
+      userAgent: (entry.userAgent || 'Unknown').slice(0, 512),
+      timestamp: entry.timestamp,
+      ...(entry.ip ? { ip: entry.ip.slice(0, 64) } : {}),
+      ...(entry.deviceModel ? { deviceModel: entry.deviceModel.slice(0, 128) } : {}),
+    });
+  }
+  const sorted = Array.from(deduped.values()).sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  return sorted.slice(-MAX_ACCESS_LOG_ENTRIES);
+};
+
+/**
+ * Serializes a WorkerAccessToken for Firestore persistence at magicLinks/{tokenHash}.
+ * Security: The raw bearer token (wft_...) is NEVER persisted to Firestore; only its SHA-256 tokenHash is stored.
+ */
+const toFirestoreMagicLinkDoc = (
+  record: Partial<WorkerAccessToken> & { tokenHash: string; tenantId: string; workerId: string }
+): FirestoreMagicLinkDocument => {
+  const nowIso = new Date().toISOString();
+  return {
+    tokenHash: record.tokenHash,
+    ...(record.id ? { id: record.id } : {}),
+    tenantId: record.tenantId,
+    workerId: record.workerId,
+    workerName: record.workerName || 'Worker',
+    ...(record.workerPhone ? { workerPhone: record.workerPhone } : {}),
+    scope: record.scope || 'PAYSLIP',
+    channel: record.channel || 'WHATSAPP',
+    issuedBy: record.issuedBy || 'system',
+    issuedAt: record.issuedAt || nowIso,
+    ...(record.sentAt ? { sentAt: record.sentAt } : {}),
+    expiresAt: record.expiresAt || new Date(Date.now() + 72 * 3600 * 1000).toISOString(),
+    ttlHours: typeof record.ttlHours === 'number' ? record.ttlHours : 72,
+    ...(record.targetMonth ? { targetMonth: record.targetMonth } : {}),
+    ...(record.shiftId ? { shiftId: record.shiftId } : {}),
+    revoked: Boolean(record.revoked),
+    ...(record.revokedAt ? { revokedAt: record.revokedAt } : {}),
+    ...(record.revokedBy ? { revokedBy: record.revokedBy } : {}),
+    ...(record.revocationReason ? { revocationReason: record.revocationReason } : {}),
+    ...(record.lastUsedAt ? { lastUsedAt: record.lastUsedAt } : {}),
+    accessLog: sanitizeAccessLog(record.accessLog),
+    flaggedMultiDevice: Boolean(record.flaggedMultiDevice),
+    ...(record.flaggedReason ? { flaggedReason: record.flaggedReason } : {}),
+    deliveryStatus: record.deliveryStatus || 'PENDING',
+    ...(record.restructureSummary ? { restructureSummary: record.restructureSummary } : {}),
+    updatedAt: record.updatedAt || nowIso,
+  };
+};
+
+// Local cache helpers (localStorage acts as cache; Firestore is the source of truth)
 const getStoredTokens = (): WorkerAccessToken[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -46,6 +458,341 @@ const saveStoredTokens = (tokens: WorkerAccessToken[]) => {
   } catch (e) {
     console.warn('Failed to persist magic tokens to storage:', e);
   }
+};
+
+/**
+ * Deduplicated upsert into localStorage cache keyed by tokenHash (preventing duplicate cache entries)
+ */
+const upsertStoredToken = (record: WorkerAccessToken): WorkerAccessToken => {
+  const tokens = getStoredTokens();
+  const idx = tokens.findIndex(
+    (t) =>
+      (record.tokenHash && t.tokenHash === record.tokenHash) ||
+      (record.token && t.token === record.token)
+  );
+  if (idx !== -1) {
+    const existing = tokens[idx];
+    const preservedRawToken =
+      record.token && record.token.startsWith('wft_')
+        ? record.token
+        : existing.token && existing.token.startsWith('wft_')
+        ? existing.token
+        : record.token || existing.token || record.tokenHash;
+    const merged: WorkerAccessToken = {
+      ...existing,
+      ...record,
+      token: preservedRawToken,
+      revoked: Boolean(existing.revoked || record.revoked),
+      accessLog: sanitizeAccessLog([...(existing.accessLog || []), ...(record.accessLog || [])]),
+    };
+    tokens[idx] = merged;
+    saveStoredTokens(tokens);
+    return merged;
+  }
+  const updatedList = [record, ...tokens];
+  saveStoredTokens(updatedList);
+  return record;
+};
+
+const fromFirestoreMagicLinkDoc = (
+  docId: string,
+  data: Record<string, any>,
+  rawToken?: string
+): WorkerAccessToken => {
+  const tokenHash = typeof data.tokenHash === 'string' && data.tokenHash ? data.tokenHash : docId;
+  const localMatch = getStoredTokens().find((t) => t.tokenHash === tokenHash);
+  const resolvedToken =
+    rawToken && rawToken.startsWith('wft_')
+      ? rawToken
+      : localMatch?.token && localMatch.token.startsWith('wft_')
+      ? localMatch.token
+      : tokenHash;
+
+  return {
+    id: data.id || localMatch?.id || `token-${tokenHash.slice(0, 12)}`,
+    token: resolvedToken,
+    tokenHash,
+    tenantId: data.tenantId || '',
+    workerId: data.workerId || '',
+    workerName: data.workerName || localMatch?.workerName || 'Worker',
+    workerPhone: data.workerPhone ?? localMatch?.workerPhone,
+    scope: (data.scope || 'PAYSLIP') as MagicLinkScope,
+    channel: (data.channel || 'WHATSAPP') as MagicLinkChannel,
+    issuedBy: data.issuedBy || 'system',
+    issuedAt: data.issuedAt || new Date().toISOString(),
+    sentAt: data.sentAt,
+    expiresAt: data.expiresAt || new Date().toISOString(),
+    ttlHours: typeof data.ttlHours === 'number' ? data.ttlHours : 72,
+    targetMonth: data.targetMonth,
+    shiftId: data.shiftId,
+    accessLog: sanitizeAccessLog(data.accessLog),
+    revoked: Boolean(data.revoked),
+    revokedAt: data.revokedAt,
+    revokedBy: data.revokedBy,
+    revocationReason: data.revocationReason,
+    lastUsedAt: data.lastUsedAt,
+    flaggedMultiDevice: Boolean(data.flaggedMultiDevice),
+    flaggedReason: data.flaggedReason,
+    deliveryStatus: data.deliveryStatus || 'PENDING',
+    restructureSummary: data.restructureSummary,
+    syncStatus: 'SYNCED',
+    persistedToFirestore: true,
+    updatedAt: data.updatedAt || data.issuedAt,
+  };
+};
+
+/**
+ * Idempotently persists a magic link token document to Firestore at magicLinks/{tokenHash}.
+ * Using tokenHash as the document ID guarantees no duplicate records can be created,
+ * and merging preserves monotonic revocation & combined access logs on replay.
+ */
+const persistTokenDocumentToFirestore = async (
+  input: WorkerAccessToken | FirestoreMagicLinkDocument
+): Promise<FirestoreMagicLinkDocument> => {
+  const docPayload = toFirestoreMagicLinkDoc(input);
+  const docPath = `${MAGIC_LINKS_COLLECTION}/${docPayload.tokenHash}`;
+  const docRef = doc(db, MAGIC_LINKS_COLLECTION, docPayload.tokenHash);
+
+  try {
+    let existingData: Record<string, any> | null = null;
+    try {
+      const existingSnap = await withFirestoreTimeout(getDoc(docRef), FIRESTORE_OP_TIMEOUT_MS);
+      if (existingSnap.exists()) {
+        existingData = existingSnap.data();
+      }
+    } catch {
+      // Proceed with idempotent merge write if pre-read fails transiently
+    }
+
+    const mergedDoc: FirestoreMagicLinkDocument = existingData
+      ? {
+          ...docPayload,
+          issuedAt: existingData.issuedAt || docPayload.issuedAt,
+          revoked: Boolean(existingData.revoked || docPayload.revoked),
+          ...(existingData.revokedAt || docPayload.revokedAt
+            ? { revokedAt: existingData.revokedAt || docPayload.revokedAt }
+            : {}),
+          ...(existingData.revokedBy || docPayload.revokedBy
+            ? { revokedBy: existingData.revokedBy || docPayload.revokedBy }
+            : {}),
+          ...(existingData.revocationReason || docPayload.revocationReason
+            ? { revocationReason: existingData.revocationReason || docPayload.revocationReason }
+            : {}),
+          accessLog: sanitizeAccessLog([
+            ...(Array.isArray(existingData.accessLog) ? existingData.accessLog : []),
+            ...docPayload.accessLog,
+          ]),
+          flaggedMultiDevice: Boolean(existingData.flaggedMultiDevice || docPayload.flaggedMultiDevice),
+          ...(existingData.flaggedReason || docPayload.flaggedReason
+            ? { flaggedReason: docPayload.flaggedReason || existingData.flaggedReason }
+            : {}),
+          updatedAt: new Date().toISOString(),
+        }
+      : docPayload;
+
+    await withFirestoreTimeout(setDoc(docRef, mergedDoc, { merge: true }), FIRESTORE_OP_TIMEOUT_MS);
+
+    // Sync cache state as confirmed in Firestore
+    const hydrated = fromFirestoreMagicLinkDoc(
+      docPayload.tokenHash,
+      mergedDoc,
+      'token' in input ? input.token : undefined
+    );
+    upsertStoredToken(hydrated);
+    return mergedDoc;
+  } catch (error) {
+    logMagicLinkFirestoreError(error, FirestoreOperationType.WRITE, docPath);
+    throw error;
+  }
+};
+
+/**
+ * Queues a magic link token creation or update in the E2 offline sync queue (IndexedDB)
+ * so it is persisted to Firestore magicLinks/{tokenHash} automatically once back online.
+ */
+const queueMagicLinkForOfflineSync = async (record: WorkerAccessToken): Promise<void> => {
+  const firestorePayload = toFirestoreMagicLinkDoc(record);
+  upsertStoredToken({
+    ...record,
+    syncStatus: 'PENDING_LOCAL',
+    persistedToFirestore: false,
+    updatedAt: firestorePayload.updatedAt,
+  });
+
+  try {
+    await syncService.enqueueRecord(
+      'MAGIC_LINK',
+      record.tokenHash,
+      record.tenantId,
+      record.workerId,
+      record.workerName,
+      firestorePayload
+    );
+  } catch (err) {
+    console.warn('[MagicLinkService] Failed to enqueue magic link in E2 offline queue:', err);
+  }
+};
+
+/**
+ * Resolves a token string (either raw bearer `wft_...` or SHA-256 `tokenHash`) into its canonical `tokenHash`.
+ */
+const resolveTokenHash = async (tokenOrHash: string): Promise<{ tokenHash: string; rawToken?: string }> => {
+  const trimmed = (tokenOrHash || '').trim();
+  if (!trimmed) return { tokenHash: '' };
+
+  if (trimmed.startsWith('wft_')) {
+    const localMatch = getStoredTokens().find((t) => t.token === trimmed);
+    const tokenHash = localMatch?.tokenHash || (await computeSha256(trimmed));
+    return { tokenHash, rawToken: trimmed };
+  }
+
+  return { tokenHash: trimmed };
+};
+
+export type MagicLinkVerificationErrorCode =
+  | 'MISSING_TOKEN'
+  | 'NOT_FOUND'
+  | 'REVOKED'
+  | 'EXPIRED'
+  | 'TENANT_SUSPENDED'
+  | 'NETWORK_TIMEOUT'
+  | 'FIRESTORE_READ_ERROR';
+
+type FirestoreLookupResult =
+  | { status: 'FOUND'; record: WorkerAccessToken }
+  | { status: 'NOT_FOUND' }
+  | { status: 'TIMEOUT'; errorMessage: string }
+  | { status: 'ERROR'; errorMessage: string };
+
+const formatExactExpiryDate = (expiresAtIso: string): string => {
+  const expiry = new Date(expiresAtIso);
+  if (Number.isNaN(expiry.getTime())) return expiresAtIso;
+  return expiry.toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+/**
+ * Queries Firestore `magicLinks/{tokenHash}` directly with a bounded timeout so verification
+ * never hangs. Distinguishes FOUND, NOT_FOUND, TIMEOUT (network/offline), and READ ERROR cleanly.
+ */
+const fetchTokenFromFirestoreByHash = async (
+  tokenHash: string,
+  rawToken?: string
+): Promise<FirestoreLookupResult> => {
+  if (!tokenHash) return { status: 'NOT_FOUND' };
+
+  const docPath = `${MAGIC_LINKS_COLLECTION}/${tokenHash}`;
+  const docRef = doc(db, MAGIC_LINKS_COLLECTION, tokenHash);
+
+  if (!isDeviceOnline()) {
+    // When offline, check Firestore's local SDK cache before returning a network error
+    try {
+      const cachedSnap = await withFirestoreTimeout(getDoc(docRef), 2000);
+      if (cachedSnap.exists()) {
+        const hydrated = fromFirestoreMagicLinkDoc(cachedSnap.id, cachedSnap.data(), rawToken);
+        return { status: 'FOUND', record: upsertStoredToken(hydrated) };
+      }
+    } catch {
+      // Ignore cache miss while offline
+    }
+    return {
+      status: 'TIMEOUT',
+      errorMessage: 'Network error. Please check your connection.',
+    };
+  }
+
+  try {
+    const snap = await withFirestoreTimeout(getDocFromServer(docRef), FIRESTORE_OP_TIMEOUT_MS);
+    if (snap.exists()) {
+      const hydrated = fromFirestoreMagicLinkDoc(snap.id, snap.data(), rawToken);
+      return { status: 'FOUND', record: upsertStoredToken(hydrated) };
+    }
+    return { status: 'NOT_FOUND' };
+  } catch (error) {
+    // If server read failed/timed out, check Firestore's own local cache for a positive hit only
+    try {
+      const cachedSnap = await withFirestoreTimeout(getDoc(docRef), 2000);
+      if (cachedSnap.exists()) {
+        const hydrated = fromFirestoreMagicLinkDoc(cachedSnap.id, cachedSnap.data(), rawToken);
+        return { status: 'FOUND', record: upsertStoredToken(hydrated) };
+      }
+    } catch {
+      // Fall through to structured error reporting
+    }
+
+    logMagicLinkFirestoreError(error, FirestoreOperationType.GET, docPath);
+    if (isNetworkOrTimeoutError(error)) {
+      return {
+        status: 'TIMEOUT',
+        errorMessage: 'Network error. Please check your connection.',
+      };
+    }
+    return {
+      status: 'ERROR',
+      errorMessage: 'Unable to verify link. Please try again.',
+    };
+  }
+};
+
+/**
+ * Fetches a magic link token using Firestore (magicLinks/{tokenHash}) as the source of truth,
+ * updating the localStorage cache on hit, and falling back to local cache / E2 queue when offline.
+ */
+const fetchAuthoritativeToken = async (
+  tokenOrHash: string
+): Promise<{
+  record: WorkerAccessToken | null;
+  source: 'firestore' | 'offline_queue' | 'local_cache';
+  firestoreReadFailed?: boolean;
+  networkTimeout?: boolean;
+}> => {
+  const { tokenHash, rawToken } = await resolveTokenHash(tokenOrHash);
+  if (!tokenHash) return { record: null, source: 'local_cache' };
+
+  const localTokens = getStoredTokens();
+  const localMatch =
+    localTokens.find((t) => t.tokenHash === tokenHash || (rawToken && t.token === rawToken)) || null;
+
+  const lookup = await fetchTokenFromFirestoreByHash(tokenHash, rawToken);
+
+  if (lookup.status === 'FOUND') {
+    return { record: lookup.record, source: 'firestore' };
+  }
+
+  if (lookup.status === 'NOT_FOUND') {
+    const pendingInQueue =
+      localMatch?.syncStatus === 'PENDING_LOCAL' ||
+      syncService
+        .getCachedQueue()
+        .some((q) => q.entityType === 'MAGIC_LINK' && q.recordId === tokenHash);
+    if (localMatch && pendingInQueue) {
+      return { record: localMatch, source: 'offline_queue' };
+    }
+    return { record: null, source: 'firestore' };
+  }
+
+  // lookup.status === 'TIMEOUT' | 'ERROR'
+  const isTimeout = lookup.status === 'TIMEOUT';
+  if (localMatch) {
+    return {
+      record: localMatch,
+      source: 'local_cache',
+      firestoreReadFailed: true,
+      networkTimeout: isTimeout,
+    };
+  }
+  return {
+    record: null,
+    source: 'local_cache',
+    firestoreReadFailed: true,
+    networkTimeout: isTimeout,
+  };
 };
 
 const getStoredDevices = (): BoundDevice[] => {
@@ -264,9 +1011,12 @@ export const magicLinkService = {
     whatsappUrl: string;
     smsUrl: string;
     messageText: string;
+    persistedToFirestore?: boolean;
+    queuedOffline?: boolean;
   }> => {
     const ttlHours = params.ttlHours || 72;
     const now = Date.now();
+    const nowIso = new Date(now).toISOString();
     const expiresAt = new Date(now + ttlHours * 3600 * 1000).toISOString();
 
     const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(16)))
@@ -286,7 +1036,7 @@ export const magicLinkService = {
       scope: params.scope,
       channel: params.channel,
       issuedBy: params.issuedBy,
-      issuedAt: new Date(now).toISOString(),
+      issuedAt: nowIso,
       expiresAt,
       ttlHours,
       targetMonth: params.targetMonth || new Date().toISOString().slice(0, 7),
@@ -295,17 +1045,46 @@ export const magicLinkService = {
       revoked: false,
       flaggedMultiDevice: false,
       deliveryStatus: 'PENDING',
+      syncStatus: isDeviceOnline() ? 'SYNCING' : 'PENDING_LOCAL',
+      persistedToFirestore: false,
+      updatedAt: nowIso,
       ...(params.restructureSummary ? { restructureSummary: params.restructureSummary } : {}),
     };
 
-    const tokens = getStoredTokens();
-    saveStoredTokens([tokenRecord, ...tokens]);
+    // Write to localStorage cache immediately (deduplicated by tokenHash)
+    upsertStoredToken(tokenRecord);
 
-    const universalUrl = `https://wfpro.in/w/${token}`;
+    // Persist to central Firestore collection `magicLinks` using `tokenHash` as document ID
+    // Edge Case 1 (Offline Manager): If offline or write fails, queue in E2 offline sync queue.
+    // Edge Case 2 (Duplicate Prevention): Using `tokenHash` as document ID prevents duplicate records.
+    let persistedToFirestore = false;
+    let queuedOffline = false;
+
+    if (isDeviceOnline()) {
+      try {
+        await persistTokenDocumentToFirestore(tokenRecord);
+        tokenRecord.syncStatus = 'SYNCED';
+        tokenRecord.persistedToFirestore = true;
+        persistedToFirestore = true;
+      } catch {
+        tokenRecord.syncStatus = 'PENDING_LOCAL';
+        tokenRecord.persistedToFirestore = false;
+        queuedOffline = true;
+        await queueMagicLinkForOfflineSync(tokenRecord);
+      }
+    } else {
+      tokenRecord.syncStatus = 'PENDING_LOCAL';
+      tokenRecord.persistedToFirestore = false;
+      queuedOffline = true;
+      await queueMagicLinkForOfflineSync(tokenRecord);
+    }
+
+    const configuredBaseUrl = getMagicLinkBaseUrl(params.tenantId);
+    const universalUrl = buildMagicLinkUrl(token, params.tenantId, configuredBaseUrl);
     const baseUrl = typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}`
-      : 'https://wfpro.in';
-    const localUrl = `${baseUrl}?w=${token}`;
+      ? `${window.location.origin}`
+      : configuredBaseUrl;
+    const localUrl = `${baseUrl}/w/${encodeURIComponent(token)}`;
 
     const { cleanPhone } = validateWorkerPhone(params.worker.phone);
     const messageText = formatMagicMessage(
@@ -330,7 +1109,7 @@ export const magicLinkService = {
         userEmail: params.issuedBy,
         userRole: 'SUPERVISOR',
         action: 'ISSUE_MAGIC_LINK',
-        resource: `workers/${params.worker.id}/magic_links`,
+        resource: `${MAGIC_LINKS_COLLECTION}/${tokenHash}`,
         status: 'SUCCESS',
         details: {
           workerId: params.worker.id,
@@ -340,7 +1119,9 @@ export const magicLinkService = {
           expiresAt,
           ttlHours,
           tokenHash,
-          targetMonth: tokenRecord.targetMonth
+          targetMonth: tokenRecord.targetMonth,
+          persistedToFirestore,
+          queuedOffline,
         }
       });
     } catch (e) {
@@ -354,12 +1135,28 @@ export const magicLinkService = {
       localUrl,
       whatsappUrl,
       smsUrl,
-      messageText
+      messageText,
+      persistedToFirestore,
+      queuedOffline,
     };
   },
 
   /**
+   * Called by the E2 Offline Sync Engine (syncService.syncPendingData) when connectivity is restored.
+   * Writes the queued magic link record to Firestore magicLinks/{tokenHash} idempotently.
+   */
+  syncQueuedMagicLinkToFirestore: async (
+    payload: FirestoreMagicLinkDocument | WorkerAccessToken
+  ): Promise<FirestoreMagicLinkDocument> => {
+    if (!payload?.tokenHash) {
+      throw new Error('Invalid queued magic link payload: missing tokenHash');
+    }
+    return persistTokenDocumentToFirestore(payload);
+  },
+
+  /**
    * Records worker consent acknowledgement directly on a SALARY_RESTRUCTURE token
+   * and persists to Firestore (source of truth) + localStorage cache.
    */
   updateRestructureTokenConsent: async (
     token: string,
@@ -368,43 +1165,103 @@ export const magicLinkService = {
     workerNote?: string
   ): Promise<{ updated: boolean; tokenRecord?: WorkerAccessToken }> => {
     if (!token) return { updated: false };
-    const tokens = getStoredTokens();
-    const idx = tokens.findIndex(t => t.token === token.trim());
-    if (idx === -1) return { updated: false };
+    const { record } = await fetchAuthoritativeToken(token);
+    if (!record) return { updated: false };
 
     const updatedRecord: WorkerAccessToken = {
-      ...tokens[idx],
-      restructureSummary: tokens[idx].restructureSummary
+      ...record,
+      updatedAt: new Date().toISOString(),
+      restructureSummary: record.restructureSummary
         ? {
-            ...tokens[idx].restructureSummary!,
+            ...record.restructureSummary,
             consentStatus: decision,
             respondedAt,
             workerNote,
           }
         : undefined,
     };
-    tokens[idx] = updatedRecord;
-    saveStoredTokens(tokens);
+
+    upsertStoredToken(updatedRecord);
+
+    if (isDeviceOnline()) {
+      try {
+        await persistTokenDocumentToFirestore(updatedRecord);
+        updatedRecord.syncStatus = 'SYNCED';
+        updatedRecord.persistedToFirestore = true;
+      } catch {
+        await queueMagicLinkForOfflineSync(updatedRecord);
+      }
+    } else {
+      await queueMagicLinkForOfflineSync(updatedRecord);
+    }
+
     return { updated: true, tokenRecord: updatedRecord };
   },
 
   /**
-   * Real-time check to verify if a token is still active (used for 60s lifecycle polling)
+   * Real-time check to verify if a token is still active (used for 60s lifecycle polling).
+   * Queries Firestore (magicLinks/{tokenHash}) as the source of truth so revocations
+   * performed on any manager device take effect across all worker devices.
    */
-  checkTokenStatus: async (token: string): Promise<{ active: boolean; error?: string; tokenRecord?: WorkerAccessToken }> => {
-    if (!token) return { active: false, error: 'No token provided' };
-    const tokens = getStoredTokens();
-    const record = tokens.find(t => t.token === token.trim());
-    if (!record) return { active: false, error: 'Link not found' };
-    if (record.revoked) return { active: false, error: 'This link has expired. Contact your manager.', tokenRecord: record };
+  checkTokenStatus: async (
+    token: string
+  ): Promise<{
+    active: boolean;
+    error?: string;
+    errorCode?: MagicLinkVerificationErrorCode;
+    revocationReason?: string;
+    expiresAt?: string;
+    tokenRecord?: WorkerAccessToken;
+  }> => {
+    if (!token) return { active: false, errorCode: 'MISSING_TOKEN', error: 'No token provided' };
+    const { record, firestoreReadFailed, networkTimeout } = await fetchAuthoritativeToken(token);
+    if (!record) {
+      if (networkTimeout) {
+        return {
+          active: false,
+          errorCode: 'NETWORK_TIMEOUT',
+          error: 'Network error. Please check your connection.',
+        };
+      }
+      if (firestoreReadFailed) {
+        return {
+          active: false,
+          errorCode: 'FIRESTORE_READ_ERROR',
+          error: 'Unable to verify link. Please try again.',
+        };
+      }
+      return { active: false, errorCode: 'NOT_FOUND', error: 'Link not found' };
+    }
+    if (record.revoked) {
+      const reason = record.revocationReason || 'access revoked by manager';
+      return {
+        active: false,
+        errorCode: 'REVOKED',
+        revocationReason: reason,
+        error: `This link has been revoked (Reason: ${reason}). Contact your manager.`,
+        tokenRecord: record,
+      };
+    }
     if (new Date() > new Date(record.expiresAt)) {
-      return { active: false, error: 'This link has expired. Contact your manager.', tokenRecord: record };
+      const formattedExpiry = formatExactExpiryDate(record.expiresAt);
+      return {
+        active: false,
+        errorCode: 'EXPIRED',
+        expiresAt: record.expiresAt,
+        error: `This link expired on ${formattedExpiry}. Contact your manager.`,
+        tokenRecord: record,
+      };
     }
     return { active: true, tokenRecord: record };
   },
 
   /**
-   * Verifies a token, checks expiry & rate-limiting, and tracks multi-device access
+   * Verifies a magic link token with localStorage-first lookup and Firestore server-side fallback:
+   * 1. Checks localStorage first. If found and valid (not revoked, not expired), proceeds immediately.
+   * 2. If not found locally (e.g., opened on the worker's own phone), queries Firestore `magicLinks/{tokenHash}`.
+   * 3. Validates `revoked` (including revocation reason) and `expiresAt` (including exact expiry date).
+   * 4. On Firestore read failure/timeout, returns a clear retryable error instead of hanging.
+   * 5. Hydrates the valid tokenRecord into local cache, tracks multi-device access, and persists `accessLog`.
    */
   verifyAndTrackAccess: async (
     token: string,
@@ -412,39 +1269,118 @@ export const magicLinkService = {
   ): Promise<{
     isValid: boolean;
     error?: string;
+    errorCode?: MagicLinkVerificationErrorCode;
+    revocationReason?: string;
+    expiresAt?: string;
+    canRetry?: boolean;
+    verificationSource?: 'local_cache' | 'firestore';
     tokenRecord?: WorkerAccessToken;
     isFlagged?: boolean;
     isProvisional?: boolean;
     distinctDeviceCount?: number;
     isAttestationOutageBypass?: boolean;
   }> => {
-    if (!token || typeof token !== 'string') {
-      return { isValid: false, error: 'Invalid or missing magic link token.' };
-    }
-
-    const tokens = getStoredTokens();
-    const index = tokens.findIndex(t => t.token === token.trim());
-    
-    if (index === -1) {
-      return { 
-        isValid: false, 
-        error: 'Magic link not found or invalid. Please request a new link from your supervisor.' 
-      };
-    }
-
-    const record = tokens[index];
-
-    // Check revocation
-    if (record.revoked) {
+    if (!token || typeof token !== 'string' || !token.trim()) {
       return {
         isValid: false,
-        error: `This link has been revoked (${record.revocationReason || 'access revoked'}). Please ask your factory manager for an updated link.`
+        errorCode: 'MISSING_TOKEN',
+        error: 'Invalid or missing magic link token.',
       };
     }
 
-    // Edge Case 3: Tenant suspended for non-payment (E17-S4)
-    // Check if tenant is suspended and whether grace period has expired.
-    // If within dunning window, allow access so workforce is not stranded mid-payroll.
+    const trimmedToken = token.trim();
+    const now = new Date();
+
+    // Step 1: Check localStorage first
+    const localTokens = getStoredTokens();
+    const localMatch =
+      localTokens.find((t) => t.token === trimmedToken || t.tokenHash === trimmedToken) || null;
+
+    let record: WorkerAccessToken | null = null;
+    let verificationSource: 'local_cache' | 'firestore' = 'local_cache';
+
+    const localIsRevoked = Boolean(localMatch?.revoked);
+    const localIsExpired = localMatch ? now > new Date(localMatch.expiresAt) : false;
+
+    if (localMatch && !localIsRevoked && !localIsExpired) {
+      // Found locally and valid — proceed immediately
+      record = { ...localMatch };
+      verificationSource = 'local_cache';
+    } else if (localMatch && localIsRevoked) {
+      // Already revoked locally — monotonic revocation
+      record = { ...localMatch };
+      verificationSource = 'local_cache';
+    } else {
+      // Step 2: Not found locally (or locally expired, check Firestore in case of rolling TTL renewal)
+      const { tokenHash, rawToken } = await resolveTokenHash(trimmedToken);
+      const firestoreResult = await fetchTokenFromFirestoreByHash(tokenHash, rawToken);
+
+      if (firestoreResult.status === 'FOUND') {
+        record = { ...firestoreResult.record };
+        verificationSource = 'firestore';
+      } else if (firestoreResult.status === 'TIMEOUT') {
+        // Edge Case: Network Timeout — show exact network error message instead of hanging
+        if (localMatch && localIsExpired) {
+          record = { ...localMatch };
+          verificationSource = 'local_cache';
+        } else {
+          return {
+            isValid: false,
+            errorCode: 'NETWORK_TIMEOUT',
+            error: 'Network error. Please check your connection.',
+            canRetry: true,
+          };
+        }
+      } else if (firestoreResult.status === 'ERROR') {
+        // Edge Case: Firestore read failure — return clear message instead of hanging
+        if (localMatch && localIsExpired) {
+          record = { ...localMatch };
+          verificationSource = 'local_cache';
+        } else {
+          return {
+            isValid: false,
+            errorCode: 'FIRESTORE_READ_ERROR',
+            error: 'Unable to verify link. Please try again.',
+            canRetry: true,
+          };
+        }
+      } else {
+        // firestoreResult.status === 'NOT_FOUND'
+        if (localMatch && localIsExpired) {
+          record = { ...localMatch };
+          verificationSource = 'local_cache';
+        } else {
+          return {
+            isValid: false,
+            errorCode: 'NOT_FOUND',
+            error: 'Magic link not found or invalid. Please request a new link from your supervisor.',
+          };
+        }
+      }
+    }
+
+    if (!record) {
+      return {
+        isValid: false,
+        errorCode: 'NOT_FOUND',
+        error: 'Magic link not found or invalid. Please request a new link from your supervisor.',
+      };
+    }
+
+    // Step 3a: Validate revoked status (Edge Case 2 — show exact revocation reason)
+    if (record.revoked) {
+      const reason = record.revocationReason || 'access revoked by manager';
+      return {
+        isValid: false,
+        errorCode: 'REVOKED',
+        revocationReason: reason,
+        verificationSource,
+        tokenRecord: record,
+        error: `This link has been revoked (Reason: ${reason}). Please ask your factory manager for an updated link.`,
+      };
+    }
+
+    // Edge Case: Tenant suspended for non-payment (E17-S4)
     try {
       const entitlements = await entitlementService.getTenantEntitlements(record.tenantId);
       if (entitlements && (entitlements as any).isSuspended) {
@@ -452,25 +1388,26 @@ export const magicLinkService = {
         if (!inDunningWindow) {
           return {
             isValid: false,
-            error: 'Organization access suspended. Please contact your company management.'
+            errorCode: 'TENANT_SUSPENDED',
+            verificationSource,
+            tokenRecord: record,
+            error: 'Organization access suspended. Please contact your company management.',
           };
         }
       }
     } catch {}
 
-    // Check expiration
-    const now = new Date();
+    // Step 3b: Validate expiresAt (Edge Case 1 — show exact expiry date from Firestore)
     const expiry = new Date(record.expiresAt);
-    if (now > expiry) {
-      const formattedExpiry = expiry.toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
+    if (!Number.isNaN(expiry.getTime()) && now > expiry) {
+      const formattedExpiry = formatExactExpiryDate(record.expiresAt);
       return {
         isValid: false,
-        error: `This link expired on ${formattedExpiry}. Magic links remain active for ${record.ttlHours} hours for security. Ask your manager for a new link.`
+        errorCode: 'EXPIRED',
+        expiresAt: record.expiresAt,
+        verificationSource,
+        tokenRecord: record,
+        error: `This link expired on ${formattedExpiry}. Magic links remain active for ${record.ttlHours} hours for security. Ask your manager for a new link.`,
       };
     }
 
@@ -478,7 +1415,7 @@ export const magicLinkService = {
     const ua = userAgentInput || (typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown Device');
     const screenInfo = typeof window !== 'undefined' ? `${window.screen?.width || 0}x${window.screen?.height || 0}` : 'default';
     const lang = typeof navigator !== 'undefined' ? navigator.language : 'en';
-    
+
     let deviceFp = 'fp_unknown';
     try {
       deviceFp = btoa(`${ua}__${screenInfo}__${lang}`).slice(0, 32);
@@ -486,15 +1423,16 @@ export const magicLinkService = {
       deviceFp = `fp_${ua.slice(0, 20)}`;
     }
 
+    const nowIso = new Date().toISOString();
     const accessEntry: DeviceAccessEntry = {
       deviceFingerprint: deviceFp,
       userAgent: ua,
-      timestamp: new Date().toISOString()
+      timestamp: nowIso
     };
 
-    record.accessLog = record.accessLog || [];
-    record.accessLog.push(accessEntry);
-    record.lastUsedAt = new Date().toISOString();
+    record.accessLog = sanitizeAccessLog([...(record.accessLog || []), accessEntry]);
+    record.lastUsedAt = nowIso;
+    record.updatedAt = nowIso;
 
     // Calculate distinct devices accessed in the past 1 hour (3600000 ms)
     const oneHourAgo = Date.now() - 3600000;
@@ -519,7 +1457,7 @@ export const magicLinkService = {
           userEmail: `worker-${record.workerId}@magiclink.wfpro`,
           userRole: 'WORKER',
           action: 'MULTI_DEVICE_MAGIC_LINK_ACCESS',
-          resource: `workers/${record.workerId}/magic_links/${record.tokenHash}`,
+          resource: `${MAGIC_LINKS_COLLECTION}/${record.tokenHash}`,
           status: 'DENIED',
           details: {
             workerId: record.workerId,
@@ -542,7 +1480,7 @@ export const magicLinkService = {
           message: `The magic link for ${record.workerName} (${record.scope}) was accessed from ${distinctDevices.size} different devices within 1 hour.`,
           type: 'ALERT',
           read: false,
-          createdAt: new Date().toISOString(),
+          createdAt: nowIso,
           category: 'SECURITY'
         } as any);
       } catch (err) {
@@ -551,14 +1489,22 @@ export const magicLinkService = {
     }
 
     // Attestation Outage Fail-Open Evaluation for Low-Risk Actions (Key AC 4)
-    const isAttestationOutageBypass = (record.scope === 'PAYSLIP' || record.scope === 'SCHEDULE') && 
+    const isAttestationOutageBypass = (record.scope === 'PAYSLIP' || record.scope === 'SCHEDULE') &&
       deviceAttestationService.isOutageSimulated();
 
-    tokens[index] = record;
-    saveStoredTokens(tokens);
+    // Hydrate into localStorage cache & persist updated accessLog to Firestore (never hangs portal render)
+    upsertStoredToken(record);
+    if (isDeviceOnline()) {
+      persistTokenDocumentToFirestore(record).catch(() => {
+        void queueMagicLinkForOfflineSync(record!);
+      });
+    } else {
+      void queueMagicLinkForOfflineSync(record);
+    }
 
     return {
       isValid: true,
+      verificationSource,
       tokenRecord: record,
       isFlagged,
       distinctDeviceCount: distinctDevices.size,
@@ -567,7 +1513,130 @@ export const magicLinkService = {
   },
 
   /**
-   * Retrieves all magic link tokens across all tenants or filtered by tenantId
+   * Fetches all magic link tokens for a specific worker from Firestore (source of truth),
+   * merges any pending offline-queued tokens, and refreshes the localStorage cache.
+   */
+  fetchTokensForWorkerFromFirestore: async (
+    tenantId: string,
+    workerId: string
+  ): Promise<{ active: WorkerAccessToken[]; revoked: WorkerAccessToken[] }> => {
+    if (isDeviceOnline() && tenantId && workerId) {
+      const colPath = MAGIC_LINKS_COLLECTION;
+      try {
+        const q = query(
+          collection(db, MAGIC_LINKS_COLLECTION),
+          where('tenantId', '==', tenantId),
+          where('workerId', '==', workerId)
+        );
+        const snap = await withFirestoreTimeout(getDocs(q), FIRESTORE_OP_TIMEOUT_MS);
+        const firestoreTokens: WorkerAccessToken[] = snap.docs.map((d) =>
+          fromFirestoreMagicLinkDoc(d.id, d.data())
+        );
+
+        // Merge with local cache: keep Firestore as source of truth, plus any offline-pending local records
+        const firestoreHashSet = new Set(firestoreTokens.map((t) => t.tokenHash));
+        const localTokens = getStoredTokens();
+        const pendingOfflineForWorker = localTokens.filter(
+          (t) =>
+            t.workerId === workerId &&
+            !firestoreHashSet.has(t.tokenHash) &&
+            t.syncStatus === 'PENDING_LOCAL'
+        );
+
+        for (const ft of firestoreTokens) {
+          upsertStoredToken(ft);
+        }
+
+        const merged = [...pendingOfflineForWorker, ...firestoreTokens].sort(
+          (a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime()
+        );
+        const now = new Date();
+        return {
+          active: merged.filter((t) => !t.revoked && new Date(t.expiresAt) > now),
+          revoked: merged.filter((t) => t.revoked || new Date(t.expiresAt) <= now),
+        };
+      } catch (error) {
+        logMagicLinkFirestoreError(error, FirestoreOperationType.LIST, colPath);
+      }
+    }
+
+    return magicLinkService.getTokensForWorker(workerId);
+  },
+
+  /**
+   * Fetches all magic link tokens for a tenant from Firestore (source of truth) and refreshes local cache.
+   */
+  fetchTokensForTenantFromFirestore: async (tenantId: string): Promise<WorkerAccessToken[]> => {
+    if (isDeviceOnline() && tenantId) {
+      const colPath = MAGIC_LINKS_COLLECTION;
+      try {
+        const q = query(
+          collection(db, MAGIC_LINKS_COLLECTION),
+          where('tenantId', '==', tenantId)
+        );
+        const snap = await withFirestoreTimeout(getDocs(q), FIRESTORE_OP_TIMEOUT_MS);
+        const firestoreTokens: WorkerAccessToken[] = snap.docs.map((d) =>
+          fromFirestoreMagicLinkDoc(d.id, d.data())
+        );
+        const firestoreHashSet = new Set(firestoreTokens.map((t) => t.tokenHash));
+        const pendingLocal = getStoredTokens().filter(
+          (t) =>
+            t.tenantId === tenantId &&
+            !firestoreHashSet.has(t.tokenHash) &&
+            t.syncStatus === 'PENDING_LOCAL'
+        );
+        for (const ft of firestoreTokens) {
+          upsertStoredToken(ft);
+        }
+        return [...pendingLocal, ...firestoreTokens].sort(
+          (a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime()
+        );
+      } catch (error) {
+        logMagicLinkFirestoreError(error, FirestoreOperationType.LIST, colPath);
+      }
+    }
+
+    return magicLinkService.getTokensForTenant(tenantId);
+  },
+
+  /**
+   * Fetches all magic link tokens (optionally filtered by tenantId) from Firestore (source of truth)
+   * and updates local cache.
+   */
+  fetchAllTokensFromFirestore: async (tenantId?: string): Promise<WorkerAccessToken[]> => {
+    if (tenantId && tenantId !== 'ALL') {
+      return magicLinkService.fetchTokensForTenantFromFirestore(tenantId);
+    }
+    if (isDeviceOnline()) {
+      const colPath = MAGIC_LINKS_COLLECTION;
+      try {
+        const snap = await withFirestoreTimeout(
+          getDocs(collection(db, MAGIC_LINKS_COLLECTION)),
+          FIRESTORE_OP_TIMEOUT_MS
+        );
+        const firestoreTokens: WorkerAccessToken[] = snap.docs.map((d) =>
+          fromFirestoreMagicLinkDoc(d.id, d.data())
+        );
+        const firestoreHashSet = new Set(firestoreTokens.map((t) => t.tokenHash));
+        const pendingLocal = getStoredTokens().filter(
+          (t) => !firestoreHashSet.has(t.tokenHash) && t.syncStatus === 'PENDING_LOCAL'
+        );
+        for (const ft of firestoreTokens) {
+          upsertStoredToken(ft);
+        }
+        return [...pendingLocal, ...firestoreTokens].sort(
+          (a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime()
+        );
+      } catch (error) {
+        logMagicLinkFirestoreError(error, FirestoreOperationType.LIST, colPath);
+      }
+    }
+
+    return magicLinkService.getAllTokens(tenantId);
+  },
+
+  /**
+   * Retrieves cached magic link tokens across all tenants or filtered by tenantId (synchronous cache read)
    */
   getAllTokens: (tenantId?: string): WorkerAccessToken[] => {
     const tokens = getStoredTokens();
@@ -576,7 +1645,7 @@ export const magicLinkService = {
   },
 
   /**
-   * Retrieves all issued magic link tokens for a specific tenant
+   * Retrieves cached magic link tokens for a specific tenant (synchronous cache read)
    */
   getTokensForTenant: (tenantId: string): WorkerAccessToken[] => {
     const tokens = getStoredTokens();
@@ -584,7 +1653,7 @@ export const magicLinkService = {
   },
 
   /**
-   * Retrieves all tokens (active and revoked) for a specific worker
+   * Retrieves cached tokens (active and revoked) for a specific worker (synchronous cache read)
    */
   getTokensForWorker: (workerId: string): { active: WorkerAccessToken[]; revoked: WorkerAccessToken[] } => {
     const tokens = getStoredTokens();
@@ -598,47 +1667,61 @@ export const magicLinkService = {
   },
 
   /**
-   * Revoke an active magic link token with audit log and reason
-   * Edge Case 4: UI and API guard preventing managers from revoking their own tokens
+   * Revoke an active magic link token (accepts raw `wft_...` token OR `tokenHash`)
+   * with Firestore persistence + E2 offline sync fallback + E15 audit log.
+   * Edge Case 4: UI and API guard preventing managers from revoking their own tokens.
    */
   revokeToken: async (
-    token: string, 
-    revokedBy: string, 
+    tokenOrHash: string,
+    revokedBy: string,
     reason: RevocationReason = 'other'
   ): Promise<boolean> => {
-    const tokens = getStoredTokens();
-    const match = tokens.find(t => t.token === token);
+    const { record: match } = await fetchAuthoritativeToken(tokenOrHash);
     if (!match) return false;
 
     // Edge Case 4: Manager tries to revoke their own token
-    // Managers use Firebase session auth and have no worker tokens
     if (revokedBy === match.workerId) {
       throw new Error('Managers authenticate via corporate user accounts and have no worker access tokens to revoke.');
     }
 
-    match.revoked = true;
-    match.revokedAt = new Date().toISOString();
-    match.revokedBy = revokedBy;
-    match.revocationReason = reason;
+    const nowIso = new Date().toISOString();
+    const revokedRecord: WorkerAccessToken = {
+      ...match,
+      revoked: true,
+      revokedAt: nowIso,
+      revokedBy,
+      revocationReason: reason,
+      updatedAt: nowIso,
+    };
 
-    saveStoredTokens(tokens);
+    upsertStoredToken(revokedRecord);
+
+    if (isDeviceOnline()) {
+      try {
+        await persistTokenDocumentToFirestore(revokedRecord);
+      } catch {
+        await queueMagicLinkForOfflineSync(revokedRecord);
+      }
+    } else {
+      await queueMagicLinkForOfflineSync(revokedRecord);
+    }
 
     // E15 Audit Trail Logging
     try {
       await tenantSecurityService.logTenantAccess({
-        tenantId: match.tenantId,
+        tenantId: revokedRecord.tenantId,
         userId: revokedBy,
         userEmail: revokedBy,
         userRole: 'SUPERVISOR',
         action: 'REVOKE_MAGIC_LINK',
-        resource: `workers/${match.workerId}/magic_links`,
+        resource: `${MAGIC_LINKS_COLLECTION}/${revokedRecord.tokenHash}`,
         status: 'SUCCESS',
         details: {
-          workerId: match.workerId,
-          tokenHash: match.tokenHash,
-          scope: match.scope,
+          workerId: revokedRecord.workerId,
+          tokenHash: revokedRecord.tokenHash,
+          scope: revokedRecord.scope,
           reason,
-          revokedAt: match.revokedAt
+          revokedAt: revokedRecord.revokedAt
         }
       });
     } catch {}
@@ -648,16 +1731,21 @@ export const magicLinkService = {
 
   /**
    * Worker-Exit Auto-Revocation:
-   * When a worker is marked inactive, auto-revoke all tokens and unbind devices within 60s
+   * When a worker is marked inactive, auto-revoke all tokens across Firestore & local cache
+   * and unbind devices within 60s.
    */
   revokeAllForWorker: async (
-    workerId: string, 
-    tenantId: string, 
-    revokedBy: string, 
+    workerId: string,
+    tenantId: string,
+    revokedBy: string,
     reason: RevocationReason = 'worker exit'
   ): Promise<{ revokedTokensCount: number; unboundDevicesCount: number }> => {
+    // Hydrate from Firestore first so tokens created on any manager device are revoked too
+    await magicLinkService.fetchTokensForWorkerFromFirestore(tenantId, workerId).catch(() => null);
+
     const tokens = getStoredTokens();
     const nowIso = new Date().toISOString();
+    const toPersist: WorkerAccessToken[] = [];
     let revokedTokensCount = 0;
 
     for (const t of tokens) {
@@ -666,10 +1754,25 @@ export const magicLinkService = {
         t.revokedAt = nowIso;
         t.revokedBy = revokedBy;
         t.revocationReason = reason;
+        t.updatedAt = nowIso;
+        toPersist.push({ ...t });
         revokedTokensCount++;
       }
     }
     saveStoredTokens(tokens);
+
+    // Persist every revoked token to Firestore (or queue to E2 if offline)
+    for (const revokedRec of toPersist) {
+      if (isDeviceOnline()) {
+        try {
+          await persistTokenDocumentToFirestore(revokedRec);
+        } catch {
+          await queueMagicLinkForOfflineSync(revokedRec);
+        }
+      } else {
+        await queueMagicLinkForOfflineSync(revokedRec);
+      }
+    }
 
     // Unbind all devices
     const devices = getStoredDevices();
@@ -1479,17 +2582,29 @@ export const magicLinkService = {
     match.lastPunchAt = serverTimestamp;
     saveStoredDevices(devices);
 
-    // 8. Auto-Renew Punch Link TTL (Key AC 7: Renews on every successful punch)
+    // 8. Auto-Renew Punch Link TTL (Key AC 7: Renews on every successful punch) & sync to Firestore
     let tokenRenewedUntil: string | undefined = undefined;
     const tokens = getStoredTokens();
+    const renewedPunchTokens: WorkerAccessToken[] = [];
     tokens.forEach(t => {
       if (t.workerId === params.workerId && (t.scope as string).toUpperCase() === 'PUNCH' && !t.revoked) {
         t.expiresAt = new Date(Date.now() + 7 * 86400 * 1000).toISOString(); // 7-day rolling extension
         t.lastUsedAt = serverTimestamp;
+        t.updatedAt = serverTimestamp;
         tokenRenewedUntil = t.expiresAt;
+        renewedPunchTokens.push({ ...t });
       }
     });
     saveStoredTokens(tokens);
+    for (const renewedTok of renewedPunchTokens) {
+      if (isDeviceOnline() && !params.isOffline) {
+        persistTokenDocumentToFirestore(renewedTok).catch(() => {
+          void queueMagicLinkForOfflineSync(renewedTok);
+        });
+      } else {
+        void queueMagicLinkForOfflineSync(renewedTok);
+      }
+    }
 
     // 9. Construct Punch Entry (Server authoritative timestamp + device timestamp metadata)
     const punchEntry = {

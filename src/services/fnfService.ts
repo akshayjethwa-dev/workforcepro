@@ -30,6 +30,7 @@ import { wageService } from './wageService';
 import { dbService } from './db';
 import { inboxService } from './inboxService';
 import { validateWorkerWageStructure } from './wageStructureValidationService';
+import { expenseService } from './expenseService';
 
 export const FNF_WORKING_DAYS_LIMIT = 2; // Section 17(2), Code on Wages
 export const FNF_GRATUITY_DAYS_LIMIT = 30; // Section 7(3), Payment of Gratuity Act
@@ -551,9 +552,18 @@ export function computeFnfSettlementStatement(
     ? round2(payroll.statutory.totalEmployeeStatutory)
     : 0;
 
-  // 6. Separate Schedule A (Wages/Leave/Recoveries - 2 Working Days) vs Schedule B (Gratuity - 30 Calendar Days)
+  // 5b. Expense Reimbursements routed to Full & Final (FnF) Settlement for resigned workers
+  const fnfExpenseInfo = expenseService.getFnfExpenseClaimsForWorker(
+    params.tenantId,
+    params.worker.id,
+    params.worker
+  );
+  const expenseReimbursements = round2(fnfExpenseInfo.totalApprovedAmount);
+  const expenseClaimIds = fnfExpenseInfo.approvedForFnf.map((c) => c.id);
+
+  // 6. Separate Schedule A (Wages/Leave/Expenses/Recoveries - 2 Working Days) vs Schedule B (Gratuity - 30 Calendar Days)
   const gratuityPayable = gratuityCalc.payableGratuityAmount;
-  const wageFnfGross = round2(pendingWagesEarned + leaveEncashmentAmount);
+  const wageFnfGross = round2(pendingWagesEarned + leaveEncashmentAmount + expenseReimbursements);
   const wageFnfTotalDeductions = round2(
     noticePayRecovery + advanceAndEwaRecovery + statutoryDeductions
   );
@@ -606,6 +616,8 @@ export function computeFnfSettlementStatement(
     pendingSalaryNote,
     leaveEncashmentDays: defaultLeaveDays,
     leaveEncashmentAmount,
+    expenseReimbursements,
+    expenseClaimIds,
     noticePeriodRequiredDays,
     noticePeriodServedDays,
     noticeShortfallDays,
@@ -1050,9 +1062,10 @@ export function buildOffCycleFnfPayslip(params: {
 
   const pendingWages = includeWage ? record.pendingWagesEarned : 0;
   const leaveEncashment = includeWage ? record.leaveEncashmentAmount : 0;
+  const fnfExpenseReimb = includeWage ? record.expenseReimbursements || 0 : 0;
   const overtimePay = includeWage ? basePayroll?.earnings.overtime || 0 : 0;
   const otherAllowances = includeWage
-    ? round2((basePayroll?.earnings.allowances.other || 0) + leaveEncashment)
+    ? round2((basePayroll?.earnings.allowances.other || 0) + leaveEncashment + fnfExpenseReimb)
     : 0;
   const basicOrWages = includeWage
     ? round2(
@@ -1065,7 +1078,7 @@ export function buildOffCycleFnfPayslip(params: {
       )
     : 0;
 
-  const gross = round2(pendingWages + leaveEncashment + interestAmount);
+  const gross = round2(pendingWages + leaveEncashment + fnfExpenseReimb + interestAmount);
 
   const noticeRecovery = includeWage ? record.noticePayRecovery || 0 : 0;
   const advanceRecovery = includeWage ? record.advanceAndEwaRecovery || 0 : 0;
@@ -1165,6 +1178,12 @@ export function buildOffCycleFnfPayslip(params: {
       details: deductionDetails,
     },
     statutory: includeWage ? basePayroll?.statutory : undefined,
+    ...(fnfExpenseReimb > 0
+      ? {
+          expenseReimbursements: fnfExpenseReimb,
+          expenseClaimIds: record.expenseClaimIds,
+        }
+      : {}),
     ...(gratuityAmt > 0 ? { gratuitySettlement: gratuityAmt } : {}),
     fnfSummary: {
       isFnF: true,

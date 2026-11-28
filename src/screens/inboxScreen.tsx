@@ -9,9 +9,17 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { 
   InboxItem, InboxActionType, InboxUrgency, 
-  InboxAuditEntry, ScreenName 
+  InboxAuditEntry, ScreenName, ExpenseRejectionReason
 } from '../types/index';
 import { inboxService, ManagerDelegation } from '../services/inboxService';
+import { dbService } from '../services/db';
+import {
+  formatPaiseAsRupees,
+  getExpenseCategoryLabel,
+  hasPolicyWarning,
+  TeamManagerEntry,
+} from '../services/expenseService';
+import { ExpenseReceiptReviewModal } from '../components/ExpenseReceiptReviewModal';
 import { TruncatedText } from '../components/TruncatedText';
 import {
   canAccessTechnicalInboxDetails,
@@ -48,14 +56,24 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [urgencyFilter, setUrgencyFilter] = useState<string>('ALL');
 
-  // Review drawer state
+  // Review drawer & full-screen expense receipt modal state
   const [reviewingItem, setReviewingItem] = useState<InboxItem | null>(null);
   const [reviewNotes, setReviewNotes] = useState('');
   const [inspectingExpenseItem, setInspectingExpenseItem] = useState<InboxItem | null>(null);
+  const [inspectingExpenseMode, setInspectingExpenseMode] = useState<'VIEW' | 'REJECT' | 'APPROVE_OVERRIDE'>('VIEW');
 
-  // Delegation modal
+  // Delegation modal (E300-R Manager On Leave routing)
   const [showDelegationModal, setShowDelegationModal] = useState(false);
+  const [teamManagers, setTeamManagers] = useState<TeamManagerEntry[]>([]);
+  const [selectedDelegateId, setSelectedDelegateId] = useState<string>('');
   const [delegateName, setDelegateName] = useState('');
+  const [delegateReason, setDelegateReason] = useState('On Leave');
+  const [delegateStartDate, setDelegateStartDate] = useState(
+    () => new Date().toISOString().split('T')[0]
+  );
+  const [delegateEndDate, setDelegateEndDate] = useState(
+    () => new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
+  );
   const [delegations, setDelegations] = useState<ManagerDelegation[]>([]);
 
   // Pagination for large queues (> 50 items)
@@ -66,9 +84,13 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
     if (!profile?.tenantId) return;
     setLoading(true);
     try {
-      const { pending, done } = await inboxService.getInboxItems(profile.tenantId, profile);
+      const [{ pending, done }, team] = await Promise.all([
+        inboxService.getInboxItems(profile.tenantId, profile),
+        dbService.getTeam(profile.tenantId).catch(() => []),
+      ]);
       setPendingItems(pending);
       setDoneItems(done);
+      setTeamManagers(team || []);
       setAuditTrail(inboxService.getAuditTrail(profile.tenantId));
       setDelegations(inboxService.getDelegations(profile.tenantId));
     } catch (e) {
@@ -81,7 +103,14 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
 
   useEffect(() => {
     loadData();
-  }, [profile?.tenantId]);
+    const onClaimsChanged = () => {
+      void loadData();
+    };
+    window.addEventListener('expenseClaimsChanged', onClaimsChanged);
+    return () => {
+      window.removeEventListener('expenseClaimsChanged', onClaimsChanged);
+    };
+  }, [profile?.tenantId, profile?.uid, profile?.role]);
 
   // Low-risk items count (advances under ₹500)
   const lowRiskItems = useMemo(() => {
@@ -105,11 +134,32 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
 
   const totalPages = Math.ceil(filteredPending.length / pageSize);
 
-  // Single Approve
-  const handleApprove = async (item: InboxItem, customNotes?: string) => {
+  const openExpenseModal = (
+    item: InboxItem,
+    mode: 'VIEW' | 'REJECT' | 'APPROVE_OVERRIDE' = 'VIEW'
+  ) => {
+    setInspectingExpenseMode(mode);
+    setInspectingExpenseItem(item);
+  };
+
+  // Single Approve (routes POLICY_WARNING expense claims through mandatory override note modal)
+  const handleApprove = async (
+    item: InboxItem,
+    customNotes?: string,
+    overrideNote?: string
+  ) => {
     if (!profile?.tenantId) return;
     if (item.isWaitingSync) {
       toast.warning('Cannot approve while data is waiting for offline sync.');
+      return;
+    }
+
+    if (
+      item.actionType === 'EXPENSE_APPROVAL' &&
+      hasPolicyWarning(item.details?.expenseClaim) &&
+      !overrideNote?.trim()
+    ) {
+      openExpenseModal(item, 'APPROVE_OVERRIDE');
       return;
     }
 
@@ -119,33 +169,87 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         item.id,
         profile.tenantId,
         'APPROVE',
-        profile.email || 'Supervisor',
-        customNotes || 'Approved via frontline one-tap'
+        profile.name || profile.email || 'Supervisor',
+        customNotes ||
+          (item.actionType === 'EXPENSE_APPROVAL'
+            ? 'Receipt verified and approved — moved to PENDING_FINANCE'
+            : 'Approved via frontline one-tap'),
+        {
+          actorProfile: profile,
+          overrideNote: overrideNote?.trim() || undefined,
+        }
       );
-      const simplifiedHeadline = getSimplifiedInboxPresentation(item).headline;
-      toast.success(`Approved: ${simplifiedHeadline}`);
+      if (item.actionType === 'EXPENSE_APPROVAL' && item.details?.expenseClaim) {
+        const c = item.details.expenseClaim;
+        toast.success(
+          overrideNote?.trim()
+            ? `Approved ₹${c.amount.toLocaleString('en-IN')} ${getExpenseCategoryLabel(c.category)} claim with policy override — status changed to PENDING_FINANCE`
+            : `Approved ₹${c.amount.toLocaleString('en-IN')} ${getExpenseCategoryLabel(c.category)} claim — status changed to PENDING_FINANCE`
+        );
+      } else {
+        const simplifiedHeadline = getSimplifiedInboxPresentation(item).headline;
+        toast.success(`Approved: ${simplifiedHeadline}`);
+      }
       if (reviewingItem?.id === item.id) {
         setReviewingItem(null);
       }
       await loadData();
     } catch (err: any) {
       toast.error(err?.message || 'Failed to approve item');
+      await loadData();
+      throw err;
     } finally {
       setActionLoadingId(null);
     }
   };
 
-  // Single Reject
+  // Expense Reject with mandatory dropdown reason
+  const handleRejectExpense = async (
+    item: InboxItem,
+    reasonCategory: ExpenseRejectionReason,
+    additionalNote?: string
+  ) => {
+    if (!profile?.tenantId) return;
+    setActionLoadingId(item.id);
+    try {
+      const fullReason = additionalNote ? `${reasonCategory} — ${additionalNote}` : reasonCategory;
+      await inboxService.resolveItem(
+        item.id,
+        profile.tenantId,
+        'REJECT',
+        profile.name || profile.email || 'Supervisor',
+        fullReason,
+        {
+          actorProfile: profile,
+          rejectionReasonCategory: reasonCategory,
+        }
+      );
+      toast.info(`Rejected expense claim (${reasonCategory})`);
+      await loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to reject expense claim');
+      throw err;
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Single Reject (non-expense items; expense items route through mandatory reason dropdown)
   const handleReject = async (item: InboxItem, customNotes?: string) => {
     if (!profile?.tenantId) return;
+    if (item.actionType === 'EXPENSE_APPROVAL' && !customNotes?.trim()) {
+      openExpenseModal(item, 'REJECT');
+      return;
+    }
     setActionLoadingId(item.id);
     try {
       await inboxService.resolveItem(
         item.id,
         profile.tenantId,
         'REJECT',
-        profile.email || 'Supervisor',
-        customNotes || 'Rejected by supervisor'
+        profile.name || profile.email || 'Supervisor',
+        customNotes || 'Rejected by supervisor',
+        { actorProfile: profile }
       );
       const simplifiedHeadline = getSimplifiedInboxPresentation(item).headline;
       toast.info(`Rejected: ${simplifiedHeadline}`);
@@ -169,7 +273,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
       const approvedCount = await inboxService.bulkApproveLowRisk(
         ids,
         profile.tenantId,
-        profile.email || 'Supervisor'
+        profile.name || profile.email || 'Supervisor'
       );
       toast.success(`Successfully approved ${approvedCount} low-risk advances.`);
       await loadData();
@@ -180,18 +284,27 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
     }
   };
 
-  // Save Delegation
-  const handleSaveDelegation = (e: React.FormEvent) => {
+  // Save Delegation (E300-R Manager On Leave routing)
+  const handleSaveDelegation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profile?.tenantId || !delegateName.trim()) return;
+    if (!profile?.tenantId) return;
+
+    const pickedTeamMgr = teamManagers.find((m) => m.uid === selectedDelegateId);
+    const resolvedDelegateId = pickedTeamMgr?.uid || `delegate-${Date.now()}`;
+    const resolvedDelegateName = pickedTeamMgr?.name || delegateName.trim();
+
+    if (!resolvedDelegateName) {
+      toast.error('Please choose a delegated manager or enter a delegate name.');
+      return;
+    }
 
     const newDelegation: ManagerDelegation = {
       managerId: profile.uid,
-      delegateId: `delegate-${Date.now()}`,
-      delegateName: delegateName.trim(),
-      reason: 'On Field Leave / Duty Travel',
-      startDate: new Date().toISOString().split('T')[0],
-      endDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+      delegateId: resolvedDelegateId,
+      delegateName: resolvedDelegateName,
+      reason: delegateReason.trim() || 'On Leave',
+      startDate: delegateStartDate || new Date().toISOString().split('T')[0],
+      endDate: delegateEndDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
       isActive: true
     };
 
@@ -199,7 +312,9 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
     setDelegations(inboxService.getDelegations(profile.tenantId));
     setShowDelegationModal(false);
     setDelegateName('');
-    toast.success(`Inbox authority delegated to ${newDelegation.delegateName}`);
+    setSelectedDelegateId('');
+    toast.success(`E300-R delegation active: claims routed to ${newDelegation.delegateName}`);
+    await loadData();
   };
 
   const getUrgencyBadge = (urgency: InboxUrgency) => {
@@ -332,12 +447,14 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               <button
                 onClick={() => {
                   if (profile?.tenantId) {
-                    inboxService.removeDelegation(profile.tenantId, profile.uid);
+                    const active = delegations.find((d) => d.isActive);
+                    inboxService.removeDelegation(profile.tenantId, active?.managerId || profile.uid);
                     setDelegations(inboxService.getDelegations(profile.tenantId));
-                    toast.info('Delegation terminated.');
+                    toast.info('Delegation terminated. Claims returned to primary manager.');
+                    void loadData();
                   }
                 }}
-                className="text-amber-800 hover:text-amber-950 font-bold underline px-2 py-1"
+                className="text-amber-800 hover:text-amber-950 font-bold underline px-2 py-1 cursor-pointer"
               >
                 Revoke
               </button>
@@ -524,12 +641,36 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                     ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
                     : typeMeta.color;
 
+                  const isExpenseCard = item.actionType === 'EXPENSE_APPROVAL' && Boolean(item.details?.expenseClaim);
+                  const expenseClaim = item.details?.expenseClaim;
+                  const expensePolicyWarn = expenseClaim?.policyWarning;
+                  const isExpensePolicyWarning = isExpenseCard && hasPolicyWarning(expenseClaim);
+
                   return (
                     <div
                       key={item.id}
-                      className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row md:items-center justify-between gap-4"
+                      role={isExpenseCard ? 'button' : undefined}
+                      tabIndex={isExpenseCard ? 0 : undefined}
+                      onClick={isExpenseCard ? () => openExpenseModal(item, 'VIEW') : undefined}
+                      onKeyDown={
+                        isExpenseCard
+                          ? (e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                openExpenseModal(item, 'VIEW');
+                              }
+                            }
+                          : undefined
+                      }
+                      className={`bg-white border rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                        isExpensePolicyWarning
+                          ? 'border-rose-300 ring-1 ring-rose-200 hover:border-rose-500 cursor-pointer focus:outline-none focus:ring-2 focus:ring-rose-500'
+                          : isExpenseCard
+                          ? 'border-slate-200 hover:border-teal-400 cursor-pointer focus:outline-none focus:ring-2 focus:ring-teal-500'
+                          : 'border-slate-200'
+                      }`}
                     >
-                      {/* Left: Simple Plain-English Explanation */}
+                      {/* Left: Simple Plain-English Explanation or Structured Expense Card */}
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                           <span className={`px-2.5 py-1 text-xs font-extrabold rounded-md border flex items-center gap-1 ${badgeStyle}`}>
@@ -542,6 +683,24 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                             </span>
                           )}
                           {(item.urgency === 'URGENT' || item.urgency === 'HIGH') && getUrgencyBadge(item.urgency)}
+                          {isExpensePolicyWarning && (
+                            <span className="px-2 py-0.5 text-[11px] font-black rounded-md bg-rose-600 text-white border border-rose-700 flex items-center gap-1">
+                              <AlertTriangle size={11} />
+                              <span>POLICY_WARNING</span>
+                            </span>
+                          )}
+                          {isExpenseCard && item.routingRuleApplied === 'DELEGATED_ON_LEAVE' && (
+                            <span className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-amber-50 text-amber-800 border border-amber-300 flex items-center gap-1">
+                              <UserCheck size={11} />
+                              <span>Delegated from {item.delegatedFromManagerName || 'Manager'} (On Leave)</span>
+                            </span>
+                          )}
+                          {isExpenseCard && item.routingRuleApplied === 'SELF_APPROVAL_ESCALATED_TO_ADMIN' && (
+                            <span className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-purple-50 text-purple-800 border border-purple-300 flex items-center gap-1">
+                              <ShieldAlert size={11} />
+                              <span>Escalated to Tenant Admin (Self-Approval Blocked)</span>
+                            </span>
+                          )}
                           {item.isLowRisk && (
                             <span className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
                               Low Risk (&lt; ₹500)
@@ -558,194 +717,236 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                           </span>
                         </div>
 
-                        {/* Plain-English Headline (no raw GPS or technical codes) */}
-                        <h4 className="text-base sm:text-lg font-bold text-slate-900 mb-1 leading-snug">
-                          {view.headline}
-                        </h4>
-                        <p className="text-xs sm:text-sm text-slate-600 mb-2.5 leading-relaxed">
-                          {view.subtext}
-                        </p>
-
-                        {/* EWA Accrued-Wage & Payroll Impact Callout */}
-                        {item.details?.isEwa && (
-                          <div className="mb-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-[11px] font-extrabold text-emerald-900 uppercase tracking-wider flex items-center gap-1">
-                                <IndianRupee size={12} className="text-emerald-700" />
-                                <span>Earned Wage Access (EWA)</span>
-                              </span>
-                              {item.details.payrollImpact?.isFnF && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
-                                  Full & Final Settlement
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-                              <div className="p-2 bg-white rounded-lg border border-emerald-100">
-                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Requested</span>
-                                <span className="text-sm font-black text-emerald-800 font-mono">₹{item.amount?.toLocaleString()}</span>
-                              </div>
-                              <div className="p-2 bg-white rounded-lg border border-emerald-100">
-                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Accrued Balance</span>
-                                <span className="text-sm font-black text-slate-800 font-mono">₹{item.details.accruedBalance?.toLocaleString()}</span>
-                              </div>
-                              <div className="p-2 bg-white rounded-lg border border-emerald-100 col-span-2 sm:col-span-1">
-                                <span className="text-[10px] text-slate-500 font-semibold uppercase block">Remaining Accrual</span>
-                                <span className="text-sm font-black text-blue-700 font-mono">₹{item.details.payrollImpact?.remainingAccrual?.toLocaleString()}</span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* FnF Deadline Breach Callout */}
-                        {item.actionType === 'FNF_DEADLINE_BREACH' && item.details?.fnfSettlement && (
-                          <div className="mb-3 p-3 bg-rose-50 border border-rose-300 rounded-xl space-y-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                              <span className="font-extrabold text-rose-900 flex items-center gap-1">
-                                <AlertTriangle size={13} className="text-rose-700" />
-                                <span>Final Settlement Overdue</span>
-                              </span>
-                              <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
-                                +{item.details.overdueDays || 1}d Overdue
-                              </span>
-                            </div>
-                            {onNavigate && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (typeof sessionStorage !== 'undefined') {
-                                    sessionStorage.setItem('gratuity_fnf_worker_id', item.workerId);
-                                  }
-                                  onNavigate('GRATUITY');
-                                }}
-                                className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-800 hover:text-rose-950 underline cursor-pointer"
+                        {isExpenseCard && expenseClaim ? (
+                          /* Dedicated Expense Claim Card: Worker Name, Amount, Category, Date, and Receipt Thumbnail */
+                          <div className="space-y-2.5">
+                            {isExpensePolicyWarning && (
+                              <div
+                                role="alert"
+                                className="p-3 rounded-xl bg-rose-600 border border-rose-700 text-white shadow-xs space-y-1"
                               >
-                                <span>Open Settlement Center</span>
-                                <ArrowUpRight size={13} />
-                              </button>
+                                <div className="text-xs sm:text-sm font-black leading-snug">
+                                  {expensePolicyWarn?.bannerMessage ||
+                                    '⚠️ Warning: This claim exceeds the company daily category limit.'}
+                                </div>
+                                {expensePolicyWarn && (
+                                  <p className="text-[11px] text-rose-100 leading-snug">
+                                    Daily total on{' '}
+                                    <span className="font-mono font-bold">
+                                      {expensePolicyWarn.expenseDate}
+                                    </span>
+                                    :{' '}
+                                    <strong className="font-mono text-white">
+                                      {formatPaiseAsRupees(expensePolicyWarn.cumulativeDailyTotalPaise)}
+                                    </strong>{' '}
+                                    across {expensePolicyWarn.sameDayClaimCount} claim
+                                    {expensePolicyWarn.sameDayClaimCount === 1 ? '' : 's'} (+
+                                    {formatPaiseAsRupees(expensePolicyWarn.exceededByPaise)} over
+                                    limit) · Mandatory override note required to approve.
+                                  </p>
+                                )}
+                              </div>
                             )}
-                          </div>
-                        )}
 
-                        {/* Expense Claim Receipt Preview & HIGH_RISK_DUPLICATE Flag */}
-                        {item.actionType === 'EXPENSE_APPROVAL' && item.details?.expenseClaim && (() => {
-                          const claim = item.details.expenseClaim;
-                          const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
-                          return (
-                            <div className="mb-3 space-y-2">
-                              {isDup && (
-                                <div className="p-3 rounded-xl bg-rose-50 border-2 border-rose-300 flex items-start gap-2.5 text-xs text-rose-900">
-                                  <ShieldAlert size={16} className="text-rose-700 shrink-0 mt-0.5" />
-                                  <div>
-                                    <div className="font-black uppercase tracking-wider text-rose-800">
-                                      HIGH_RISK_DUPLICATE — Identical Receipt Detected
-                                    </div>
-                                    <p className="mt-0.5 leading-relaxed">
-                                      Exact SHA-256 image match with a receipt already submitted by{' '}
-                                      <strong>{claim.duplicateOfWorkerName || 'another worker'}</strong> on{' '}
-                                      <span className="font-mono font-bold">{claim.duplicateOfExpenseDate || 'earlier'}</span>.
-                                    </p>
+                            {expenseClaim.riskFlag === 'HIGH_RISK_DUPLICATE' && (
+                              <div className="p-3 rounded-xl bg-rose-50 border-2 border-rose-300 flex items-start gap-2.5 text-xs text-rose-900">
+                                <ShieldAlert size={16} className="text-rose-700 shrink-0 mt-0.5" />
+                                <div>
+                                  <div className="font-black uppercase tracking-wider text-rose-800">
+                                    HIGH_RISK_DUPLICATE — Identical Receipt Detected
+                                  </div>
+                                  <p className="mt-0.5 leading-relaxed">
+                                    Exact SHA-256 image match with a receipt already submitted by{' '}
+                                    <strong>{expenseClaim.duplicateOfWorkerName || 'another worker'}</strong> on{' '}
+                                    <span className="font-mono font-bold">{expenseClaim.duplicateOfExpenseDate || 'earlier'}</span>.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex items-center gap-3.5 sm:gap-4">
+                              {/* Receipt Photo Thumbnail */}
+                              <div className="relative group shrink-0 w-20 h-24 rounded-xl overflow-hidden border-2 border-slate-200 group-hover:border-teal-400 bg-slate-100 shadow-2xs">
+                                <img
+                                  src={expenseClaim.receiptImageDataUrl}
+                                  alt={`${expenseClaim.workerName} receipt thumbnail`}
+                                  className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-slate-950/45 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] font-bold gap-0.5">
+                                  <Eye size={16} />
+                                  <span>View</span>
+                                </div>
+                              </div>
+
+                              {/* Worker Name, Amount, Category, Date */}
+                              <div className="min-w-0 flex-1 space-y-1.5">
+                                <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                                  <h4 className="text-base sm:text-lg font-black text-slate-900 leading-tight truncate">
+                                    {expenseClaim.workerName}
+                                  </h4>
+                                  <span className="text-xl sm:text-2xl font-black font-mono text-slate-900 tabular-nums">
+                                    ₹{expenseClaim.amount.toLocaleString('en-IN')}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center flex-wrap gap-2 text-xs">
+                                  <span className="px-2.5 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 font-extrabold">
+                                    {getExpenseCategoryLabel(expenseClaim.category)}
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 font-mono font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                                    <Calendar size={12} className="text-slate-400" />
+                                    {expenseClaim.expenseDate}
+                                  </span>
+                                  {expenseClaim.workerDesignation && (
+                                    <span className="text-slate-500 font-medium">
+                                      • {expenseClaim.workerDesignation}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                                  <span className="inline-flex items-center gap-1 font-bold text-teal-700">
+                                    <Eye size={13} />
+                                    <span>Tap card to view full-screen receipt</span>
+                                  </span>
+                                  {expenseClaim.approverName && (
+                                    <span className="text-[11px] font-semibold text-slate-500">
+                                      Approver: <strong className="text-slate-700">{expenseClaim.approverName}</strong>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Plain-English Headline (no raw GPS or technical codes) */}
+                            <h4 className="text-base sm:text-lg font-bold text-slate-900 mb-1 leading-snug">
+                              {view.headline}
+                            </h4>
+                            <p className="text-xs sm:text-sm text-slate-600 mb-2.5 leading-relaxed">
+                              {view.subtext}
+                            </p>
+
+                            {/* EWA Accrued-Wage & Payroll Impact Callout */}
+                            {item.details?.isEwa && (
+                              <div className="mb-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-[11px] font-extrabold text-emerald-900 uppercase tracking-wider flex items-center gap-1">
+                                    <IndianRupee size={12} className="text-emerald-700" />
+                                    <span>Earned Wage Access (EWA)</span>
+                                  </span>
+                                  {item.details.payrollImpact?.isFnF && (
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-300">
+                                      Full & Final Settlement
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                                  <div className="p-2 bg-white rounded-lg border border-emerald-100">
+                                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Requested</span>
+                                    <span className="text-sm font-black text-emerald-800 font-mono">₹{item.amount?.toLocaleString()}</span>
+                                  </div>
+                                  <div className="p-2 bg-white rounded-lg border border-emerald-100">
+                                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Accrued Balance</span>
+                                    <span className="text-sm font-black text-slate-800 font-mono">₹{item.details.accruedBalance?.toLocaleString()}</span>
+                                  </div>
+                                  <div className="p-2 bg-white rounded-lg border border-emerald-100 col-span-2 sm:col-span-1">
+                                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Remaining Accrual</span>
+                                    <span className="text-sm font-black text-blue-700 font-mono">₹{item.details.payrollImpact?.remainingAccrual?.toLocaleString()}</span>
                                   </div>
                                 </div>
+                              </div>
+                            )}
+
+                            {/* FnF Deadline Breach Callout */}
+                            {item.actionType === 'FNF_DEADLINE_BREACH' && item.details?.fnfSettlement && (
+                              <div className="mb-3 p-3 bg-rose-50 border border-rose-300 rounded-xl space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                  <span className="font-extrabold text-rose-900 flex items-center gap-1">
+                                    <AlertTriangle size={13} className="text-rose-700" />
+                                    <span>Final Settlement Overdue</span>
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded bg-rose-700 text-white font-mono text-[10px] font-bold">
+                                    +{item.details.overdueDays || 1}d Overdue
+                                  </span>
+                                </div>
+                                {onNavigate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (typeof sessionStorage !== 'undefined') {
+                                        sessionStorage.setItem('gratuity_fnf_worker_id', item.workerId);
+                                      }
+                                      onNavigate('GRATUITY');
+                                    }}
+                                    className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-800 hover:text-rose-950 underline cursor-pointer"
+                                  >
+                                    <span>Open Settlement Center</span>
+                                    <ArrowUpRight size={13} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Worker Identity + Role-Gated "View technical details" Link (CA / Super Admin only) */}
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-fluid-xs text-slate-500 font-medium min-w-0">
+                              <span className="flex items-center gap-1.5 text-slate-800 font-bold min-w-0 max-w-full">
+                                <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold shrink-0">
+                                  {item.workerName.charAt(0)}
+                                </span>
+                                <TruncatedText
+                                  text={item.workerName}
+                                  modalTitle="Worker Details"
+                                  subtitle={item.workerDesignation || view.categoryLabel}
+                                  details={[
+                                    ...(item.workerPhone ? [{ label: 'Phone', value: item.workerPhone, mono: true }] : []),
+                                    { label: 'Category', value: view.categoryLabel },
+                                  ]}
+                                  className="font-bold text-slate-800 text-fluid-xs max-w-[14rem]"
+                                />
+                              </span>
+                              {item.workerDesignation && (
+                                <span className="break-words text-slate-500">• {item.workerDesignation}</span>
                               )}
-                              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3">
+
+                              {/* Advanced View Link — strictly visible ONLY to CA or Super Admin */}
+                              {canViewTechnicalDetails && view.hasTechnicalDetails && (
                                 <button
                                   type="button"
-                                  onClick={() => setInspectingExpenseItem(item)}
-                                  className="relative group shrink-0 rounded-xl overflow-hidden border border-slate-300 cursor-pointer"
-                                  title="Inspect full-size receipt photo"
+                                  onClick={() => {
+                                    setReviewNotes('');
+                                    setReviewingItem(item);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 underline underline-offset-2 cursor-pointer ml-auto sm:ml-1"
                                 >
-                                  <img
-                                    src={claim.receiptImageDataUrl}
-                                    alt="Expense receipt"
-                                    className="w-16 h-16 object-cover"
-                                  />
-                                  <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                                    <Eye size={16} />
-                                  </div>
+                                  <span>View technical details</span>
+                                  <ChevronRight size={13} />
                                 </button>
-                                <div className="min-w-0 flex-1 text-xs space-y-1">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-black font-mono text-base text-slate-900">
-                                      ₹{claim.amount.toLocaleString('en-IN')}
-                                    </span>
-                                    <span className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-800 font-bold text-[11px]">
-                                      {claim.category}
-                                    </span>
-                                    <span className="font-mono text-slate-500">{claim.expenseDate}</span>
-                                  </div>
-                                  <div className="flex items-center gap-3 flex-wrap">
-                                    <button
-                                      type="button"
-                                      onClick={() => setInspectingExpenseItem(item)}
-                                      className="inline-flex items-center gap-1 font-bold text-blue-700 hover:text-blue-900 underline cursor-pointer"
-                                    >
-                                      <Eye size={12} />
-                                      <span>Inspect Receipt Photo</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={isProcessing}
-                                      onClick={() =>
-                                        handleReject(item, 'Receipt photo is blurry or unreadable — please retake clearly.')
-                                      }
-                                      className="text-[11px] font-bold text-rose-700 hover:text-rose-900 underline cursor-pointer disabled:opacity-50"
-                                    >
-                                      Reject (Blurry / Unreadable)
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
+                              )}
                             </div>
-                          );
-                        })()}
-
-                        {/* Worker Identity + Role-Gated "View technical details" Link (CA / Super Admin only) */}
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-fluid-xs text-slate-500 font-medium min-w-0">
-                          <span className="flex items-center gap-1.5 text-slate-800 font-bold min-w-0 max-w-full">
-                            <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] uppercase font-bold shrink-0">
-                              {item.workerName.charAt(0)}
-                            </span>
-                            <TruncatedText
-                              text={item.workerName}
-                              modalTitle="Worker Details"
-                              subtitle={item.workerDesignation || view.categoryLabel}
-                              details={[
-                                ...(item.workerPhone ? [{ label: 'Phone', value: item.workerPhone, mono: true }] : []),
-                                { label: 'Category', value: view.categoryLabel },
-                              ]}
-                              className="font-bold text-slate-800 text-fluid-xs max-w-[14rem]"
-                            />
-                          </span>
-                          {item.workerDesignation && (
-                            <span className="break-words text-slate-500">• {item.workerDesignation}</span>
-                          )}
-
-                          {/* Advanced View Link — strictly visible ONLY to CA or Super Admin */}
-                          {canViewTechnicalDetails && view.hasTechnicalDetails && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReviewNotes('');
-                                setReviewingItem(item);
-                              }}
-                              className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 underline underline-offset-2 cursor-pointer ml-auto sm:ml-1"
-                            >
-                              <span>View technical details</span>
-                              <ChevronRight size={13} />
-                            </button>
-                          )}
-                        </div>
+                          </>
+                        )}
                       </div>
 
-                      {/* Right: Exactly Two Simple Action Buttons — Approve & Reject */}
-                      <div className="flex items-center gap-2.5 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
+                      {/* Right: Two Simple Action Buttons — Reject (Red) & Approve (Green) */}
+                      <div
+                        className="flex items-center gap-2.5 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <button
                           type="button"
                           disabled={isProcessing}
-                          onClick={() => handleReject(item)}
-                          className="flex-1 md:flex-none min-h-[3rem] min-w-[6.5rem] px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 font-bold text-sm flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isExpenseCard) {
+                              openExpenseModal(item, 'REJECT');
+                            } else {
+                              void handleReject(item);
+                            }
+                          }}
+                          className="flex-1 md:flex-none min-h-[3rem] min-w-[6.5rem] px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-600 hover:text-white hover:border-rose-600 active:bg-rose-700 text-rose-700 font-bold text-sm flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                         >
                           <XCircle size={17} className="shrink-0" />
                           <span>Reject</span>
@@ -754,8 +955,15 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                         <button
                           type="button"
                           disabled={isProcessing || item.isWaitingSync}
-                          onClick={() => handleApprove(item)}
-                          className={`flex-1 md:flex-none min-h-[3rem] min-w-[7.25rem] px-5 py-2 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-1.5 transition-transform active:scale-98 cursor-pointer ${
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isExpensePolicyWarning) {
+                              openExpenseModal(item, 'APPROVE_OVERRIDE');
+                            } else {
+                              void handleApprove(item).catch(() => {});
+                            }
+                          }}
+                          className={`flex-1 md:flex-none min-h-[3rem] min-w-[7.25rem] px-5 py-2 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-98 cursor-pointer ${
                             item.isWaitingSync
                               ? 'bg-slate-400 cursor-not-allowed'
                               : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
@@ -766,7 +974,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                           ) : (
                             <>
                               <CheckCircle2 size={17} className="shrink-0" />
-                              <span>Approve</span>
+                              <span>{isExpensePolicyWarning ? 'Override & Approve' : 'Approve'}</span>
                             </>
                           )}
                         </button>
@@ -826,7 +1034,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 {auditTrail.map(entry => (
                   <div key={entry.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 transition-colors">
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center flex-wrap gap-2 mb-1">
                         <span className={`px-2 py-0.5 text-[11px] font-black rounded-md ${
                           entry.action === 'APPROVE' || entry.action === 'BULK_APPROVE'
                             ? 'bg-emerald-100 text-emerald-800'
@@ -834,6 +1042,16 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                         }`}>
                           {entry.action}
                         </span>
+                        {entry.resultingStatus === 'PENDING_FINANCE' && (
+                          <span className="px-2 py-0.5 text-[11px] font-black font-mono rounded-md bg-teal-100 text-teal-800 border border-teal-200">
+                            PENDING_FINANCE
+                          </span>
+                        )}
+                        {entry.policyOverrideNote && (
+                          <span className="px-2 py-0.5 text-[11px] font-black rounded-md bg-amber-100 text-amber-900 border border-amber-300">
+                            POLICY OVERRIDE
+                          </span>
+                        )}
                         <span className="text-xs font-bold text-slate-800">
                           {entry.workerName}
                         </span>
@@ -1335,7 +1553,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
               <button
                 type="button"
                 disabled={reviewingItem.isWaitingSync}
-                onClick={() => handleApprove(reviewingItem, reviewNotes)}
+                onClick={() => void handleApprove(reviewingItem, reviewNotes).catch(() => {})}
                 className={`flex-1 h-14 rounded-xl font-black text-sm text-white shadow-sm flex items-center justify-center gap-2 cursor-pointer ${
                   reviewingItem.isWaitingSync
                     ? 'bg-slate-400 cursor-not-allowed'
@@ -1351,7 +1569,7 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         );
       })()}
 
-      {/* Delegation Modal */}
+      {/* Delegation Modal (E300-R Manager On Leave Routing) */}
       {showDelegationModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95">
@@ -1360,27 +1578,104 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 <UserCheck size={22} className="text-blue-600" />
                 <span>Configure Leave Delegation</span>
               </div>
-              <button onClick={() => setShowDelegationModal(false)} className="text-slate-400 hover:text-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowDelegationModal(false)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
                 <X size={20} />
               </button>
             </div>
 
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-              When you are away or on leave, your pending approvals and exceptions will automatically route to your assigned delegate.
+              When you are on leave, E300-R routing automatically forwards your pending expense claims and approvals to your delegated manager.
             </p>
 
             <form onSubmit={handleSaveDelegation} className="space-y-4">
+              {teamManagers.filter((m) => m.uid !== profile?.uid).length > 0 && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Select Delegated Manager
+                  </label>
+                  <select
+                    value={selectedDelegateId}
+                    onChange={(e) => {
+                      const uid = e.target.value;
+                      setSelectedDelegateId(uid);
+                      const picked = teamManagers.find((m) => m.uid === uid);
+                      if (picked?.name) {
+                        setDelegateName(picked.name);
+                      }
+                    }}
+                    className="w-full h-12 px-3 text-sm rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  >
+                    <option value="">-- Choose a team manager or enter custom below --</option>
+                    {teamManagers
+                      .filter((m) => m.uid !== profile?.uid)
+                      .map((m) => (
+                        <option key={m.uid} value={m.uid}>
+                          {m.name} {m.branchName ? `(${m.branchName})` : ''}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   Delegate Supervisor Name
                 </label>
                 <input
                   type="text"
-                  required
-                  placeholder="e.g., Rajesh Sharma (Assistant Supervisor)"
+                  required={!selectedDelegateId}
+                  placeholder="e.g., Neha Desai (Branch Manager)"
                   value={delegateName}
-                  onChange={(e) => setDelegateName(e.target.value)}
+                  onChange={(e) => {
+                    setDelegateName(e.target.value);
+                    if (selectedDelegateId) setSelectedDelegateId('');
+                  }}
                   className="w-full h-12 px-3 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Leave Start Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={delegateStartDate}
+                    onChange={(e) => setDelegateStartDate(e.target.value)}
+                    className="w-full h-11 px-3 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Leave End Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={delegateStartDate}
+                    value={delegateEndDate}
+                    onChange={(e) => setDelegateEndDate(e.target.value)}
+                    className="w-full h-11 px-3 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Reason
+                </label>
+                <input
+                  type="text"
+                  value={delegateReason}
+                  onChange={(e) => setDelegateReason(e.target.value)}
+                  placeholder="e.g., On Leave / Field Travel"
+                  className="w-full h-11 px-3 text-sm rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                 />
               </div>
 
@@ -1388,13 +1683,13 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
                 <button
                   type="button"
                   onClick={() => setShowDelegationModal(false)}
-                  className="flex-1 h-12 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  className="flex-1 h-12 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 h-12 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-sm"
+                  className="flex-1 h-12 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-sm cursor-pointer"
                 >
                   Confirm Delegation
                 </button>
@@ -1404,117 +1699,18 @@ export const InboxScreen: React.FC<Props> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* Manager Receipt Inspection Lightbox (All Managers can inspect receipt clarity & duplicates) */}
-      {inspectingExpenseItem?.details?.expenseClaim && (() => {
-        const claim = inspectingExpenseItem.details.expenseClaim;
-        const isDup = claim.riskFlag === 'HIGH_RISK_DUPLICATE';
-        const isProc = actionLoadingId === inspectingExpenseItem.id;
-
-        return (
-          <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150">
-              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-black">
-                    Receipt Review · ₹{claim.amount.toLocaleString('en-IN')} ({claim.category})
-                  </h3>
-                  <p className="text-xs text-slate-300">
-                    {claim.workerName} · Expense Date: {claim.expenseDate}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setInspectingExpenseItem(null)}
-                  className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white cursor-pointer"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-                {isDup && (
-                  <div className="p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-300 flex items-start gap-2.5 text-xs text-rose-900">
-                    <ShieldAlert size={18} className="text-rose-700 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-black uppercase text-rose-800">HIGH_RISK_DUPLICATE</div>
-                      <p className="mt-0.5">
-                        This exact receipt image hash (<code className="font-mono">{claim.receiptImageHash.slice(0, 14)}…</code>) was already uploaded by{' '}
-                        <strong>{claim.duplicateOfWorkerName || 'another worker'}</strong> on{' '}
-                        <strong>{claim.duplicateOfExpenseDate || 'earlier'}</strong>.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-950 flex items-center justify-center">
-                  <img
-                    src={claim.receiptImageDataUrl}
-                    alt="Full-size expense receipt"
-                    className="max-h-80 w-full object-contain"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5 text-xs">
-                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Capture Method</span>
-                    <span className="font-bold text-emerald-700">Live Camera (No Gallery)</span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Image SHA-256 Hash</span>
-                    <span className="font-mono font-semibold text-slate-800 truncate block">
-                      {claim.receiptImageHash.slice(0, 16)}…
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                  <button
-                    type="button"
-                    disabled={isProc}
-                    onClick={async () => {
-                      await handleReject(
-                        inspectingExpenseItem,
-                        'Receipt photo is blurry or unreadable — please retake clearly.'
-                      );
-                      setInspectingExpenseItem(null);
-                    }}
-                    className="flex-1 py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-xs cursor-pointer disabled:opacity-50"
-                  >
-                    Reject: Blurry / Unreadable
-                  </button>
-                  {isDup && (
-                    <button
-                      type="button"
-                      disabled={isProc}
-                      onClick={async () => {
-                        await handleReject(
-                          inspectingExpenseItem,
-                          'Rejected: HIGH_RISK_DUPLICATE receipt already submitted.'
-                        );
-                        setInspectingExpenseItem(null);
-                      }}
-                      className="flex-1 py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs cursor-pointer disabled:opacity-50"
-                    >
-                      Reject: Duplicate
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={isProc}
-                    onClick={async () => {
-                      await handleApprove(inspectingExpenseItem, 'Receipt verified and approved for reimbursement.');
-                      setInspectingExpenseItem(null);
-                    }}
-                    className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs cursor-pointer disabled:opacity-50"
-                  >
-                    Approve ₹{claim.amount.toLocaleString('en-IN')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* Full-Screen Expense Receipt Review Modal */}
+      <ExpenseReceiptReviewModal
+        item={inspectingExpenseItem}
+        initialMode={inspectingExpenseMode}
+        actorProfile={profile}
+        isProcessing={Boolean(inspectingExpenseItem && actionLoadingId === inspectingExpenseItem.id)}
+        onClose={() => setInspectingExpenseItem(null)}
+        onApprove={async (item, notes, overrideNote) => {
+          await handleApprove(item, notes, overrideNote);
+        }}
+        onReject={handleRejectExpense}
+      />
     </div>
   );
 };

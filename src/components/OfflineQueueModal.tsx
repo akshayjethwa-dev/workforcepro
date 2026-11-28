@@ -294,7 +294,7 @@ export const OfflineQueueModal: React.FC<Props> = ({ isOpen, onClose, tenantId }
                       <div>
                         <h4 className="text-sm font-black text-slate-900">{item.workerName}</h4>
                         <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2">
-                          <span>{item.entityType}</span>
+                          <span>{item.entityType === 'MAGIC_LINK' ? 'MAGIC LINK (FIRESTORE)' : item.entityType}</span>
                           <span>·</span>
                           <span>Saved: {new Date(item.offlineTimestamp).toLocaleTimeString()}</span>
                         </div>

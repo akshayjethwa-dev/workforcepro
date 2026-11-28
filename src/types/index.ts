@@ -2,7 +2,7 @@ export type SyncStatus = 'PENDING_LOCAL' | 'SYNCING' | 'SYNCED' | 'CONFLICT' | '
 
 export interface OfflineQueueItem {
   id?: number;
-  entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE';
+  entityType: 'ATTENDANCE' | 'ADVANCE' | 'TASK' | 'EXPENSE' | 'MAGIC_LINK';
   recordId: string;
   tenantId: string;
   workerId: string;
@@ -48,6 +48,7 @@ export type CanonicalRole =
   | 'SUPER_ADMIN'   // SaaS Owner / Platform Admin
   | 'RESELLER'      // Channel Partner / Agency
   | 'TENANT_ADMIN'  // SMB Owner / Factory Admin
+  | 'FINANCE'       // Finance Admin / Expense & Payroll Lock Approver
   | 'MANAGER'       // Branch / HR Manager
   | 'WORKER';       // Frontline Employee
 
@@ -311,6 +312,7 @@ export interface OrgSettings {
   safetyCheckInConfig?: SafetyCheckInConfig;
   whatsappConfig?: WhatsAppBridgeConfig;
   deviceIntegrityConfig?: DeviceIntegrityConfig;
+  expensePolicy?: ExpensePolicyConfig;
 }
 
 export type DeviceAttestationPlatform = 'PLAY_INTEGRITY' | 'APP_ATTEST' | 'WEB_ATTESTATION' | 'LEGACY_FINGERPRINT';
@@ -1101,6 +1103,15 @@ export interface MonthlyPayroll {
   wageStructureAudit?: WageStructureAuditResult;
   wageComplianceAudit?: WageComplianceAudit;
   gratuitySettlement?: number;
+  // Payroll Expense Reimbursement Integration (Tax-Free vs Finance-Flagged Taxable)
+  salaryNetPay?: number; // Net Salary after deductions & statutory taxes, BEFORE tax-free reimbursements
+  taxableExpenseAdditions?: number; // Flagged TAXABLE claims added into Gross Taxable Salary
+  taxableExpenseItems?: PayslipReimbursementLineItem[];
+  expenseReimbursements?: number; // Tax-free reimbursements added AFTER Net Salary
+  reimbursementItems?: PayslipReimbursementLineItem[];
+  expenseClaimIds?: string[];
+  expenseExceedsSalary?: boolean;
+  isNegativeNetPayout?: boolean;
   isOffCycleFnf?: boolean;
   offCycleType?: 'WAGE_FNF' | 'GRATUITY_SETTLEMENT' | 'COMBINED_FNF';
   paidAt?: string;
@@ -1335,6 +1346,7 @@ export type ScreenName =
   | 'TERMS'
   | 'PRIVACY'
   | 'INBOX'
+  | 'FINANCE_DASHBOARD'
   | 'ROSTER'
   | 'CTC_SIMULATOR'
   | 'GRATUITY'
@@ -1396,9 +1408,74 @@ export interface ConflictAuditEntry {
 
 export type ExpenseCategory = 'PETROL' | 'FOOD' | 'TRAVEL' | 'OTHER';
 
-export type ExpenseClaimStatus = 'PENDING_LOCAL' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+export type ExpenseTaxClassification = 'TAX_FREE' | 'TAXABLE';
+
+export interface PayslipReimbursementLineItem {
+  claimId: string;
+  category: ExpenseCategory;
+  categoryLabel: string;
+  expenseDate: string;
+  amount: number;
+  description: string;
+  status: ExpenseClaimStatus;
+  taxClassification: ExpenseTaxClassification;
+  taxableFlagReason?: string;
+}
+
+export type ExpenseClaimStatus =
+  | 'PENDING_LOCAL'
+  | 'SUBMITTED'
+  | 'PENDING_FINANCE'
+  | 'APPROVED'
+  | 'PAID'
+  | 'REJECTED';
 
 export type ExpenseRiskFlag = 'NONE' | 'HIGH_RISK_DUPLICATE';
+
+export type ExpensePolicyTag = 'POLICY_WARNING';
+
+export interface ExpenseDailyCategoryLimitsPaise {
+  FOOD: number;    // Stored as absolute integer paise (e.g. 30000 = ₹300/day)
+  PETROL: number;  // Stored as absolute integer paise (e.g. 50000 = ₹500/day)
+  TRAVEL: number;  // Stored as absolute integer paise (e.g. 100000 = ₹1,000/day)
+  OTHER: number;   // Stored as absolute integer paise (e.g. 50000 = ₹500/day)
+}
+
+export interface ExpensePolicyConfig {
+  enabled: boolean;
+  dailyLimitsPaise: ExpenseDailyCategoryLimitsPaise;
+  requireOverrideNote?: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface ExpensePolicyWarningDetails {
+  tag: ExpensePolicyTag;
+  category: ExpenseCategory;
+  expenseDate: string;
+  dailyLimitPaise: number;
+  dailyLimitRupees: number;
+  priorDailyTotalPaise: number;
+  claimAmountPaise: number;
+  cumulativeDailyTotalPaise: number;
+  exceededByPaise: number;
+  sameDayClaimCount: number;
+  bannerMessage: string;
+}
+
+export type ExpenseRejectionReason =
+  | 'Receipt unclear'
+  | 'Policy violation'
+  | 'Not a valid expense'
+  | 'Duplicate receipt submission'
+  | 'Amount mismatch with receipt'
+  | 'Expense older than 30-day policy';
+
+export type ExpenseRoutingRule =
+  | 'BRANCH_MANAGER'
+  | 'SELF_APPROVAL_ESCALATED_TO_ADMIN'
+  | 'DELEGATED_ON_LEAVE'
+  | 'TENANT_ADMIN_FALLBACK';
 
 export interface ExpenseClaim {
   id: string;
@@ -1408,7 +1485,9 @@ export interface ExpenseClaim {
   workerPhone?: string;
   workerDesignation?: string;
   branchId?: string;
+  submittedByUserId?: string;
   amount: number;
+  amountPaise?: number; // Exact integer paise (₹1 = 100 paise)
   category: ExpenseCategory;
   expenseDate: string; // YYYY-MM-DD (defaults to Today; max 30 days in past)
   receiptImageDataUrl: string; // Direct camera capture only (no gallery uploads)
@@ -1417,8 +1496,22 @@ export interface ExpenseClaim {
   status: ExpenseClaimStatus;
   syncStatus: SyncStatus;
   managerName: string;
+  // E300-R Routing & Delegation Metadata
+  approverId?: string;
+  approverName?: string;
+  approverRole?: Role;
+  originalApproverId?: string;
+  originalApproverName?: string;
+  routingRuleApplied?: ExpenseRoutingRule;
+  routingReason?: string;
+  delegatedFromManagerId?: string;
+  delegatedFromManagerName?: string;
   statusMessage: string;
   riskFlag: ExpenseRiskFlag;
+  // Automated Policy Guardrails
+  policyTags?: ExpensePolicyTag[];
+  policyWarning?: ExpensePolicyWarningDetails;
+  overrideNote?: string;
   duplicateOfClaimId?: string;
   duplicateOfWorkerId?: string;
   duplicateOfWorkerName?: string;
@@ -1426,9 +1519,67 @@ export interface ExpenseClaim {
   createdAt: string;
   offlineTimestamp?: string;
   syncedAt?: string;
+  managerApprovedBy?: string;
+  managerApprovedAt?: string;
   resolvedBy?: string;
   resolvedAt?: string;
+  rejectionReasonCategory?: ExpenseRejectionReason;
   rejectionReason?: string;
+  // Finance Verification, Immutability, Payroll Lock & FnF Routing
+  isImmutable?: boolean;
+  financeApprovedBy?: string;
+  financeApprovedAt?: string;
+  financeRejectedBy?: string;
+  financeRejectedAt?: string;
+  financeNotes?: string;
+  payoutDestination?: ExpensePayoutDestination;
+  payrollLockStatus?: ExpensePayrollLockStatus;
+  payrollMonth?: string; // Target YYYY-MM payroll run
+  deferredFromPayrollMonth?: string; // Prior YYYY-MM if approved mid-payroll while locked
+  lockedIntoPayrollAt?: string;
+  lockedIntoPayrollBy?: string;
+  fnfRoutingReason?: string;
+  workerExitDate?: string;
+  // Taxability Flag (Finance Admin can flag Gift/Bonus as TAXABLE before payroll) & Payroll Paid State
+  taxClassification?: ExpenseTaxClassification;
+  taxableFlaggedBy?: string;
+  taxableFlaggedAt?: string;
+  taxableFlagReason?: string;
+  paidAt?: string;
+  paidBy?: string;
+  paidInPayrollId?: string;
+  paidInPayrollMonth?: string;
+}
+
+export type ExpensePayoutDestination =
+  | 'REGULAR_PAYROLL'
+  | 'NEXT_MONTH_PAYROLL'
+  | 'FNF_SETTLEMENT';
+
+export type ExpensePayrollLockStatus =
+  | 'UNLOCKED'
+  | 'LOCKED_IN_PAYROLL'
+  | 'DEFERRED_NEXT_MONTH'
+  | 'ROUTED_TO_FNF';
+
+export interface ExpenseWorkerNotification {
+  id: string;
+  tenantId: string;
+  workerId: string;
+  workerName: string;
+  claimId: string;
+  type:
+    | 'DEFERRED_NEXT_MONTH_PAYROLL'
+    | 'ROUTED_TO_FNF'
+    | 'FINANCE_APPROVED'
+    | 'FINANCE_REJECTED';
+  title: string;
+  message: string;
+  amount: number;
+  originalPayrollMonth?: string;
+  targetPayrollMonth?: string;
+  read: boolean;
+  createdAt: string;
 }
 
 export type InboxActionType = 
@@ -1449,9 +1600,15 @@ export interface InboxItem {
   id: string;
   tenantId: string;
   branchId?: string;
+  approverId?: string;
+  approverName?: string;
   assignedToRole?: Role;
   assignedToUserId?: string;
   delegateUserId?: string;
+  delegatedFromManagerId?: string;
+  delegatedFromManagerName?: string;
+  routingRuleApplied?: ExpenseRoutingRule;
+  routingReason?: string;
   actionType: InboxActionType;
   urgency: InboxUrgency;
   status: InboxStatus;
@@ -1539,6 +1696,9 @@ export interface InboxAuditEntry {
   resolvedBy: string;
   resolvedAt: string;
   notes?: string;
+  resultingStatus?: string;
+  rejectionReason?: string;
+  policyOverrideNote?: string;
 }
 
 // ==========================================
@@ -1601,6 +1761,9 @@ export interface WorkerAccessToken {
   flaggedReason?: string;
   deliveryStatus?: 'DELIVERED' | 'FAILED' | 'PENDING';
   restructureSummary?: MagicLinkRestructureSummary;
+  syncStatus?: SyncStatus;
+  persistedToFirestore?: boolean;
+  updatedAt?: string;
 }
 
 export type RevocationReason = 'lost phone' | 'worker exit' | 'suspicious access' | 'shared link' | 'other';
@@ -2478,9 +2641,12 @@ export interface FnfSettlementRecord {
   // Recoveries & Statutory Deductions
   advanceAndEwaRecovery: number;
   statutoryDeductions: number;
+  // Reimbursements routed from Finance Verification (resigned workers)
+  expenseReimbursements?: number;
+  expenseClaimIds?: string[];
   // Totals
   grossFnfPayable: number;
-  fnfWageNetPayable?: number; // Schedule A: Pending Salary + Leave Encashment - Notice Recovery - Advances - Statutory
+  fnfWageNetPayable?: number; // Schedule A: Pending Salary + Leave Encashment + Expense Reimbursements - Notice Recovery - Advances - Statutory
   excessRecoveryCarryover?: number; // Excess recovery if deductions exceed Schedule A earnings
   netFnfPayable: number; // Combined (Schedule A Wage FnF + Schedule B Gratuity)
   status: 'DRAFT' | 'APPROVED' | 'LEGAL_HOLD' | 'SETTLED';

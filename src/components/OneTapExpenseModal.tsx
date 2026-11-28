@@ -35,6 +35,7 @@ import {
   validateExpenseAmount,
   validateExpenseDate,
 } from '../services/expenseService';
+import { useAuth } from '../contexts/AuthContext';
 
 interface OneTapExpenseModalProps {
   isOpen: boolean;
@@ -130,6 +131,7 @@ export const OneTapExpenseModal: React.FC<OneTapExpenseModalProps> = ({
   orgSettings,
   onSubmitted,
 }) => {
+  const { profile } = useAuth();
   const todayStr = getLocalTodayIsoDate();
   const minAllowedDateStr = getMinAllowedExpenseDate();
   const managerName = resolveAssignedManagerName(tenantId, worker, orgSettings);
@@ -284,9 +286,15 @@ export const OneTapExpenseModal: React.FC<OneTapExpenseModalProps> = ({
   };
 
   const handleAmountChange = (raw: string) => {
-    // Numeric keypad only: keep strictly digits (no letters, symbols, or negative signs)
-    const digitsOnly = raw.replace(/\D/g, '').slice(0, 6);
-    setAmountInput(digitsOnly);
+    // Numeric keypad with optional 2 decimal digits (paise precision)
+    const cleaned = raw.replace(/[^\d.]/g, '');
+    const parts = cleaned.split('.');
+    const intPart = (parts[0] || '').slice(0, 6);
+    const normalized =
+      parts.length > 1
+        ? `${intPart}.${parts.slice(1).join('').slice(0, 2)}`
+        : intPart;
+    setAmountInput(normalized);
     if (formError) setFormError(null);
   };
 
@@ -323,6 +331,7 @@ export const OneTapExpenseModal: React.FC<OneTapExpenseModalProps> = ({
         receiptImageDataUrl: receiptDataUrl,
         captureSource: 'CAMERA_DIRECT',
         managerName,
+        submittedByUserId: profile?.uid,
       });
 
       if (!result.success || !result.claim) {
@@ -430,6 +439,15 @@ export const OneTapExpenseModal: React.FC<OneTapExpenseModalProps> = ({
                   <div className="text-slate-500 font-mono text-[10px] truncate">
                     Receipt Hash: {submittedClaim.receiptImageHash.slice(0, 16)}…
                   </div>
+                  {submittedClaim.policyWarning && (
+                    <div className="text-rose-700 font-bold text-[11px] flex items-start gap-1">
+                      <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                      <span>
+                        POLICY_WARNING: {submittedClaim.policyWarning.bannerMessage} Claim submitted
+                        for manager review.
+                      </span>
+                    </div>
+                  )}
                   {submittedClaim.riskFlag === 'HIGH_RISK_DUPLICATE' && (
                     <div className="text-rose-700 font-bold text-[11px] flex items-center gap-1">
                       <ShieldAlert size={12} />
@@ -489,8 +507,7 @@ export const OneTapExpenseModal: React.FC<OneTapExpenseModalProps> = ({
                   <input
                     id="expense-amount-input"
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="decimal"
                     autoComplete="off"
                     placeholder="150"
                     value={amountInput}

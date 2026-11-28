@@ -13,14 +13,16 @@ export const CANONICAL_ROLES: CanonicalRole[] = [
   'SUPER_ADMIN',
   'RESELLER',
   'TENANT_ADMIN',
+  'FINANCE',
   'MANAGER',
   'WORKER',
 ];
 
 export const ROLE_PRIORITY: Record<CanonicalRole, number> = {
-  SUPER_ADMIN: 5,
-  RESELLER: 4,
-  TENANT_ADMIN: 3,
+  SUPER_ADMIN: 6,
+  RESELLER: 5,
+  TENANT_ADMIN: 4,
+  FINANCE: 3,
   MANAGER: 2,
   WORKER: 1,
 };
@@ -63,6 +65,15 @@ export const ROLE_METADATA: Record<CanonicalRole, RoleMetadata> = {
     defaultScreen: 'DASHBOARD',
     badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
   },
+  FINANCE: {
+    role: 'FINANCE',
+    label: 'Finance Admin',
+    shortLabel: 'Finance',
+    description: 'Month-end expense verification, immutability lock, payroll & FnF payouts',
+    defaultPath: '/finance',
+    defaultScreen: 'FINANCE_DASHBOARD',
+    badgeClass: 'bg-teal-100 text-teal-800 border-teal-200',
+  },
   MANAGER: {
     role: 'MANAGER',
     label: 'Branch Manager',
@@ -100,6 +111,10 @@ export function normalizeRole(role?: string | Role | null): CanonicalRole {
     case 'OWNER':
     case 'ADMIN':
       return 'TENANT_ADMIN';
+    case 'FINANCE':
+    case 'FINANCE_ADMIN':
+    case 'ACCOUNTANT':
+      return 'FINANCE';
     case 'MANAGER':
     case 'SUPERVISOR':
     case 'BRANCH_MANAGER':
@@ -162,6 +177,10 @@ export function isTenantAdminRole(role?: string | Role | null): boolean {
   return normalizeRole(role) === 'TENANT_ADMIN';
 }
 
+export function isFinanceRole(role?: string | Role | null): boolean {
+  return normalizeRole(role) === 'FINANCE';
+}
+
 export function isManagerRole(role?: string | Role | null): boolean {
   return normalizeRole(role) === 'MANAGER';
 }
@@ -177,6 +196,7 @@ export const SCREEN_TO_PATH: Record<ScreenName, string> = {
   LOGIN: '/login',
   DASHBOARD: '/dashboard',
   INBOX: '/inbox',
+  FINANCE_DASHBOARD: '/finance',
   WORKERS: '/workers',
   ADD_WORKER: '/workers/add',
   ATTENDANCE: '/attendance',
@@ -220,6 +240,7 @@ const PATH_TO_SCREEN_ENTRIES: Array<[string, ScreenName]> = [
   ['/reseller', 'RESELLER_DASHBOARD'],
   ['/dashboard', 'DASHBOARD'],
   ['/inbox', 'INBOX'],
+  ['/finance', 'FINANCE_DASHBOARD'],
   ['/workers/add', 'ADD_WORKER'],
   ['/workers', 'WORKERS'],
   ['/attendance', 'ATTENDANCE'],
@@ -286,12 +307,16 @@ export const SCREEN_ALLOWED_ROLES: Record<ScreenName, CanonicalRole[]> = {
   // Shared Tenant Admin + Manager routes
   DASHBOARD: ['TENANT_ADMIN', 'MANAGER'],
   ATTENDANCE: ['TENANT_ADMIN', 'MANAGER'],
-  REPORTS: ['TENANT_ADMIN', 'MANAGER'],
+  REPORTS: ['TENANT_ADMIN', 'FINANCE', 'MANAGER'],
 
-  // Strictly Tenant Admin only routes (Managers & Workers blocked!)
+  // Finance Verification & Payroll Lock routes (TENANT_ADMIN + FINANCE)
+  FINANCE_DASHBOARD: ['TENANT_ADMIN', 'FINANCE'],
+  PAYROLL: ['TENANT_ADMIN', 'FINANCE'],
+  GRATUITY: ['TENANT_ADMIN', 'FINANCE'],
+
+  // Strictly Tenant Admin only routes (Managers, Finance & Workers blocked!)
   WORKERS: ['TENANT_ADMIN'],
   ADD_WORKER: ['TENANT_ADMIN'],
-  PAYROLL: ['TENANT_ADMIN'],
   SETTINGS: ['TENANT_ADMIN'],
   ADVANCED_HR_SETTINGS: ['TENANT_ADMIN'],
   TEAM: ['TENANT_ADMIN'],
@@ -302,7 +327,6 @@ export const SCREEN_ALLOWED_ROLES: Record<ScreenName, CanonicalRole[]> = {
   DAILY_LOGS: ['TENANT_ADMIN'],
   ID_CARDS: ['TENANT_ADMIN'],
   CTC_SIMULATOR: ['TENANT_ADMIN'],
-  GRATUITY: ['TENANT_ADMIN'],
   ANNUAL_BONUS: ['TENANT_ADMIN'],
   POSH_ICC: ['TENANT_ADMIN'],
 
